@@ -1,0 +1,381 @@
+# scripts/refresh_agent_context.ps1
+# Universal, conservative context refresher for Codex CLI
+# Generates:
+#   docs/verify_profile.md
+#   docs/repo_map.md
+#
+# Requirements: PowerShell 7+
+# Design: Be conservative. Never hallucinate commands/tools.
+# If something is not detected from repo files, say so.
+
+$ErrorActionPreference = "Stop"
+
+function NowIso {
+  (Get-Date).ToString("yyyy-MM-ddTHH:mm:ssK")
+}
+
+function Ensure-Dir([string]$path) {
+  if (-not (Test-Path $path)) {
+    New-Item -ItemType Directory -Force -Path $path | Out-Null
+  }
+}
+
+function Read-TextIfExists([string]$path) {
+  if (Test-Path $path) {
+    return Get-Content -Raw -Encoding UTF8 $path
+  }
+  return $null
+}
+
+function Try-ParseJson([string]$path) {
+  try {
+    $raw = Read-TextIfExists $path
+    if (-not $raw) { return $null }
+    return $raw | ConvertFrom-Json
+  } catch {
+    return $null
+  }
+}
+
+function Detect-VenvPython([string]$repoRoot) {
+  $candidates = @(".venv", "venv", ".python-venv")
+  foreach ($c in $candidates) {
+    $vp = Join-Path $repoRoot $c
+    if (Test-Path $vp) {
+      $py = Join-Path $vp "Scripts\python.exe"
+      if (Test-Path $py) {
+        return @{ venv = $vp; python = $py }
+      }
+    }
+  }
+  return @{ venv = $null; python = "python" }
+}
+
+function Contains-Regex([string]$text, [string]$pattern) {
+  if (-not $text) { return $false }
+  return [bool]([regex]::IsMatch($text, $pattern, [Text.RegularExpressions.RegexOptions]::Multiline))
+}
+
+function List-TopLevelDirs([string]$repoRoot) {
+  $exclude = @(
+    ".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    "node_modules", "dist", "build", ".next", ".turbo", ".cache", ".idea", ".vscode"
+  )
+  Get-ChildItem -Path $repoRoot -Force -Directory |
+    Where-Object { $exclude -notcontains $_.Name } |
+    Sort-Object Name
+}
+
+function List-SecondLevelDirs([string]$dirPath) {
+  $exclude = @(
+    ".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", ".mypy_cache",
+    "node_modules", "dist", "build", ".next", ".turbo", ".cache", ".idea", ".vscode"
+  )
+  Get-ChildItem -Path $dirPath -Force -Directory |
+    Where-Object { $exclude -notcontains $_.Name } |
+    Sort-Object Name
+}
+
+function Detect-RepoKind([bool]$hasPyproject, [bool]$hasPackageJson) {
+  if ($hasPyproject -and $hasPackageJson) { return "mixed" }
+  if ($hasPyproject) { return "python" }
+  if ($hasPackageJson) { return "node" }
+  return "unknown"
+}
+
+function Pick-NodeScript([hashtable]$scripts, [string[]]$candidates) {
+  foreach ($c in $candidates) {
+    if ($scripts.ContainsKey($c)) { return $c }
+  }
+  return $null
+}
+
+# -------------------- main --------------------
+
+$repoRoot = (Resolve-Path ".").Path
+$ts = NowIso
+
+$docsDir = Join-Path $repoRoot "docs"
+$scriptsDir = Join-Path $repoRoot "scripts"
+Ensure-Dir $docsDir
+Ensure-Dir $scriptsDir
+
+$pyprojectPath = Join-Path $repoRoot "pyproject.toml"
+$packageJsonPath = Join-Path $repoRoot "package.json"
+
+$pyText = Read-TextIfExists $pyprojectPath
+$pkg = Try-ParseJson $packageJsonPath
+
+$hasPyproject = Test-Path $pyprojectPath
+$hasPackageJson = Test-Path $packageJsonPath
+
+$repoKind = Detect-RepoKind -hasPyproject $hasPyproject -hasPackageJson $hasPackageJson
+
+# Python detection
+$venvInfo = Detect-VenvPython $repoRoot
+$pythonCmd = $venvInfo.python
+$venvPath = $venvInfo.venv
+
+# Detect common python tools only if we can infer from pyproject text
+$pyHasPytestConfig  = Contains-Regex $pyText '^\[tool\.pytest\.ini_options\]'
+$pyMentionsPytestDep = Contains-Regex $pyText '(?m)^\s*"pytest([<=>].*)?"\s*,?\s*$'
+$pyHasRuffConfig    = Contains-Regex $pyText '^\[tool\.ruff\]'
+$pyMentionsRuffDep  = Contains-Regex $pyText '(?m)^\s*"ruff([<=>].*)?"\s*,?\s*$'
+$pyHasMypyConfig    = Contains-Regex $pyText '^\[tool\.mypy\]'
+$pyMentionsMypyDep  = Contains-Regex $pyText '(?m)^\s*"mypy([<=>].*)?"\s*,?\s*$'
+
+# IMPORTANT: add parentheses around -and operands to avoid parse ambiguity
+$pyUsesHatchling = (Contains-Regex $pyText '^\[build-system\]') -and (Contains-Regex $pyText '(?m)hatchling')
+$pyMentionsUv    = Contains-Regex $pyText '^\[tool\.uv\]'
+$pyMentionsPoetry = Contains-Regex $pyText '^\[tool\.poetry\]'
+
+# Node detection
+$nodeScripts = @{}
+if ($pkg -and $pkg.scripts) {
+  $pkg.scripts.PSObject.Properties | ForEach-Object {
+    $nodeScripts[$_.Name] = [string]$_.Value
+  }
+}
+
+$nodeLint = Pick-NodeScript $nodeScripts @("lint")
+$nodeTest = Pick-NodeScript $nodeScripts @("test", "unit", "ci:test")
+$nodeTypecheck = Pick-NodeScript $nodeScripts @("typecheck", "check", "tsc")
+$nodeBuild = Pick-NodeScript $nodeScripts @("build")
+
+# Output paths
+$verifyPath = Join-Path $docsDir "verify_profile.md"
+$repoMapPath = Join-Path $docsDir "repo_map.md"
+
+# -------------------- write verify_profile.md --------------------
+
+$vf = New-Object System.Collections.Generic.List[string]
+$vf.Add('# Verify Profile')
+$vf.Add('')
+$vf.Add('> Auto-generated by scripts/refresh_agent_context.ps1')
+$vf.Add('> Generated at: ' + $ts)
+$vf.Add('> Repo root: ' + $repoRoot)
+$vf.Add('> Repo kind: ' + $repoKind)
+$vf.Add('')
+
+# Python section
+$vf.Add('## Python')
+$vf.Add('')
+$vf.Add('- pyproject.toml: ' + ($(if ($hasPyproject) { 'FOUND' } else { 'NOT FOUND' })))
+$vf.Add('- venv detected: ' + ($(if ($venvPath) { $venvPath } else { 'NOT FOUND' })))
+$vf.Add('- python command: $python = "' + $pythonCmd + '"')
+$vf.Add('')
+$vf.Add('### Python verification commands (run in order)')
+$vf.Add('')
+
+if ($hasPyproject) {
+  # Ruff
+  if ($pyHasRuffConfig -or $pyMentionsRuffDep) {
+    $vf.Add('#### 1) Lint (Ruff)')
+    $vf.Add('```powershell')
+    $vf.Add($pythonCmd + ' -m ruff check .')
+    $vf.Add('```')
+    $vf.Add('')
+  } else {
+    $vf.Add('#### 1) Lint')
+    $vf.Add('- Ruff not detected (no [tool.ruff] and no ruff dependency found).')
+    $vf.Add('')
+  }
+
+  # Mypy
+  if ($pyHasMypyConfig -or $pyMentionsMypyDep) {
+    $vf.Add('#### 2) Typecheck (mypy)')
+    $vf.Add('```powershell')
+    $vf.Add($pythonCmd + ' -m mypy .')
+    $vf.Add('```')
+    $vf.Add('')
+  } else {
+    $vf.Add('#### 2) Typecheck')
+    $vf.Add('- mypy not detected (no [tool.mypy] and no mypy dependency found).')
+    $vf.Add('')
+  }
+
+  # Pytest
+  if ($pyHasPytestConfig -or $pyMentionsPytestDep) {
+    $vf.Add('#### 3) Tests (pytest)')
+    $vf.Add('```powershell')
+    $vf.Add($pythonCmd + ' -m pytest -q')
+    $vf.Add('```')
+    $vf.Add('')
+  } else {
+    $vf.Add('#### 3) Tests')
+    $vf.Add('- pytest not detected (no [tool.pytest.ini_options] and no pytest dependency found).')
+    $vf.Add('')
+  }
+
+  # Build (optional)
+  if ($pyUsesHatchling) {
+    $vf.Add('#### 4) Build (optional, packaging sanity check)')
+    $vf.Add('```powershell')
+    $vf.Add($pythonCmd + ' -m pip install -U build')
+    $vf.Add($pythonCmd + ' -m build')
+    $vf.Add('```')
+    $vf.Add('')
+  } else {
+    $vf.Add('#### 4) Build (optional)')
+    $vf.Add('- hatchling not detected. If you have a packaging workflow, document it here.')
+    $vf.Add('')
+  }
+
+  $vf.Add('### Installing Python dev dependencies (choose your toolchain)')
+  $vf.Add('')
+  $vf.Add('> This file does not assume your installer. Pick one approach and keep it consistent.')
+  $vf.Add('')
+  $vf.Add('- pip (editable + extras): pip install -e .[dev]')
+  if ($pyMentionsUv) {
+    $vf.Add('- uv: uv sync --extra dev (if your repo uses uv for env management)')
+  }
+  if ($pyMentionsPoetry) {
+    $vf.Add('- poetry: poetry install --with dev (if your repo uses Poetry)')
+  }
+  if ($pyUsesHatchling) {
+    $vf.Add('- hatch: hatch env create / hatch run ... (if your repo uses Hatch environments)')
+  }
+  $vf.Add('')
+} else {
+  $vf.Add('> No pyproject.toml detected; Python verification section may not apply.')
+  $vf.Add('')
+}
+
+# Node section
+$vf.Add('## Node.js')
+$vf.Add('')
+$vf.Add('- package.json: ' + ($(if ($hasPackageJson) { 'FOUND' } else { 'NOT FOUND' })))
+$vf.Add('')
+$vf.Add('### Node verification commands (run in order)')
+$vf.Add('')
+
+if ($hasPackageJson -and $pkg) {
+  if ($nodeLint) {
+    $vf.Add('#### 1) Lint')
+    $vf.Add('```powershell')
+    $vf.Add('npm run ' + $nodeLint)
+    $vf.Add('```')
+    $vf.Add('')
+  } else {
+    $vf.Add('#### 1) Lint')
+    $vf.Add('- No lint script detected in package.json.')
+    $vf.Add('')
+  }
+
+  if ($nodeTypecheck) {
+    $vf.Add('#### 2) Typecheck')
+    $vf.Add('```powershell')
+    $vf.Add('npm run ' + $nodeTypecheck)
+    $vf.Add('```')
+    $vf.Add('')
+  } else {
+    $vf.Add('#### 2) Typecheck')
+    $vf.Add('- No typecheck/tsc script detected in package.json.')
+    $vf.Add('')
+  }
+
+  if ($nodeTest) {
+    $vf.Add('#### 3) Tests')
+    $vf.Add('```powershell')
+    $vf.Add('npm run ' + $nodeTest)
+    $vf.Add('```')
+    $vf.Add('')
+  } else {
+    $vf.Add('#### 3) Tests')
+    $vf.Add('- No test script detected in package.json.')
+    $vf.Add('')
+  }
+
+  if ($nodeBuild) {
+    $vf.Add('#### 4) Build')
+    $vf.Add('```powershell')
+    $vf.Add('npm run ' + $nodeBuild)
+    $vf.Add('```')
+    $vf.Add('')
+  } else {
+    $vf.Add('#### 4) Build')
+    $vf.Add('- No build script detected in package.json.')
+    $vf.Add('')
+  }
+
+  $vf.Add('### Detected package.json scripts (for reference)')
+  $vf.Add('')
+  $vf.Add('```text')
+  foreach ($k in ($nodeScripts.Keys | Sort-Object)) {
+    $vf.Add($k + ': ' + $nodeScripts[$k])
+  }
+  $vf.Add('```')
+  $vf.Add('')
+} else {
+  $vf.Add('> No package.json detected; Node verification section may not apply.')
+  $vf.Add('')
+}
+
+$vf.Add('## Notes')
+$vf.Add('')
+$vf.Add('- This file is intentionally conservative: it only lists commands that can be inferred from repo files.')
+$vf.Add('- If you add/remove tools (ruff/pytest/mypy/node scripts), rerun refresh.')
+$vf.Add('- Codex must use this file as source-of-truth for verification steps.')
+$vf.Add('')
+
+Set-Content -Path $verifyPath -Value ($vf -join "`n") -Encoding UTF8
+
+# -------------------- write repo_map.md --------------------
+
+$rm = New-Object System.Collections.Generic.List[string]
+$rm.Add('# Repo Map')
+$rm.Add('')
+$rm.Add('> Auto-generated by scripts/refresh_agent_context.ps1')
+$rm.Add('> Generated at: ' + $ts)
+$rm.Add('> Repo kind: ' + $repoKind)
+$rm.Add('')
+
+$rm.Add('## Top-level directories (2-level view)')
+$rm.Add('')
+$rm.Add('```text')
+
+$topDirs = List-TopLevelDirs $repoRoot
+foreach ($d in $topDirs) {
+  $rm.Add($d.Name + '/')
+  $subDirs = List-SecondLevelDirs $d.FullName
+  foreach ($sd in $subDirs) {
+    $rm.Add('  ' + $sd.Name + '/')
+  }
+}
+
+$rm.Add('```')
+$rm.Add('')
+
+$rm.Add('## Key files (best-effort)')
+$rm.Add('')
+if ($hasPyproject) { $rm.Add('- pyproject: pyproject.toml') }
+if ($hasPackageJson) { $rm.Add('- node manifest: package.json') }
+if (Test-Path (Join-Path $repoRoot 'README.md')) { $rm.Add('- readme: README.md') }
+if (Test-Path (Join-Path $repoRoot 'AGENTS.md')) { $rm.Add('- agent rules: AGENTS.md') }
+
+$rm.Add('')
+$rm.Add('## Entry points (best-effort)')
+$rm.Add('')
+if ($hasPyproject -and $pyText) {
+  if (Contains-Regex $pyText '^\[project\.scripts\]') {
+    $rm.Add('- python entry points: [project.scripts] (see pyproject.toml)')
+  }
+}
+if ($hasPackageJson -and $pkg) {
+  if ($pkg.main) { $rm.Add('- node entry: package.json main = ' + $pkg.main) }
+  if ($pkg.bin) { $rm.Add('- node bin: package.json bin = (see package.json)') }
+}
+$rm.Add('')
+
+$rm.Add('## Human Notes (maintain manually)')
+$rm.Add('')
+$rm.Add('- Describe directory responsibilities in plain language (business meaning).')
+$rm.Add('- List primary workflows (dev/test/build/release) and where docs live.')
+$rm.Add('- Add links to key design docs or architectural decisions if present.')
+$rm.Add('')
+
+Set-Content -Path $repoMapPath -Value ($rm -join "`n") -Encoding UTF8
+
+Write-Host 'OK: generated context files:'
+Write-Host (' - ' + $verifyPath)
+Write-Host (' - ' + $repoMapPath)

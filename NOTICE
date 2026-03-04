@@ -1,0 +1,16 @@
+NOTICE
+
+This repository (`nano-claw`) includes work derived from the `nanobot` project.
+
+Upstream project:
+- Name: nanobot
+- License: MIT
+
+Attribution and license compliance:
+- The original MIT license terms are preserved.
+- Copyright and permission notices from upstream are retained.
+- Modifications in this repository are provided under MIT as documented in `LICENSE`.
+
+If additional third-party components are added in the future, their notices and
+licenses should be appended to this file or tracked in a dedicated third-party
+notice document.

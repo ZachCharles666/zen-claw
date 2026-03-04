@@ -1,0 +1,17 @@
+{
+  "approvals": [
+    {
+      "approval_id": "E2E57D90",
+      "session_id": "test-session",
+      "tool_name": "write_file",
+      "tool_args": {
+        "path": "outside.txt",
+        "content": "hello"
+      },
+      "reason": "Test Sensitive operation",
+      "created_at": "2026-02-27T10:47:29.083320+00:00",
+      "status": "pending",
+      "decided_at": null
+    }
+  ]
+}

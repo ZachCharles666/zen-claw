@@ -1,0 +1,6 @@
+{
+  "name": "summarize",
+  "version": "1.0.0",
+  "description": "Summarize and transcribe URLs and local files with summarize CLI.",
+  "permissions": ["exec", "read_file"]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "nano-claw-browser-sidecar",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Browser sidecar for nano-claw (Playwright-based)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": "^1.54.2"
+  }
+}
+

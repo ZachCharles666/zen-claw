@@ -1,0 +1,10 @@
+# Antigravity Agent Rules
+
+## Terminal & Environment
+- **Operating System**: Windows
+- **Preferred Shell**: pwsh (PowerShell 7)
+- **Virtual Environment**: This project uses a Python virtual environment located at `E:\nano-claw-public\.venv\`.
+- **Python Execution Rules**: 
+  - NEVER use the global `python` or `pip` commands unless explicitly requested.
+  - DO NOT attempt to run `Activate.ps1` to activate the environment.
+  - ALWAYS use the direct executable path relative to the project root (e.g., `.venv\Scripts\python.exe`, `.venv\Scripts\pip.exe`, `.venv\Scripts\pytest.exe`, `.venv\Scripts\ruff.exe`) for all Python-related terminal commands.

@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>zen-claw Chat</title>
+  <!-- Markdown rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+  <!-- Code highlighting -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/core.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/python.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/javascript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/languages/json.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1720;
+      --panel: #192635;
+      --line: #2b3c51;
+      --text: #dce7f5;
+      --muted: #99afc8;
+      --brand: #53b3ff;
+      --user-bg: #1c4569;
+      --agent-bg: #192635;
+      --ts: #5a7a9a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at 20% 0%, #1a2b3f, #0f1720 40%);
+      color: var(--text);
+      font-family: "Segoe UI", "PingFang SC", sans-serif;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+    .app {
+      width: min(1020px, 100%);
+      height: min(90vh, 860px);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      background: rgba(20, 34, 50, 0.88);
+      backdrop-filter: blur(10px);
+      overflow: hidden;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+    header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(25, 38, 53, 0.6);
+    }
+    header strong { font-size: 15px; letter-spacing: 0.5px; }
+    .status { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+    .status-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: #5a7a9a; transition: background 0.3s;
+    }
+    .status-dot.ok { background: #3ecf8e; }
+    .msgs {
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      scroll-behavior: smooth;
+    }
+    .msg-row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .msg-row.user { align-items: flex-end; }
+    .msg-row.agent { align-items: flex-start; }
+    .msg {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 9px 13px;
+      max-width: 84%;
+      word-break: break-word;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+    .msg.user { background: var(--user-bg); white-space: pre-wrap; border-radius: 12px 12px 4px 12px; }
+    .msg.agent { background: var(--agent-bg); border-radius: 12px 12px 12px 4px; }
+    /* Markdown rendered content */
+    .msg.agent p { margin: 0 0 6px; }
+    .msg.agent p:last-child { margin-bottom: 0; }
+    .msg.agent ul, .msg.agent ol { margin: 4px 0 6px 18px; padding: 0; }
+    .msg.agent li { margin-bottom: 2px; }
+    .msg.agent h1,.msg.agent h2,.msg.agent h3 { margin: 8px 0 4px; font-size: 1em; }
+    .msg.agent code:not([class]) {
+      background: #0d1c2b; border-radius: 4px; padding: 1px 5px;
+      font-family: "Cascadia Code", "Fira Code", monospace; font-size: 12px;
+    }
+    .msg.agent pre {
+      background: #0d1c2b; border-radius: 8px; padding: 10px 12px;
+      overflow-x: auto; margin: 6px 0;
+    }
+    .msg.agent pre code { font-size: 12px; padding: 0; background: transparent; }
+    .msg.agent blockquote {
+      border-left: 3px solid var(--brand); margin: 6px 0;
+      padding: 4px 10px; color: var(--muted);
+    }
+    .msg.agent table { border-collapse: collapse; margin: 6px 0; font-size: 13px; }
+    .msg.agent th, .msg.agent td { border: 1px solid var(--line); padding: 3px 8px; }
+    .ts { font-size: 11px; color: var(--ts); padding: 0 4px; }
+    /* Typing indicator */
+    .typing { display: none; align-items: center; gap: 4px; padding: 4px 0; }
+    .typing.active { display: flex; }
+    .typing span {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--muted);
+      animation: blink 1.2s ease-in-out infinite;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.2s; }
+    .typing span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%,80%,100%{opacity:.2} 40%{opacity:1} }
+    /* Input bar */
+    .input {
+      display: grid;
+      grid-template-columns: auto auto 1fr auto;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid var(--line);
+      background: rgba(15, 26, 38, 0.6);
+      position: relative;
+    }
+    textarea {
+      width: 100%;
+      min-height: 44px;
+      max-height: 160px;
+      resize: none;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: #0d1c2b;
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+    textarea:focus { outline: none; border-color: var(--brand); }
+    button {
+      border: 1px solid var(--line);
+      background: #10304d;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 0 14px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background 0.15s;
+    }
+    button:hover { background: #1a4570; }
+    button.primary {
+      background: linear-gradient(135deg, var(--brand), #2f8ad4);
+      color: #062038;
+      font-weight: 700;
+      border: none;
+    }
+    button.primary:hover { filter: brightness(1.1); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #upload-input { display: none; }
+    .cmd-hints {
+      display: none;
+      position: absolute;
+      left: 96px;
+      right: 72px;
+      bottom: 62px;
+      z-index: 10;
+      border: 1px solid var(--line);
+      background: #102337;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .cmd-hints.active { display: block; }
+    .cmd-item {
+      padding: 8px 10px;
+      font-size: 13px;
+      border-bottom: 1px solid var(--line);
+      cursor: pointer;
+    }
+    .cmd-item:last-child { border-bottom: none; }
+    .cmd-item:hover { background: #1a3550; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div><strong>🐾 zen-claw web chat</strong></div>
+      <div class="status">
+        <div class="status-dot" id="dot"></div>
+        <span id="status">connecting…</span>
+      </div>
+    </header>
+    <div class="msgs" id="msgs">
+      <div class="typing" id="typing"><span></span><span></span><span></span></div>
+    </div>
+    <div class="input">
+      <button id="upload-btn" title="上传文件">＋</button>
+      <button id="voice-btn" title="语音输入">🎙️</button>
+      <textarea id="input" placeholder="输入消息，Enter 发送，Shift+Enter 换行" rows="1"></textarea>
+      <button class="primary" id="send">发送</button>
+      <input id="upload-input" type="file" multiple>
+      <div class="cmd-hints" id="cmd-hints"></div>
+    </div>
+  </div>
+  <script>
+    // ── configure marked ──────────────────────────────────────────────────
+    marked.setOptions({ breaks: true, gfm: true });
+
+    // ── state ─────────────────────────────────────────────────────────────
+    const sessionId = crypto.randomUUID();
+    const wsProto = location.protocol === "https:" ? "wss" : "ws";
+    const wsUrl = `${wsProto}://${location.host}/chat/ws/${sessionId}`;
+
+    const msgsEl   = document.getElementById("msgs");
+    const typingEl = document.getElementById("typing");
+    const inputEl  = document.getElementById("input");
+    const sendBtn  = document.getElementById("send");
+    const voiceBtn = document.getElementById("voice-btn");
+    const statusEl = document.getElementById("status");
+    const dotEl    = document.getElementById("dot");
+    const cmdHintsEl = document.getElementById("cmd-hints");
+
+    let ws = null;
+    let streamRow = null;   // current streaming .msg-row
+    let streamMsg = null;   // current streaming .msg element
+    let streamRaw = "";     // raw markdown accumulated during stream
+    let pendingMediaPaths = [];
+    let mediaRecorder = null;
+    let mediaChunks = [];
+    let recording = false;
+    const runtimeCommands = [
+      { cmd: "/model ", desc: "切换当前会话模型" },
+      { cmd: "/clear", desc: "清空当前会话上下文" },
+      { cmd: "/think on", desc: "开启思考预算" },
+      { cmd: "/think off", desc: "关闭思考预算" },
+      { cmd: "/usage", desc: "查看会话 token 用量" },
+      { cmd: "/verbose on", desc: "开启详细日志" },
+      { cmd: "/verbose off", desc: "关闭详细日志" },
+    ];
+
+    // ── helpers ───────────────────────────────────────────────────────────
+    function fmtTime() {
+      return new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    }
+
+    function renderMarkdown(md) {
+      const html = marked.parse(md || "");
+      const div = document.createElement("div");
+      div.innerHTML = html;
+      div.querySelectorAll("pre code").forEach(block => {
+        if (window.hljs) hljs.highlightElement(block);
+      });
+      return div.innerHTML;
+    }
+
+    function addMsg(text, role) {
+      const row = document.createElement("div");
+      row.className = `msg-row ${role}`;
+
+      const bubble = document.createElement("div");
+      bubble.className = `msg ${role}`;
+
+      if (role === "user") {
+        bubble.textContent = text;
+      } else {
+        bubble.innerHTML = renderMarkdown(text);
+      }
+
+      const ts = document.createElement("div");
+      ts.className = "ts";
+      ts.textContent = fmtTime();
+
+      row.appendChild(bubble);
+      row.appendChild(ts);
+      // Insert before typing indicator so it stays at the bottom
+      msgsEl.insertBefore(row, typingEl);
+      scrollBottom();
+      return { row, bubble };
+    }
+
+    function scrollBottom() {
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+    }
+
+    function setTyping(active) {
+      typingEl.className = `typing${active ? " active" : ""}`;
+      if (active) scrollBottom();
+    }
+
+    function setConnected(ok) {
+      statusEl.textContent = ok ? "已连接" : "重连中…";
+      dotEl.className = `status-dot${ok ? " ok" : ""}`;
+    }
+
+    function renderCommandHints() {
+      const text = inputEl.value.trim();
+      if (!text.startsWith("/")) {
+        cmdHintsEl.className = "cmd-hints";
+        cmdHintsEl.innerHTML = "";
+        return;
+      }
+      const needle = text.toLowerCase();
+      const rows = runtimeCommands.filter(item => item.cmd.toLowerCase().startsWith(needle));
+      if (!rows.length) {
+        cmdHintsEl.className = "cmd-hints";
+        cmdHintsEl.innerHTML = "";
+        return;
+      }
+      cmdHintsEl.innerHTML = rows.map(item =>
+        `<div class="cmd-item" data-cmd="${item.cmd}"><strong>${item.cmd}</strong> ${item.desc}</div>`
+      ).join("");
+      cmdHintsEl.className = "cmd-hints active";
+      cmdHintsEl.querySelectorAll(".cmd-item").forEach(el => {
+        el.addEventListener("click", () => {
+          const cmd = el.getAttribute("data-cmd") || "";
+          inputEl.value = cmd;
+          inputEl.focus();
+          cmdHintsEl.className = "cmd-hints";
+          cmdHintsEl.innerHTML = "";
+        });
+      });
+    }
+
+    // ── WebSocket ─────────────────────────────────────────────────────────
+    function connect() {
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => setConnected(true);
+      ws.onclose = () => {
+        setConnected(false);
+        setTimeout(connect, 1800);
+      };
+      ws.onmessage = (ev) => {
+        const data = JSON.parse(ev.data);
+        if (data.type === "token") {
+          if (!streamRow) {
+            const r = addMsg("", "agent");
+            streamRow = r.row;
+            streamMsg = r.bubble;
+            streamRaw = "";
+          }
+          streamRaw += data.content;
+          // Re-render markdown incrementally — fast enough for character-level updates
+          streamMsg.innerHTML = renderMarkdown(streamRaw);
+          scrollBottom();
+        } else if (data.type === "done") {
+          // Apply highlight on finalized code blocks
+          if (streamMsg) {
+            streamMsg.querySelectorAll("pre code").forEach(b => {
+              if (window.hljs) hljs.highlightElement(b);
+            });
+          }
+          streamRow = null; streamMsg = null; streamRaw = "";
+          setTyping(false);
+          sendBtn.disabled = false;
+          inputEl.disabled = false;
+          inputEl.focus();
+        } else if (data.type === "error") {
+          addMsg(`⚠️ ${data.message || "未知错误"}`, "agent");
+          streamRow = null; streamMsg = null; streamRaw = "";
+          setTyping(false);
+          sendBtn.disabled = false;
+          inputEl.disabled = false;
+        }
+      };
+    }
+
+    // ── send ──────────────────────────────────────────────────────────────
+    function doSend() {
+      const text = inputEl.value.trim();
+      if ((!text && pendingMediaPaths.length === 0) || !ws || ws.readyState !== WebSocket.OPEN) return;
+      addMsg(text || "[voice/file message]", "user");
+      ws.send(JSON.stringify({ type: "message", content: text, media: pendingMediaPaths }));
+      inputEl.value = "";
+      inputEl.style.height = "auto";
+      pendingMediaPaths = [];
+      sendBtn.disabled = true;
+      inputEl.disabled = true;
+      setTyping(true);
+      cmdHintsEl.className = "cmd-hints";
+      cmdHintsEl.innerHTML = "";
+    }
+
+    sendBtn.addEventListener("click", doSend);
+    inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doSend(); }
+    });
+    // Auto-expand textarea
+    inputEl.addEventListener("input", () => {
+      inputEl.style.height = "auto";
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
+      renderCommandHints();
+    });
+
+    // ── file upload ───────────────────────────────────────────────────────
+    const uploadBtn   = document.getElementById("upload-btn");
+    const uploadInput = document.getElementById("upload-input");
+    uploadBtn.addEventListener("click", () => uploadInput.click());
+    uploadInput.addEventListener("change", async (e) => {
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+      const fd = new FormData();
+      files.forEach(f => fd.append("files", f));
+      try {
+        const res  = await fetch("/chat/upload", { method: "POST", body: fd });
+        const data = await res.json();
+        pendingMediaPaths = pendingMediaPaths.concat(Array.isArray(data.media_paths) ? data.media_paths : []);
+        addMsg(`📎 ${data.message || "文件已上传"}`, "agent");
+      } catch {
+        addMsg("📎 文件上传失败", "agent");
+      }
+      uploadInput.value = "";
+    });
+
+    // ── voice record (MediaRecorder) ─────────────────────────────────────
+    async function uploadAudioBlob(blob) {
+      const fd = new FormData();
+      fd.append("files", new File([blob], `voice-${Date.now()}.webm`, { type: blob.type || "audio/webm" }));
+      const res = await fetch("/chat/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      pendingMediaPaths = pendingMediaPaths.concat(Array.isArray(data.media_paths) ? data.media_paths : []);
+      addMsg("🎙️ 语音已上传，发送后将自动转写", "agent");
+    }
+
+    async function toggleRecording() {
+      if (!recording) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaChunks = [];
+        mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+        mediaRecorder.ondataavailable = (ev) => {
+          if (ev.data && ev.data.size > 0) mediaChunks.push(ev.data);
+        };
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(mediaChunks, { type: "audio/webm" });
+          stream.getTracks().forEach(t => t.stop());
+          await uploadAudioBlob(blob);
+        };
+        mediaRecorder.start();
+        recording = true;
+        voiceBtn.textContent = "⏹️";
+      } else if (mediaRecorder) {
+        mediaRecorder.stop();
+        recording = false;
+        voiceBtn.textContent = "🎙️";
+      }
+    }
+
+    voiceBtn.addEventListener("click", async () => {
+      try {
+        await toggleRecording();
+      } catch {
+        addMsg("🎙️ 当前浏览器不支持语音录制", "agent");
+      }
+    });
+
+    connect();
+  </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "weather",
+  "version": "1.0.0",
+  "description": "Fetch current weather and forecasts using public weather endpoints.",
+  "permissions": ["web_fetch", "web_search", "exec"]
+}

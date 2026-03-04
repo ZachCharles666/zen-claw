@@ -1,0 +1,6 @@
+{
+  "name": "cron",
+  "version": "1.0.0",
+  "description": "Schedule reminders and recurring tasks.",
+  "permissions": ["cron"]
+}

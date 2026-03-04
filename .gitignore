@@ -1,0 +1,70 @@
+.assets/
+.gemini/
+.claude/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzz
+*.egg
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.out
+go/bin/
+
+# Runtime artifacts
+out/
+logs/
+*.log
+*.pid
+*.tmp
+*.sqlite
+*.db
+browser/sidecar/node_modules/
+
+# Local workspace generated files
+workspace/loc_report*.json
+workspace/v/
+workspace/.agent_keys/
+**/.agent_keys/
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Exclude unstructured documentation
+docs/
+tasks/
+/*.md
+/*.txt
+!/README.md
+!/SECURITY.md
+
+

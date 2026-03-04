@@ -1,0 +1,6 @@
+{
+  "name": "tmux",
+  "version": "1.0.0",
+  "description": "Manage tmux sessions and capture pane output for interactive workflows.",
+  "permissions": ["exec", "read_file", "list_dir"]
+}
