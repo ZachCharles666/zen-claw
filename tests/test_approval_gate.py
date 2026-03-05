@@ -244,6 +244,8 @@ async def test_approval_required_stops_remaining_batch_tools(tmp_path):
 
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path)
     loop.approval_gate = gate
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
     # Disable the plan phase so provider.chat mock responses are not consumed by it
     loop.execution.should_plan = lambda: False  # type: ignore[method-assign]
 
@@ -275,6 +277,54 @@ async def test_approval_required_stops_remaining_batch_tools(tmp_path):
     pending = gate.list_pending()
     assert len(pending) == 1
     assert pending[0].tool_name == "exec"
+
+
+# ── tests: CLI direct must see approval instructions ──────────────────────────
+
+
+async def test_cli_sensitive_tool_returns_approval_instructions(tmp_path):
+    """
+    In direct CLI mode, approval instructions must be visible in the final response,
+    not only sent to bus outbound.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from zen_claw.agent.loop import AgentLoop
+    from zen_claw.bus.events import InboundMessage
+    from zen_claw.providers.base import LLMResponse, ToolCallRequest
+
+    gate = _gate(tmp_path)
+
+    bus = MagicMock()
+    bus.consume_inbound = AsyncMock()
+    bus.publish_outbound = AsyncMock()
+
+    exec_call = ToolCallRequest(id="tc-1", name="exec", arguments={"command": "ls"})
+    provider = MagicMock()
+    provider.chat = AsyncMock(
+        return_value=LLMResponse(content="", finish_reason="tool_calls", tool_calls=[exec_call])
+    )
+
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path)
+    loop.approval_gate = gate
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop.execution.should_plan = lambda: False  # type: ignore[method-assign]
+
+    msg = InboundMessage(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user",
+        content="run ls",
+    )
+    response = await loop._process_message(msg)
+
+    assert response is not None
+    assert "/approve" in response.content
+    assert "/deny" in response.content
+    pending = gate.list_pending(session_id="cli:direct")
+    assert len(pending) == 1
+    assert pending[0].approval_id in response.content
 
 
 # ── tests: MEDIUM-005 — bus notification failure is logged ────────────────────
@@ -402,6 +452,8 @@ async def test_approval_notification_uses_correct_channel_and_chat_id(tmp_path: 
 
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path)
     loop.approval_gate = gate
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
     loop.execution.should_plan = lambda: False  # type: ignore[method-assign]
 
     msg = InboundMessage(

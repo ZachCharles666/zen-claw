@@ -1370,6 +1370,7 @@ class AgentLoop:
 
                 tool_results: list[ToolResult] = []
                 reload_triggered = False
+                approval_blocked_cli = False
                 for tool_call in response.tool_calls:
                     raw_args = dict(tool_call.arguments)
                     call_args = self._maybe_rewrite_tool_args(
@@ -1381,7 +1382,7 @@ class AgentLoop:
                             session_id, tool_call.name, call_args
                         )
                         if not approved:
-                            await self.approval_gate.request_approval(
+                            approval = await self.approval_gate.request_approval(
                                 session_id=session_id,
                                 tool_name=tool_call.name,
                                 tool_args=call_args,
@@ -1390,11 +1391,17 @@ class AgentLoop:
                                 channel=channel,
                                 chat_id=chat_id,
                             )
+                            approval_msg = approval.format_request_message()
                             result = ToolResult.failure(
                                 ToolErrorKind.PERMISSION,
-                                f"Approval required for tool '{tool_call.name}'",
+                                approval_msg,
                                 code="approval_required",
                             )
+                            # In direct CLI mode there is no outbound dispatcher consuming bus messages.
+                            # Surface approval instructions immediately to the user.
+                            if channel == "cli":
+                                final_content = approval_msg
+                                approval_blocked_cli = True
                             tool_results.append(result)
                             messages = self.context.add_tool_result(
                                 messages, tool_call.id, tool_call.name, result
@@ -1438,6 +1445,9 @@ class AgentLoop:
                         break
             except Exception as e:
                 logger.error(f"Error in execution loop: {e}")
+                break
+
+            if approval_blocked_cli:
                 break
 
             if reload_triggered:
