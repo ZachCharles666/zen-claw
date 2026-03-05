@@ -33,7 +33,9 @@ class WeComChannel(BaseChannel):
     name = "wecom"
     _ACCESS_TOKEN_CACHE: dict[str, Any] = {}
 
-    def __init__(self, config: WeComConfig, bus: MessageBus, media_root: Path | None = None) -> None:
+    def __init__(
+        self, config: WeComConfig, bus: MessageBus, media_root: Path | None = None
+    ) -> None:
         super().__init__(config, bus, media_root=media_root)
         self.config = config
         self.groq_api_key = os.environ.get("GROQ_API_KEY", "")
@@ -63,7 +65,9 @@ class WeComChannel(BaseChannel):
             return
         await self._send_app_message(to_user=to_user, text=msg.content or "", access_token=token)
 
-    def verify_signature(self, timestamp: str, nonce: str, msg_signature: str, echostr: str = "") -> bool:
+    def verify_signature(
+        self, timestamp: str, nonce: str, msg_signature: str, echostr: str = ""
+    ) -> bool:
         joined = "".join(sorted([self.config.token, timestamp, nonce, echostr]))
         expected = hashlib.sha1(joined.encode("utf-8")).hexdigest()
         return expected == msg_signature
@@ -83,7 +87,9 @@ class WeComChannel(BaseChannel):
         except Exception:
             return None
 
-    async def handle_webhook(self, raw_xml: str, timestamp: str, nonce: str, msg_signature: str) -> str:
+    async def handle_webhook(
+        self, raw_xml: str, timestamp: str, nonce: str, msg_signature: str
+    ) -> str:
         outer = WechatMPChannel.parse_xml_message(raw_xml)
         encrypted = outer.get("Encrypt", "")
         if not self.verify_signature(timestamp, nonce, msg_signature, encrypted):
@@ -137,7 +143,10 @@ class WeComChannel(BaseChannel):
                 data = (await client.get(url)).json()
             token = str(data.get("access_token", ""))
             expires = int(data.get("expires_in", 7200))
-            self._ACCESS_TOKEN_CACHE[key] = {"token": token, "expires_at": time.time() + max(0, expires - 200)}
+            self._ACCESS_TOKEN_CACHE[key] = {
+                "token": token,
+                "expires_at": time.time() + max(0, expires - 200),
+            }
             return token
         except Exception as exc:
             logger.error(f"WeCom token fetch failed: {exc}")
@@ -145,7 +154,12 @@ class WeComChannel(BaseChannel):
 
     async def _send_app_message(self, to_user: str, text: str, access_token: str) -> None:
         url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}"
-        payload = {"touser": to_user, "msgtype": "text", "agentid": self.config.agent_id, "text": {"content": text}}
+        payload = {
+            "touser": to_user,
+            "msgtype": "text",
+            "agentid": self.config.agent_id,
+            "text": {"content": text},
+        }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 await client.post(url, json=payload)

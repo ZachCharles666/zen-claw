@@ -41,8 +41,7 @@ def test_context_builder_uses_query_relevant_memory_first(tmp_path: Path) -> Non
     ctx = ContextBuilder(tmp_path)
     _disable_skills(ctx)
     ctx.memory.write_long_term(
-        "- Project codename is zen_claw.\n"
-        "- Favorite editor theme is ocean.\n"
+        "- Project codename is zen_claw.\n- Favorite editor theme is ocean.\n"
     )
     messages = ctx.build_messages(history=[], current_message="what is the project codename?")
     system = str(messages[0]["content"])
@@ -53,8 +52,7 @@ def test_context_builder_uses_query_relevant_memory_first(tmp_path: Path) -> Non
 def test_relevant_memory_context_deduplicates_entries(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path)
     store.write_long_term(
-        "- User prefers Go modules for performance.\n"
-        "- User prefers Go modules for performance.\n"
+        "- User prefers Go modules for performance.\n- User prefers Go modules for performance.\n"
     )
     store.append_today("- User prefers Go modules for performance.")
 
@@ -72,7 +70,9 @@ def test_context_builder_with_recall_mode_none_skips_relevant_lookup(tmp_path: P
     assert "## Long-term Memory" in system
 
 
-def test_context_builder_with_recall_mode_none_does_not_call_relevant_lookup(tmp_path: Path, monkeypatch) -> None:
+def test_context_builder_with_recall_mode_none_does_not_call_relevant_lookup(
+    tmp_path: Path, monkeypatch
+) -> None:
     ctx = ContextBuilder(tmp_path, memory_recall_mode="none")
     _disable_skills(ctx)
 
@@ -83,7 +83,9 @@ def test_context_builder_with_recall_mode_none_does_not_call_relevant_lookup(tmp
     _ = ctx.build_messages(history=[], current_message="query")
 
 
-def test_context_builder_with_recall_mode_recent_prefers_recent_memory(tmp_path: Path, monkeypatch) -> None:
+def test_context_builder_with_recall_mode_recent_prefers_recent_memory(
+    tmp_path: Path, monkeypatch
+) -> None:
     ctx = ContextBuilder(tmp_path, memory_recall_mode="recent")
     _disable_skills(ctx)
     ctx.memory.write_long_term("- long-term only fact.\n")
@@ -109,7 +111,7 @@ def test_context_builder_includes_tool_learning_section(tmp_path: Path) -> None:
     learning_file = tmp_path / "memory" / "TOOLS_LEARNING.md"
     learning_file.parent.mkdir(parents=True, exist_ok=True)
     learning_file.write_text(
-        "# Tool Learning\n\n- tool=read_file from={\"file\":\"a\"} to={\"path\":\"a\"}\n",
+        '# Tool Learning\n\n- tool=read_file from={"file":"a"} to={"path":"a"}\n',
         encoding="utf-8",
     )
 
@@ -156,10 +158,12 @@ def test_suggest_tool_arg_rewrite_matches_exact_failed_args(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    rewrite = store.suggest_tool_arg_rewrite("dummy_search", {"q": "openclaw"}, query="dummy_search")
+    rewrite = store.suggest_tool_arg_rewrite(
+        "dummy_search", {"q": "openclaw"}, query="dummy_search"
+    )
     assert rewrite == {"query": "openclaw"}
 
-    no_rewrite = store.suggest_tool_arg_rewrite("dummy_search", {"q": "other"}, query="dummy_search")
+    no_rewrite = store.suggest_tool_arg_rewrite(
+        "dummy_search", {"q": "other"}, query="dummy_search"
+    )
     assert no_rewrite is None
-
-

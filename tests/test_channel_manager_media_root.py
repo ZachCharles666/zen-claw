@@ -171,5 +171,3 @@ async def test_channel_manager_drop_notice_respects_cooldown(tmp_path: Path) -> 
     mgr._last_drop_notice_at["discord:u1"] = mgr._last_drop_notice_at["discord:u1"] - 31
     await mgr._maybe_send_drop_notice(_FakeChannel(), msg, "t3")
     assert sent == ["busy", "busy"]
-
-

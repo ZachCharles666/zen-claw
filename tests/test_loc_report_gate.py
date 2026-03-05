@@ -62,7 +62,9 @@ def test_loc_report_fail_on_increase_allows_within_threshold(tmp_path: Path) -> 
     ]
     probe = subprocess.run(probe_cmd, capture_output=True, text=True, env=os.environ.copy())
     assert probe.returncode == 0
-    current_total = int(json.loads(probe_out.read_text(encoding="utf-8-sig"))["total_nonblank_lines"])
+    current_total = int(
+        json.loads(probe_out.read_text(encoding="utf-8-sig"))["total_nonblank_lines"]
+    )
 
     baseline = tmp_path / "baseline.json"
     baseline.write_text(

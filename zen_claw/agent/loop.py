@@ -69,6 +69,7 @@ from zen_claw.agent.tools.tts import TextToSpeechTool
 from zen_claw.agent.tools.web import WebFetchTool, WebSearchTool
 from zen_claw.bus.events import InboundMessage, OutboundMessage
 from zen_claw.bus.queue import MessageBus
+from zen_claw.errors import AgentMidTurnReloadException
 from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider
 from zen_claw.session.manager import SessionManager
@@ -77,7 +78,7 @@ from zen_claw.session.manager import SessionManager
 class AgentLoop:
     """
     The agent loop is the core processing engine.
-    
+
     It:
     1. Receives messages from the bus
     2. Builds context with history, memory, skills
@@ -121,6 +122,7 @@ class AgentLoop:
             WebFetchConfig,
             WebSearchConfig,
         )
+
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
@@ -149,7 +151,11 @@ class AgentLoop:
         self.vision_model = (vision_model or "").strip()
         self.skill_names = skill_names or []
         mode = (skill_permissions_mode or "off").strip().lower()
-        if self.tool_policy_config and self.tool_policy_config.production_hardening and self.skill_names:
+        if (
+            self.tool_policy_config
+            and self.tool_policy_config.production_hardening
+            and self.skill_names
+        ):
             # In strict mode, if the user explicitly loads skills into the prompt,
             # enforce declared permissions to avoid accidental tool expansion.
             mode = "enforce"
@@ -165,11 +171,11 @@ class AgentLoop:
         # Approval gate for sensitive tool calls
         try:
             from zen_claw.config.loader import get_data_dir
+
             sensitive_list = self.tool_policy_config.hitl_sensitive_tools
             sensitive_set = frozenset(sensitive_list) if sensitive_list is not None else None
             self.approval_gate: ApprovalGate | None = ApprovalGate(
-                data_dir=get_data_dir(),
-                sensitive_tools=sensitive_set
+                data_dir=get_data_dir(), sensitive_tools=sensitive_set
             )
         except Exception:
             self.approval_gate = None
@@ -218,17 +224,19 @@ class AgentLoop:
         self.tools.register(EditFileTool(allowed_dir=allowed_dir))
         self.tools.register(ListDirTool(allowed_dir=allowed_dir))
 
-        self.tools.register(ExecTool(
-            working_dir=str(self.workspace),
-            timeout=self.exec_config.timeout,
-            restrict_to_workspace=self.restrict_to_workspace,
-            mode=self.exec_config.mode,
-            sidecar_url=self.exec_config.sidecar_url,
-            sidecar_approval_mode=self.exec_config.sidecar_approval_mode,
-            sidecar_approval_token=self.exec_config.sidecar_approval_token.get_secret_value(),
-            sidecar_fallback_to_local=self.exec_config.sidecar_fallback_to_local,
-            sidecar_healthcheck=self.exec_config.sidecar_healthcheck,
-        ))
+        self.tools.register(
+            ExecTool(
+                working_dir=str(self.workspace),
+                timeout=self.exec_config.timeout,
+                restrict_to_workspace=self.restrict_to_workspace,
+                mode=self.exec_config.mode,
+                sidecar_url=self.exec_config.sidecar_url,
+                sidecar_approval_mode=self.exec_config.sidecar_approval_mode,
+                sidecar_approval_token=self.exec_config.sidecar_approval_token.get_secret_value(),
+                sidecar_fallback_to_local=self.exec_config.sidecar_fallback_to_local,
+                sidecar_healthcheck=self.exec_config.sidecar_healthcheck,
+            )
+        )
 
         # Gateway tool (for isolated runtimes).
         # In local mode a stub is registered so skills get a clear error instead
@@ -242,10 +250,12 @@ class AgentLoop:
                 sidecar_url=self.exec_config.sidecar_url,
                 sidecar_approval_mode=self.exec_config.sidecar_approval_mode,
                 sidecar_approval_token=self.exec_config.sidecar_approval_token.get_secret_value(),
-                sidecar_fallback_to_local=False, # Strictly enforce sandbox failure if proxy is down
+                sidecar_fallback_to_local=False,  # Strictly enforce sandbox failure if proxy is down
                 sidecar_healthcheck=self.exec_config.sidecar_healthcheck,
             )
-            self.tools.register(GatewayTool(backend_tool=gateway_backend, workspace=str(self.workspace)))
+            self.tools.register(
+                GatewayTool(backend_tool=gateway_backend, workspace=str(self.workspace))
+            )
         else:
             self.tools.register(GatewayToolLocalStub())
 
@@ -449,7 +459,9 @@ class AgentLoop:
                 errors.extend([f"{n}: {e}" for e in manifest_errors])
                 continue
             perms = (manifest or {}).get("permissions")
-            if not isinstance(perms, list) or not all(isinstance(p, str) and p.strip() for p in perms):
+            if not isinstance(perms, list) or not all(
+                isinstance(p, str) and p.strip() for p in perms
+            ):
                 errors.append(f"{n}: permissions missing or invalid in manifest.json")
                 continue
             if str((manifest or {}).get("trust") or "").strip().lower() == "untrusted":
@@ -477,7 +489,9 @@ class AgentLoop:
         if errors:
             if mode == "enforce":
                 raise ValueError("skill permission gate enforce failed: " + "; ".join(errors))
-            logger.warning("Skill permission gate not enforced due to manifest errors: " + "; ".join(errors))
+            logger.warning(
+                "Skill permission gate not enforced due to manifest errors: " + "; ".join(errors)
+            )
             self.tools.clear_skill_allowed_tools()
             self._apply_untrusted_skill_isolation(sorted(set(untrusted_skills)), mode=mode)
             return
@@ -485,7 +499,9 @@ class AgentLoop:
         self.tools.set_skill_allowed_tools(allowed)
         self._apply_untrusted_skill_isolation(sorted(set(untrusted_skills)), mode=mode)
 
-    def _apply_untrusted_skill_isolation(self, untrusted_skills: list[str], mode: str = "off") -> None:
+    def _apply_untrusted_skill_isolation(
+        self, untrusted_skills: list[str], mode: str = "off"
+    ) -> None:
         """
         Apply hard runtime isolation constraints for untrusted skills.
 
@@ -515,9 +531,17 @@ class AgentLoop:
             "sessions_resize",
         }
 
-        sidecar_ok = self.exec_config.mode == "sidecar" and not self.exec_config.sidecar_fallback_to_local
-        search_proxy_ok = self.web_search_config.mode == "proxy" and not self.web_search_config.proxy_fallback_to_local
-        fetch_proxy_ok = self.web_fetch_config.mode == "proxy" and not self.web_fetch_config.proxy_fallback_to_local
+        sidecar_ok = (
+            self.exec_config.mode == "sidecar" and not self.exec_config.sidecar_fallback_to_local
+        )
+        search_proxy_ok = (
+            self.web_search_config.mode == "proxy"
+            and not self.web_search_config.proxy_fallback_to_local
+        )
+        fetch_proxy_ok = (
+            self.web_fetch_config.mode == "proxy"
+            and not self.web_fetch_config.proxy_fallback_to_local
+        )
 
         if not sidecar_ok:
             deny.add("exec")
@@ -578,14 +602,15 @@ class AgentLoop:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
         logger.info("Agent loop started")
+        try:
+            self.context.skills.start_gc_reaper()
+        except Exception as exc:
+            logger.warning(f"Failed to start skill GC reaper: {exc}")
 
         while self._running:
             try:
                 # Wait for next message
-                msg = await asyncio.wait_for(
-                    self.bus.consume_inbound(),
-                    timeout=1.0
-                )
+                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
 
                 # Process it
                 try:
@@ -606,27 +631,33 @@ class AgentLoop:
                         )
                     )
                     # Send error response
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content=f"Sorry, I encountered an error: {str(e)}",
-                        metadata=TraceContext.child_metadata(trace_id),
-                    ))
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=f"Sorry, I encountered an error: {str(e)}",
+                            metadata=TraceContext.child_metadata(trace_id),
+                        )
+                    )
             except asyncio.TimeoutError:
                 continue
 
     def stop(self) -> None:
         """Stop the agent loop."""
         self._running = False
+        try:
+            self.context.skills.stop_gc_reaper()
+        except Exception as exc:
+            logger.warning(f"Failed to stop skill GC reaper: {exc}")
         logger.info("Agent loop stopping")
 
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
-        
+
         Args:
             msg: The inbound message to process.
-        
+
         Returns:
             The response message, or None if no response needed.
         """
@@ -639,7 +670,7 @@ class AgentLoop:
         stripped = msg.content.strip()
         if self.approval_gate and stripped.startswith(("/approve ", "/deny ")):
             parts = stripped.split(None, 2)
-            decision = parts[0].lstrip("/").lower()   # "approve" or "deny"
+            decision = parts[0].lstrip("/").lower()  # "approve" or "deny"
             aid = parts[1].upper() if len(parts) > 1 else ""
             if decision == "approve":
                 rec = self.approval_gate.approve(aid)
@@ -676,6 +707,30 @@ class AgentLoop:
         if msg.channel == "system":
             return await self._process_system_message(msg)
 
+        if msg.channel == "cli" and not (msg.metadata or {}).get("channel_role"):
+            msg.metadata["channel_role"] = "admin"
+
+        deny_reason = self._fail_closed_identity_reason(msg.channel, msg.metadata)
+        if deny_reason:
+            logger.warning(
+                f"Identity fail-closed denied request: {deny_reason} "
+                + TraceContext.event_text(
+                    "agent.identity.denied",
+                    trace_id,
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    sender_id=msg.sender_id,
+                    error_kind="permission",
+                    retryable=False,
+                )
+            )
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"Access Denied: {deny_reason}",
+                metadata=TraceContext.child_metadata(trace_id),
+            )
+
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info(
             f"Processing message from {msg.channel}:{msg.sender_id}: {preview} "
@@ -689,7 +744,10 @@ class AgentLoop:
         )
 
         self._apply_channel_tool_policy(msg.channel)
-        self._apply_channel_role_tool_policy(msg.metadata)
+        if self._should_enforce_identity(msg.metadata):
+            self._apply_channel_role_tool_policy(msg.metadata)
+        else:
+            self.tools.clear_policy_scope("channel_role")
         self._apply_session_tool_policy(session.metadata)
 
         # Update tool contexts
@@ -699,11 +757,22 @@ class AgentLoop:
 
         spawn_tool = self.tools.get("spawn")
         if isinstance(spawn_tool, SpawnTool):
-            spawn_tool.set_context(msg.channel, msg.chat_id, trace_id=trace_id)
+            spawn_tool.set_context(
+                msg.channel,
+                msg.chat_id,
+                trace_id=trace_id,
+                skill_pins=session.metadata.get("skill_pins"),
+            )
 
         cron_tool = self.tools.get("cron")
         if isinstance(cron_tool, CronTool):
             cron_tool.set_context(msg.channel, msg.chat_id)
+
+        # Populate skill pins for session-level version consistency
+        if "skill_pins" not in session.metadata:
+            all_active = list(self.skill_names)
+            all_active.extend(self.context.skills.get_always_skills())
+            session.metadata["skill_pins"] = self.context.skills.build_session_pins(all_active)
 
         history = await self._build_history_with_compression(session, trace_id)
 
@@ -715,6 +784,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            pins=session.metadata["skill_pins"],
         )
         if bool(session.metadata.get("think_enabled", False)):
             messages.append(
@@ -729,8 +799,12 @@ class AgentLoop:
         messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
         usage: dict[str, int] = {}
         final_content, _ = await self._run_execute_reflect_loop(
-            messages, trace_id, model=run_model,
-            channel=msg.channel, chat_id=msg.chat_id,
+            messages,
+            trace_id,
+            session=session,
+            model=run_model,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
             usage_collector=usage,
         )
 
@@ -800,7 +874,7 @@ class AgentLoop:
             mode = parts[1].strip().lower()
             if mode not in {"on", "off"}:
                 return "用法：`/think on` 或 `/think off`"
-            session.metadata["think_enabled"] = (mode == "on")
+            session.metadata["think_enabled"] = mode == "on"
             return f"🧠 当前会话推理增强已设为 `{mode}`。"
 
         if stripped.startswith("/verbose"):
@@ -811,12 +885,16 @@ class AgentLoop:
             mode = parts[1].strip().lower()
             if mode not in {"on", "off"}:
                 return "用法：`/verbose on` 或 `/verbose off`"
-            session.metadata["verbose"] = (mode == "on")
+            session.metadata["verbose"] = mode == "on"
             return f"🛠️ 当前会话详细输出已设为 `{mode}`。"
 
         if stripped == "/usage":
             usage = session.metadata.get("last_usage")
-            model = str(session.metadata.get("last_model") or session.metadata.get("override_model") or self.model)
+            model = str(
+                session.metadata.get("last_model")
+                or session.metadata.get("override_model")
+                or self.model
+            )
             if not isinstance(usage, dict) or not usage:
                 return f"📊 暂无用量数据（model=`{model}`）"
             usage_text = ", ".join(f"{k}={v}" for k, v in sorted(usage.items()))
@@ -827,7 +905,7 @@ class AgentLoop:
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a system message (e.g., subagent announce).
-        
+
         The chat_id field contains "original_channel:original_chat_id" to route
         the response back to the correct destination.
         """
@@ -856,7 +934,7 @@ class AgentLoop:
         session_key = f"{origin_channel}:{origin_chat_id}"
         session = self.sessions.get_or_create(session_key)
         self._apply_channel_tool_policy(origin_channel)
-        self._apply_channel_role_tool_policy({})
+        self._apply_channel_role_tool_policy({"channel_role": "admin"})
         self._apply_session_tool_policy(session.metadata)
 
         # Update tool contexts
@@ -894,8 +972,12 @@ class AgentLoop:
         run_model = self._resolve_run_model(messages, preferred_model=preferred_model)
         messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
         final_content, _ = await self._run_execute_reflect_loop(
-            messages, trace_id, model=run_model,
-            channel=msg.channel, chat_id=msg.chat_id,
+            messages,
+            trace_id,
+            session=session,
+            model=run_model,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
         )
 
         if final_content is None:
@@ -924,13 +1006,13 @@ class AgentLoop:
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
-        
+
         Args:
             content: The message content.
             session_key: Session identifier.
             channel: Source channel (for context).
             chat_id: Source chat ID (for context).
-        
+
         Returns:
             The agent's response.
         """
@@ -943,6 +1025,7 @@ class AgentLoop:
             metadata={
                 **TraceContext.child_metadata(None),
                 "session_key": session_key,
+                "channel_role": "admin",
             },
         )
 
@@ -971,16 +1054,61 @@ class AgentLoop:
         self.tools.set_policy_scope("channel", allow=layer.allow, deny=layer.deny)
 
     def _apply_channel_role_tool_policy(self, metadata: dict[str, Any] | None) -> None:
-        """Apply channel role policy: admin unrestricted, user restricted."""
+        """
+        Apply channel role policy: admin unrestricted, user restricted.
+        Defaults to 'Deny-Closed' (blocking all tools) if role is missing or unknown.
+        """
         role = str((metadata or {}).get("channel_role") or "").strip().lower()
+        if role == "admin":
+            self.tools.clear_policy_scope("channel_role")
+            return
+
         if role == "user":
             allowed = set(self._CHANNEL_USER_ALLOW_TOOLS)
             deny = [name for name in self.tools.tool_names if name not in allowed]
             self.tools.set_policy_scope("channel_role", allow=None, deny=deny)
             return
-        self.tools.clear_policy_scope("channel_role")
 
-    async def _build_history_with_compression(self, session: "Session", trace_id: str) -> list[dict[str, Any]]:
+        # Deny-Closed: block all tools if role is missing or invalid
+        logger.warning(
+            f"No valid role found in metadata (role='{role}'), enforcing Deny-Closed policy."
+        )
+        self.tools.set_policy_scope("channel_role", allow=None, deny=["*"])
+
+    def _fail_closed_identity_reason(
+        self, channel: str, metadata: dict[str, Any] | None
+    ) -> str | None:
+        """
+        Enforce hard fail-closed identity checks before planning/execution.
+        """
+        channel_key = (channel or "").strip().lower()
+        if channel_key in {"cli", "system"}:
+            return None
+
+        meta = metadata or {}
+        enforce_identity = self._should_enforce_identity(meta)
+        if not enforce_identity:
+            return None
+
+        channel_role = str(meta.get("channel_role") or "").strip().lower()
+        if channel_role not in {"admin", "user", "guest"}:
+            return "missing or invalid channel_role metadata"
+
+        tenant_id = str(meta.get("tenant_id") or meta.get("tid") or "").strip()
+        app_role = str(meta.get("role") or "").strip().lower()
+        if bool(tenant_id) ^ bool(app_role):
+            return "incomplete tenant identity metadata (tenant_id/tid + role required together)"
+        return None
+
+    @staticmethod
+    def _should_enforce_identity(metadata: dict[str, Any] | None) -> bool:
+        meta = metadata or {}
+        identity_keys = {"channel_role", "tenant_id", "tid", "role"}
+        return bool(meta.get("identity_verified")) or any(k in meta for k in identity_keys)
+
+    async def _build_history_with_compression(
+        self, session: "Session", trace_id: str
+    ) -> list[dict[str, Any]]:
         """Compress long history with a rolling LLM summary when needed."""
         messages = session.messages
         summarized_upto = int(session.metadata.get("rolling_summary_upto", 0) or 0)
@@ -988,7 +1116,11 @@ class AgentLoop:
         should_compress_by_tokens = self._should_compress_by_token_budget(session, messages)
         if not should_compress_by_tokens and not plan.should_compress:
             return session.get_history()
-        if should_compress_by_tokens and not plan.should_compress and len(messages) > self.compressor.keep_recent:
+        if (
+            should_compress_by_tokens
+            and not plan.should_compress
+            and len(messages) > self.compressor.keep_recent
+        ):
             # Token-based trigger asked for compression but turn-based window is quiet;
             # force a minimal safe prefix compression pass.
             cutoff = max(0, len(messages) - self.compressor.keep_recent)
@@ -1003,7 +1135,10 @@ class AgentLoop:
         try:
             resp = await self.provider.chat(
                 messages=[
-                    {"role": "system", "content": "You summarize conversations for context compression."},
+                    {
+                        "role": "system",
+                        "content": "You summarize conversations for context compression.",
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 tools=None,
@@ -1059,7 +1194,9 @@ class AgentLoop:
         )
         return compressed_history
 
-    def _should_compress_by_token_budget(self, session: "Session", messages: list[dict[str, Any]]) -> bool:
+    def _should_compress_by_token_budget(
+        self, session: "Session", messages: list[dict[str, Any]]
+    ) -> bool:
         if self.max_context_tokens <= 0:
             return False
         # Cooldown guard (hysteresis) to avoid oscillation.
@@ -1088,7 +1225,9 @@ class AgentLoop:
                 pass
         return self.compressor.estimate_tokens_from_messages(messages)
 
-    async def _extract_and_store_memory(self, user_text: str, assistant_text: str, trace_id: str) -> None:
+    async def _extract_and_store_memory(
+        self, user_text: str, assistant_text: str, trace_id: str
+    ) -> None:
         """Extract durable memory with LLM and persist if needed."""
         if not self.memory_extractor.should_extract(user_text, assistant_text):
             return
@@ -1187,12 +1326,13 @@ class AgentLoop:
         self,
         messages: list[dict[str, Any]],
         trace_id: str,
+        session: "Session | None" = None,
         model: str | None = None,
         channel: str = "cli",
         chat_id: str = "direct",
         usage_collector: dict[str, int] | None = None,
     ) -> tuple[str | None, list[dict[str, Any]]]:
-        """Run execute loop with bounded reflection retries."""
+        """Run execute loop with bounded reflection retries and mid-turn hot-swapping."""
         iteration = 0
         reflections_used = 0
         final_content: str | None = None
@@ -1201,155 +1341,114 @@ class AgentLoop:
 
         while iteration < self.max_iterations:
             iteration += 1
-            response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                model=active_model,
-            )
-            self._accumulate_usage(usage_collector, response.usage)
-
-            if not response.has_tool_calls:
-                final_content = response.content
-                break
-
-            tool_call_dicts = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": json.dumps(tc.arguments),
-                    },
-                }
-                for tc in response.tool_calls
-            ]
-            messages = self.context.add_assistant_message(messages, response.content, tool_call_dicts)
-
-            tool_results: list[ToolResult] = []
-            for tool_call in response.tool_calls:
-                call_args = dict(tool_call.arguments)
-                rewritten_args = self._maybe_rewrite_tool_args(
-                    tool_name=tool_call.name,
-                    call_args=call_args,
+            try:
+                response = await self.provider.chat(
                     messages=messages,
+                    tools=self.tools.get_definitions(),
+                    model=active_model,
                 )
-                if rewritten_args != call_args:
-                    logger.info(
-                        "Applied learned parameter rewrite before retry "
-                        + TraceContext.event_text(
-                            "agent.tool.rewrite",
-                            trace_id,
-                            tool=tool_call.name,
-                            iteration=iteration,
+                self._accumulate_usage(usage_collector, response.usage)
+
+                if not response.has_tool_calls:
+                    final_content = response.content
+                    break
+
+                tool_call_dicts = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments),
+                        },
+                    }
+                    for tc in response.tool_calls
+                ]
+                messages = self.context.add_assistant_message(
+                    messages, response.content, tool_call_dicts
+                )
+
+                tool_results: list[ToolResult] = []
+                reload_triggered = False
+                for tool_call in response.tool_calls:
+                    raw_args = dict(tool_call.arguments)
+                    call_args = self._maybe_rewrite_tool_args(
+                        tool_call.name, dict(raw_args), messages
+                    )
+                    if self.approval_gate and self.approval_gate.is_sensitive(tool_call.name):
+                        session_id = session.key if session is not None else f"{channel}:{chat_id}"
+                        approved = self.approval_gate.consume_approved(
+                            session_id, tool_call.name, call_args
                         )
-                    )
-                    call_args = rewritten_args
-                args_str = json.dumps(call_args, ensure_ascii=False)
-                logger.info(
-                    f"Tool call: {tool_call.name}({args_str[:200]}) "
-                    + TraceContext.event_text(
-                        "agent.tool.call",
-                        trace_id,
-                        tool=tool_call.name,
-                        tool_call_id=tool_call.id,
-                        iteration=iteration,
-                    )
-                )
-
-                # Check for sensitive tool approvals
-                if self.approval_gate and self.approval_gate.is_sensitive(tool_call.name):
-                    # Has this specific tool call with these exact args already been approved recently in this track?
-                    # The approval flow requires the agent to "try again and fail", getting an approval ID.
-                    # Once approved by a human, the agent will retry and this time it will pass.
-
-                    # Look up pending/approved requests for this session
-                    session_key = trace_id.split("-")[0] if trace_id else "default"
-
-                    # Check if this exact tool call has already been approved by the user.
-                    # consume_approved() finds an APPROVED record matching session/tool/args,
-                    # removes it atomically (prevents reuse), and returns it.
-                    approved_item = self.approval_gate.consume_approved(
-                        session_id=session_key,
-                        tool_name=tool_call.name,
-                        tool_args=call_args,
-                    )
-
-                    if approved_item:
-                        # Proceed to normally execute the tool
+                        if not approved:
+                            await self.approval_gate.request_approval(
+                                session_id=session_id,
+                                tool_name=tool_call.name,
+                                tool_args=call_args,
+                                reason="Sensitive operation",
+                                bus=self.bus,
+                                channel=channel,
+                                chat_id=chat_id,
+                            )
+                            result = ToolResult.failure(
+                                ToolErrorKind.PERMISSION,
+                                f"Approval required for tool '{tool_call.name}'",
+                                code="approval_required",
+                            )
+                            tool_results.append(result)
+                            messages = self.context.add_tool_result(
+                                messages, tool_call.id, tool_call.name, result
+                            )
+                            break
+                    try:
                         result = await self.tools.execute(
-                            tool_call.name,
-                            call_args,
-                            trace_id=trace_id,
+                            tool_call.name, call_args, trace_id=trace_id
                         )
-                    else:
-                        # Request approval and block this execution
-                        rec = await self.approval_gate.request_approval(
-                            session_id=session_key,
-                            tool_name=tool_call.name,
-                            tool_args=call_args,
-                            reason="Requires human confirmation",
-                            bus=self.bus,
-                            channel=channel,
-                            chat_id=chat_id,
+                    except AgentMidTurnReloadException as e:
+                        logger.info(f"Mid-turn reload triggered: {e.message}")
+                        if session is not None and "skill_pins" not in session.metadata:
+                            session.metadata["skill_pins"] = {}
+                        if session is not None:
+                            session.metadata["skill_pins"].update(e.pins or {})
+                        result = ToolResult.success(
+                            f"SUCCESS: {e.message}. System context reloaded."
                         )
-                        result = ToolResult.failure(
-                            ToolErrorKind.PERMISSION,
-                            f"Action requires human approval. An approval request has been sent to the user. "
-                            f"Pause your work and wait for the user to approve. "
-                            f"(Approval ID: {rec.approval_id})",
-                            code="approval_required"
-                        )
-                else:
-                    result = await self.tools.execute(
-                        tool_call.name,
-                        call_args,
-                        trace_id=trace_id,
-                    )
-                if isinstance(result, ToolResult):
+                        reload_triggered = True
+                    # Continue to append result message before breaking to preserve traceability.
+
+                    # Record learning and update messages
                     if not result.ok and result.error and result.error.kind.value == "parameter":
                         pending_param_failures[tool_call.name] = (
-                            dict(call_args),
+                            dict(raw_args),
                             result.error.message,
                         )
                     elif result.ok and tool_call.name in pending_param_failures:
                         failed_args, error_message = pending_param_failures.pop(tool_call.name)
                         self._record_tool_learning(
-                            tool_name=tool_call.name,
-                            failed_args=failed_args,
-                            corrected_args=dict(call_args),
-                            error_message=error_message,
-                            trace_id=trace_id,
+                            tool_call.name, failed_args, dict(call_args), error_message, trace_id
                         )
-                if isinstance(result, ToolResult):
+
                     tool_results.append(result)
-                messages = self.context.add_tool_result(messages, tool_call.id, tool_call.name, result)
-                # MEDIUM-009: if this tool was blocked pending human approval, stop processing
-                # the rest of the batch immediately.  Executing subsequent tools after a HITL
-                # block would silently bypass the approval gate for any tool that follows.
-                if (
-                    isinstance(result, ToolResult)
-                    and result.error is not None
-                    and result.error.code == "approval_required"
-                ):
-                    break
+                    messages = self.context.add_tool_result(
+                        messages, tool_call.id, tool_call.name, result
+                    )
+                    if (
+                        result.error and result.error.code == "approval_required"
+                    ) or reload_triggered:
+                        break
+            except Exception as e:
+                logger.error(f"Error in execution loop: {e}")
+                break
+
+            if reload_triggered:
+                continue
 
             hints = self.execution.collect_error_hints(tool_results)
             if hints and self.execution.can_reflect(reflections_used):
                 reflections_used += 1
                 reflection_prompt = self.execution.build_reflection_prompt(hints)
                 messages.append({"role": "user", "content": reflection_prompt})
-                logger.info(
-                    "Reflection phase injected guidance "
-                    + TraceContext.event_text(
-                        "agent.reflect",
-                        trace_id,
-                        retryable=any(h.retryable for h in hints),
-                        error_kind=hints[0].kind if hints else None,
-                        reflections_used=reflections_used,
-                    )
-                )
                 continue
-
         return final_content, messages
 
     def _maybe_rewrite_tool_args(
@@ -1434,7 +1533,9 @@ class AgentLoop:
             )
 
     @staticmethod
-    def _tool_learning_signature(tool_name: str, failed_args: dict[str, Any], corrected_args: dict[str, Any]) -> str:
+    def _tool_learning_signature(
+        tool_name: str, failed_args: dict[str, Any], corrected_args: dict[str, Any]
+    ) -> str:
         payload = json.dumps(
             {"tool": tool_name, "from": failed_args, "to": corrected_args},
             sort_keys=True,
@@ -1442,7 +1543,9 @@ class AgentLoop:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
-    def _resolve_run_model(self, messages: list[dict[str, Any]], preferred_model: str | None = None) -> str:
+    def _resolve_run_model(
+        self, messages: list[dict[str, Any]], preferred_model: str | None = None
+    ) -> str:
         """Use vision model when current message payload includes image blocks."""
         if self.vision_model and self._contains_image_payload(messages):
             return self.vision_model
@@ -1472,7 +1575,13 @@ class AgentLoop:
                 if block.get("type") == "text":
                     text = str(block.get("text") or "").lower()
                     if "attached media references" in text and "/image/" in text:
-                        if "media://" in text or "feishu://" in text or "whatsapp://" in text or "telegram://" in text or "discord://" in text:
+                        if (
+                            "media://" in text
+                            or "feishu://" in text
+                            or "whatsapp://" in text
+                            or "telegram://" in text
+                            or "discord://" in text
+                        ):
                             return True
         return False
 

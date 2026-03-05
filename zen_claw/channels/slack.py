@@ -168,7 +168,9 @@ class SlackChannel(BaseChannel):
         file_id = str(file_obj.get("id") or "").strip()
         if not file_id:
             return None
-        source_url = str(file_obj.get("url_private_download") or file_obj.get("url_private") or "").strip()
+        source_url = str(
+            file_obj.get("url_private_download") or file_obj.get("url_private") or ""
+        ).strip()
         media_type = self._slack_file_type(file_obj)
         uri = self._build_media_uri("slack", media_type, file_id)
         if not source_url or not self.config.bot_token:

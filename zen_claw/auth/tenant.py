@@ -47,7 +47,9 @@ class TenantStore:
         _validate_tenant_id(tenant_id)
         return self._tenants_root / tenant_id / "tenant.json"
 
-    def create(self, name: str, quota_llm_calls_per_day: int = 1000, quota_storage_mb: int = 1000) -> Tenant:
+    def create(
+        self, name: str, quota_llm_calls_per_day: int = 1000, quota_storage_mb: int = 1000
+    ) -> Tenant:
         if not name or not name.strip():
             raise ValueError("Tenant name cannot be empty")
         tenant = Tenant(

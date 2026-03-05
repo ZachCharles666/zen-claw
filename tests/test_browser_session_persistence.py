@@ -73,5 +73,6 @@ async def main():
 
     print("M1 TEST PASSED! Session loading and restoring via JSON state works.")
 
+
 if __name__ == "__main__":
     asyncio.run(main())

@@ -23,5 +23,3 @@ def test_exec_config_accepts_sidecar_camel_case() -> None:
     assert config.tools.exec.sidecar_fallback_to_local is True
     assert config.tools.exec.sidecar_healthcheck is True
     assert config.tools.effective_exec().mode == "sidecar"
-
-

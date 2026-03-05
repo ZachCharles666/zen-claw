@@ -92,7 +92,11 @@ def test_tool_call_dispatch_reaches_registered_tool(tmp_path: Path) -> None:
     class _EchoTool(Tool):
         name = "echo_test"
         description = "Echo"
-        parameters = {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}
+        parameters = {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        }
 
         async def execute(self, text: str = "", **kwargs: Any) -> ToolResult:
             calls["text"] = text
@@ -100,7 +104,10 @@ def test_tool_call_dispatch_reaches_registered_tool(tmp_path: Path) -> None:
 
     provider = _QueueProvider(
         [
-            LLMResponse(content=None, tool_calls=[ToolCallRequest(id="1", name="echo_test", arguments={"text": "ok"})]),
+            LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(id="1", name="echo_test", arguments={"text": "ok"})],
+            ),
             LLMResponse(content="done", tool_calls=[]),
         ]
     )
@@ -129,7 +136,9 @@ def test_max_iterations_terminates_loop(tmp_path: Path) -> None:
             super().__init__(api_key=None, api_base=None)
 
         async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7):
-            return LLMResponse(content=None, tool_calls=[ToolCallRequest(id="i", name="loop_tool", arguments={})])
+            return LLMResponse(
+                content=None, tool_calls=[ToolCallRequest(id="i", name="loop_tool", arguments={})]
+            )
 
         def get_default_model(self) -> str:
             return "fake-model"
@@ -154,7 +163,10 @@ def test_kill_switch_blocks_tool_execution(tmp_path: Path) -> None:
 
     provider = _QueueProvider(
         [
-            LLMResponse(content=None, tool_calls=[ToolCallRequest(id="1", name="blocked_tool", arguments={})]),
+            LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(id="1", name="blocked_tool", arguments={})],
+            ),
             LLMResponse(content="ok", tool_calls=[]),
         ]
     )
@@ -176,7 +188,10 @@ def test_tool_failure_does_not_crash_and_loop_continues(tmp_path: Path) -> None:
 
     provider = _QueueProvider(
         [
-            LLMResponse(content=None, tool_calls=[ToolCallRequest(id="1", name="failing_tool", arguments={})]),
+            LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(id="1", name="failing_tool", arguments={})],
+            ),
             LLMResponse(content="recovered", tool_calls=[]),
         ]
     )
@@ -190,7 +205,10 @@ def test_tool_failure_does_not_crash_and_loop_continues(tmp_path: Path) -> None:
 def test_unknown_tool_name_does_not_crash_loop(tmp_path: Path) -> None:
     provider = _QueueProvider(
         [
-            LLMResponse(content=None, tool_calls=[ToolCallRequest(id="1", name="missing_tool", arguments={})]),
+            LLMResponse(
+                content=None,
+                tool_calls=[ToolCallRequest(id="1", name="missing_tool", arguments={})],
+            ),
             LLMResponse(content="fallback", tool_calls=[]),
         ]
     )
@@ -206,7 +224,11 @@ def test_multiple_tool_calls_in_one_response_are_all_dispatched(tmp_path: Path) 
     class _LogTool(Tool):
         name = "log_tool"
         description = "log"
-        parameters = {"type": "object", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+        parameters = {
+            "type": "object",
+            "properties": {"label": {"type": "string"}},
+            "required": ["label"],
+        }
 
         async def execute(self, label: str = "", **kwargs: Any) -> ToolResult:
             calls.append(label)

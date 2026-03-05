@@ -66,7 +66,9 @@ def test_config_migrate_write_outfile(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    out = CliRunner().invoke(app, ["config", "migrate", "--config", str(cfg), "--write", "--out", str(out_cfg)])
+    out = CliRunner().invoke(
+        app, ["config", "migrate", "--config", str(cfg), "--write", "--out", str(out_cfg)]
+    )
     assert out.exit_code == 0
     assert out_cfg.exists()
     assert not cfg.with_suffix(".json.bak").exists()

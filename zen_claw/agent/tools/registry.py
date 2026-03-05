@@ -15,13 +15,14 @@ from zen_claw.observability.trace import TraceContext
 class ToolRegistry:
     """
     Registry for agent tools.
-    
+
     Allows dynamic registration and execution of tools.
     """
 
-    def __init__(self, policy: ToolPolicyEngine | None = None):
+    def __init__(self, policy: ToolPolicyEngine | None = None, quota_engine: Any = None):
         self._tools: dict[str, Tool] = {}
         self._policy = policy or ToolPolicyEngine()
+        self._quota_engine = quota_engine
         self._kill_switch_enabled: bool = False
         self._kill_switch_reason: str = ""
         # Optional additional gate (e.g. when a specific skill/plugin is loaded).
@@ -72,14 +73,14 @@ class ToolRegistry:
     ) -> ToolResult:
         """
         Execute a tool by name with given parameters.
-        
+
         Args:
             name: Tool name.
             params: Tool parameters.
-        
+
         Returns:
             Tool execution result as string.
-        
+
         Raises:
             KeyError: If tool not found.
         """
@@ -185,6 +186,19 @@ class ToolRegistry:
             )
             return result
 
+        # Check Quota
+        if self._quota_engine:
+            tenant_id = trace_id.split(":")[0] if trace_id and ":" in trace_id else "default"
+            quota_ok = await self._quota_engine.check_quota(tenant_id, name)
+            if not quota_ok:
+                result = ToolResult.failure(
+                    ToolErrorKind.RETRYABLE,
+                    f"Quota exceeded for tool '{name}' (or quota service unavailable)",
+                    code="quota_exceeded",
+                )
+                logger.warning(f"Tool '{name}' denied by quota engine for tenant '{tenant_id}'")
+                return result
+
         try:
             errors = tool.validate_params(params)
             if errors:
@@ -279,12 +293,13 @@ class ToolRegistry:
     def _normalize_result(self, name: str, raw_result: Any) -> ToolResult:
         """Normalize raw tool output into ToolResult."""
         if isinstance(raw_result, ToolResult):
-            return raw_result
+            result = raw_result
+        elif isinstance(raw_result, str):
+            result = self._from_legacy_string(name, raw_result)
+        else:
+            result = ToolResult.success(str(raw_result))
 
-        if isinstance(raw_result, str):
-            return self._from_legacy_string(name, raw_result)
-
-        return ToolResult.success(str(raw_result))
+        return result.purify()
 
     def _from_legacy_string(self, name: str, text: str) -> ToolResult:
         stripped = text.strip()
@@ -403,5 +418,3 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
-
-

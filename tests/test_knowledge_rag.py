@@ -159,7 +159,13 @@ async def test_knowledge_search_tool_returns_results(tmp_path: Path):
     with patch("zen_claw.knowledge.retriever.HybridRetriever.from_notebook") as mock_from_nb:
         mock_retriever = MagicMock()
         mock_retriever.search.return_value = [
-            HybridSearchResult(content="The sky is blue.", source="facts.txt", score=0.95, page=None, rrf_score=0.95)
+            HybridSearchResult(
+                content="The sky is blue.",
+                source="facts.txt",
+                score=0.95,
+                page=None,
+                rrf_score=0.95,
+            )
         ]
         mock_from_nb.return_value = mock_retriever
         tool = KnowledgeSearchTool(data_dir=tmp_path, default_notebook="test_notebook")

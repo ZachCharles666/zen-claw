@@ -4,7 +4,6 @@ import subprocess
 import time
 
 import httpx
-
 from nano_claw.agent.tools.web import WebFetchTool
 
 
@@ -39,6 +38,7 @@ async def main():
     finally:
         proxy_proc.terminate()
         proxy_proc.wait()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

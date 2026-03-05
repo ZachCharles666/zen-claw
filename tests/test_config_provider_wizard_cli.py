@@ -71,13 +71,13 @@ def test_config_wizard_dry_run_keeps_file_unchanged(tmp_path: Path) -> None:
             "openrouter",
             "--api-key",
             "sk-or-new",
-                "--model",
-                "openrouter/deepseek/deepseek-chat",
-                "--api-base",
-                "https://openrouter.ai/api/v1",
-                "--dry-run",
-            ],
-        )
+            "--model",
+            "openrouter/deepseek/deepseek-chat",
+            "--api-base",
+            "https://openrouter.ai/api/v1",
+            "--dry-run",
+        ],
+    )
     assert out.exit_code == 0
     assert "Dry-run" in out.output
     assert cfg.read_text(encoding="utf-8") == before

@@ -21,7 +21,9 @@ class _Session:
         self.messages.append({"role": role, "content": content, **kwargs})
 
     def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-        recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+        recent = (
+            self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+        )
         return [{"role": m["role"], "content": m["content"]} for m in recent]
 
 
@@ -92,7 +94,11 @@ def test_agent_loop_plan_execute_end_to_end(tmp_path: Path, monkeypatch) -> None
     assert out == "done"
     assert provider.calls == 3
     # Second provider call is execute loop input and should include injected plan.
-    assert any("[Plan]" in str(m.get("content")) for m in provider.snapshots[1] if m.get("role") == "assistant")
+    assert any(
+        "[Plan]" in str(m.get("content"))
+        for m in provider.snapshots[1]
+        if m.get("role") == "assistant"
+    )
     saved = loop.sessions.get_or_create("cli:direct")
     assert [m["role"] for m in saved.messages] == ["user", "assistant"]
 
@@ -174,7 +180,9 @@ def test_agent_loop_applies_channel_policy_deny(tmp_path: Path, monkeypatch) -> 
     )
 
 
-def test_agent_loop_channel_policy_scope_is_cleared_between_channels(tmp_path: Path, monkeypatch) -> None:
+def test_agent_loop_channel_policy_scope_is_cleared_between_channels(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     provider = _QueueProvider(
         [
@@ -208,13 +216,17 @@ def test_agent_loop_channel_policy_scope_is_cleared_between_channels(tmp_path: P
         tool_policy_config=policy,
     )
 
-    out_discord = asyncio.run(loop.process_direct("list files", channel="discord", chat_id="direct"))
+    out_discord = asyncio.run(
+        loop.process_direct("list files", channel="discord", chat_id="direct")
+    )
     out_cli = asyncio.run(loop.process_direct("list files", channel="cli", chat_id="direct"))
     assert out_discord == "discord fallback"
     assert out_cli == "cli success"
 
 
-def test_agent_loop_cron_allowed_channels_blocks_disallowed_channel(tmp_path: Path, monkeypatch) -> None:
+def test_agent_loop_cron_allowed_channels_blocks_disallowed_channel(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     provider = _QueueProvider(
         [
@@ -257,7 +269,9 @@ def test_agent_loop_cron_allowed_channels_blocks_disallowed_channel(tmp_path: Pa
     )
 
 
-def test_agent_loop_system_message_applies_origin_channel_policy(tmp_path: Path, monkeypatch) -> None:
+def test_agent_loop_system_message_applies_origin_channel_policy(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     provider = _QueueProvider(
         [
@@ -301,7 +315,9 @@ def test_agent_loop_system_message_applies_origin_channel_policy(tmp_path: Path,
     assert provider.calls == 2
 
 
-def test_agent_loop_multimodal_media_refs_are_injected_and_filtered(tmp_path: Path, monkeypatch) -> None:
+def test_agent_loop_multimodal_media_refs_are_injected_and_filtered(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     provider = _QueueProvider([LLMResponse(content="media handled")])
     loop = AgentLoop(
@@ -323,6 +339,7 @@ def test_agent_loop_multimodal_media_refs_are_injected_and_filtered(tmp_path: Pa
         chat_id="u1",
         content="analyze attached media",
         media=["whatsapp://image/img_1", "https://example.com/blocked.mp4"],
+        metadata={"channel_role": "user"},
     )
     out = asyncio.run(loop._process_message(inbound))
     assert out is not None
@@ -335,11 +352,7 @@ def test_agent_loop_multimodal_media_refs_are_injected_and_filtered(tmp_path: Pa
     payload = user_msg["content"]
     assert isinstance(payload, list)
     refs_text = "\n".join(
-        str(p.get("text", ""))
-        for p in payload
-        if isinstance(p, dict) and p.get("type") == "text"
+        str(p.get("text", "")) for p in payload if isinstance(p, dict) and p.get("type") == "text"
     )
     assert "whatsapp://image/img_1" in refs_text
     assert "https://example.com/blocked.mp4" not in refs_text
-
-

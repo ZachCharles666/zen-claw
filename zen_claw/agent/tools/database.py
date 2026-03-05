@@ -28,7 +28,17 @@ def _resolve_db_path(workspace: Path, db_path: str) -> Path | None:
 
 def _is_write_sql(sql: str) -> bool:
     first = str(sql or "").strip().split(" ", 1)[0].lower()
-    return first in {"insert", "update", "delete", "create", "drop", "alter", "replace", "truncate", "pragma"}
+    return first in {
+        "insert",
+        "update",
+        "delete",
+        "create",
+        "drop",
+        "alter",
+        "replace",
+        "truncate",
+        "pragma",
+    }
 
 
 def _human_bytes(n: int) -> str:
@@ -55,14 +65,26 @@ class DatabaseQueryTool(Tool):
         path = _resolve_db_path(self._workspace, db_path)
         if path is None:
             return ToolResult.failure(
-                ToolErrorKind.PERMISSION, "db path must stay inside workspace", code="db_path_outside_workspace"
+                ToolErrorKind.PERMISSION,
+                "db path must stay inside workspace",
+                code="db_path_outside_workspace",
             )
         if str(path) == "__invalid_ext__":
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "db file must use .db/.sqlite extension", code="db_invalid_extension")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER,
+                "db file must use .db/.sqlite extension",
+                code="db_invalid_extension",
+            )
         if not path.exists():
-            return ToolResult.failure(ToolErrorKind.PARAMETER, f"database not found: {path}", code="db_not_found")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, f"database not found: {path}", code="db_not_found"
+            )
         if _is_write_sql(sql):
-            return ToolResult.failure(ToolErrorKind.PERMISSION, "write SQL denied in query tool", code="db_query_write_denied")
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "write SQL denied in query tool",
+                code="db_query_write_denied",
+            )
         try:
             # Open in SQLite read-only URI mode: enforces read-only at the engine level,
             # blocking CTE-wrapped writes (e.g. WITH x AS (DELETE ...) SELECT 1) that
@@ -76,8 +98,12 @@ class DatabaseQueryTool(Tool):
             finally:
                 conn.close()
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"query failed: {exc}", code="db_query_failed")
-        return ToolResult.success(json.dumps({"count": len(rows), "rows": rows}, ensure_ascii=False))
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"query failed: {exc}", code="db_query_failed"
+            )
+        return ToolResult.success(
+            json.dumps({"count": len(rows), "rows": rows}, ensure_ascii=False)
+        )
 
 
 class DatabaseExecuteTool(Tool):
@@ -96,12 +122,20 @@ class DatabaseExecuteTool(Tool):
         path = _resolve_db_path(self._workspace, db_path)
         if path is None:
             return ToolResult.failure(
-                ToolErrorKind.PERMISSION, "db path must stay inside workspace", code="db_path_outside_workspace"
+                ToolErrorKind.PERMISSION,
+                "db path must stay inside workspace",
+                code="db_path_outside_workspace",
             )
         if str(path) == "__invalid_ext__":
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "db file must use .db/.sqlite extension", code="db_invalid_extension")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER,
+                "db file must use .db/.sqlite extension",
+                code="db_invalid_extension",
+            )
         if not path.exists():
-            return ToolResult.failure(ToolErrorKind.PARAMETER, f"database not found: {path}", code="db_not_found")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, f"database not found: {path}", code="db_not_found"
+            )
         try:
             conn = sqlite3.connect(str(path))
             try:
@@ -114,8 +148,12 @@ class DatabaseExecuteTool(Tool):
             finally:
                 conn.close()
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"execute failed: {exc}", code="db_execute_failed")
-        return ToolResult.success(json.dumps({"rowcount": rowcount, "lastrowid": lastrowid}, ensure_ascii=False))
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"execute failed: {exc}", code="db_execute_failed"
+            )
+        return ToolResult.success(
+            json.dumps({"rowcount": rowcount, "lastrowid": lastrowid}, ensure_ascii=False)
+        )
 
 
 class DatabaseSchemaTool(Tool):
@@ -134,12 +172,20 @@ class DatabaseSchemaTool(Tool):
         path = _resolve_db_path(self._workspace, db_path)
         if path is None:
             return ToolResult.failure(
-                ToolErrorKind.PERMISSION, "db path must stay inside workspace", code="db_path_outside_workspace"
+                ToolErrorKind.PERMISSION,
+                "db path must stay inside workspace",
+                code="db_path_outside_workspace",
             )
         if str(path) == "__invalid_ext__":
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "db file must use .db/.sqlite extension", code="db_invalid_extension")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER,
+                "db file must use .db/.sqlite extension",
+                code="db_invalid_extension",
+            )
         if not path.exists():
-            return ToolResult.failure(ToolErrorKind.PARAMETER, f"database not found: {path}", code="db_not_found")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, f"database not found: {path}", code="db_not_found"
+            )
         try:
             conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             try:
@@ -148,7 +194,9 @@ class DatabaseSchemaTool(Tool):
                 if table:
                     tables = [str(table)]
                 else:
-                    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+                    cur.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                    )
                     tables = [str(r["name"]) for r in cur.fetchall()]
                 out: dict[str, list[dict[str, Any]]] = {}
                 for t in tables:
@@ -169,7 +217,9 @@ class DatabaseSchemaTool(Tool):
             finally:
                 conn.close()
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"schema inspect failed: {exc}", code="db_schema_failed")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"schema inspect failed: {exc}", code="db_schema_failed"
+            )
         return ToolResult.success(json.dumps(out, ensure_ascii=False))
 
 
@@ -190,7 +240,10 @@ class DatabaseMigrateTool(Tool):
     parameters = {
         "type": "object",
         "properties": {
-            "db_path": {"type": "string", "description": "Relative path to the SQLite DB inside the workspace."},
+            "db_path": {
+                "type": "string",
+                "description": "Relative path to the SQLite DB inside the workspace.",
+            },
             "migration_id": {
                 "type": "string",
                 "description": "Unique identifier (e.g. '001_create_posts'). Skipped if already applied.",
@@ -222,17 +275,29 @@ class DatabaseMigrateTool(Tool):
     ) -> ToolResult:
         path = _resolve_db_path(self._workspace, db_path)
         if path is None:
-            return ToolResult.failure(ToolErrorKind.PERMISSION, "db path must stay inside workspace", code="db_path_outside_workspace")
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "db path must stay inside workspace",
+                code="db_path_outside_workspace",
+            )
         if str(path) == "__invalid_ext__":
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "db file must use .db/.sqlite extension", code="db_invalid_extension")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER,
+                "db file must use .db/.sqlite extension",
+                code="db_invalid_extension",
+            )
 
         mid = str(migration_id or "").strip()
         if not mid:
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "migration_id is required", code="db_migration_id_required")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, "migration_id is required", code="db_migration_id_required"
+            )
 
         statements = [s.strip() for s in str(sql or "").split(";") if s.strip()]
         if not statements:
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "no SQL statements provided", code="db_migration_empty")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, "no SQL statements provided", code="db_migration_empty"
+            )
 
         if not allow_destructive:
             for stmt in statements:
@@ -247,6 +312,7 @@ class DatabaseMigrateTool(Tool):
 
         try:
             from datetime import UTC, datetime
+
             conn = sqlite3.connect(str(path))
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
@@ -255,11 +321,16 @@ class DatabaseMigrateTool(Tool):
             )
             conn.commit()
 
-            existing = conn.execute("SELECT id FROM _nano_migrations WHERE id = ?", (mid,)).fetchone()
+            existing = conn.execute(
+                "SELECT id FROM _nano_migrations WHERE id = ?", (mid,)
+            ).fetchone()
             if existing:
                 conn.close()
                 return ToolResult.success(
-                    json.dumps({"migration_id": mid, "status": "skipped", "reason": "already_applied"}, ensure_ascii=False)
+                    json.dumps(
+                        {"migration_id": mid, "status": "skipped", "reason": "already_applied"},
+                        ensure_ascii=False,
+                    )
                 )
 
             try:
@@ -274,11 +345,17 @@ class DatabaseMigrateTool(Tool):
             except Exception as exc:
                 conn.execute("ROLLBACK")
                 conn.close()
-                return ToolResult.failure(ToolErrorKind.RUNTIME, f"migration failed (rolled back): {exc}", code="db_migration_failed")
+                return ToolResult.failure(
+                    ToolErrorKind.RUNTIME,
+                    f"migration failed (rolled back): {exc}",
+                    code="db_migration_failed",
+                )
 
             conn.close()
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"database error: {exc}", code="db_migration_error")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"database error: {exc}", code="db_migration_error"
+            )
 
         return ToolResult.success(
             json.dumps(
@@ -302,7 +379,10 @@ class DatabaseInspectTool(Tool):
     parameters = {
         "type": "object",
         "properties": {
-            "db_path": {"type": "string", "description": "Relative path to the SQLite DB inside the workspace."},
+            "db_path": {
+                "type": "string",
+                "description": "Relative path to the SQLite DB inside the workspace.",
+            },
         },
         "required": ["db_path"],
     }
@@ -313,11 +393,21 @@ class DatabaseInspectTool(Tool):
     async def execute(self, db_path: str, **kwargs: Any) -> ToolResult:
         path = _resolve_db_path(self._workspace, db_path)
         if path is None:
-            return ToolResult.failure(ToolErrorKind.PERMISSION, "db path must stay inside workspace", code="db_path_outside_workspace")
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "db path must stay inside workspace",
+                code="db_path_outside_workspace",
+            )
         if str(path) == "__invalid_ext__":
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "db file must use .db/.sqlite extension", code="db_invalid_extension")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER,
+                "db file must use .db/.sqlite extension",
+                code="db_invalid_extension",
+            )
         if not path.exists():
-            return ToolResult.failure(ToolErrorKind.PARAMETER, f"database not found: {path}", code="db_not_found")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, f"database not found: {path}", code="db_not_found"
+            )
 
         try:
             conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
@@ -348,14 +438,17 @@ class DatabaseInspectTool(Tool):
                             "column_count": len(cols),
                             "columns": [str(c["name"]) for c in cols],
                             "indexes": [
-                                {"name": str(r["name"]), "unique": bool(r["unique"])} for r in indexes
+                                {"name": str(r["name"]), "unique": bool(r["unique"])}
+                                for r in indexes
                             ],
                         }
                     )
             finally:
                 conn.close()
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"inspect failed: {exc}", code="db_inspect_failed")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"inspect failed: {exc}", code="db_inspect_failed"
+            )
 
         return ToolResult.success(
             json.dumps(

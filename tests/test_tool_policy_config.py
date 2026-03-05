@@ -84,5 +84,3 @@ def test_tools_policy_merges_duplicate_channel_policy_keys() -> None:
     layer = parsed.tools.policy.channel_policies["discord"]
     assert layer.deny == ["exec", "spawn"]
     assert layer.allow == ["read_file", "web_search"]
-
-

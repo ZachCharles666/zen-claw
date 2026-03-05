@@ -111,9 +111,7 @@ async def test_chat_max_retries_one_means_single_attempt(monkeypatch):
     mock = AsyncMock(side_effect=_rate_limit_err())
     monkeypatch.setattr("zen_claw.providers.litellm_provider.acompletion", mock)
 
-    result = LiteLLMProvider(
-        api_key="test-key", max_retries=1, _retry_wait=wait_none()
-    )
+    result = LiteLLMProvider(api_key="test-key", max_retries=1, _retry_wait=wait_none())
     out = await result.chat([{"role": "user", "content": "hi"}])
 
     assert out.finish_reason == "error"
@@ -122,9 +120,7 @@ async def test_chat_max_retries_one_means_single_attempt(monkeypatch):
 
 async def test_chat_two_rate_limits_then_success(monkeypatch):
     """Two consecutive 429s then success → acompletion called 3 times."""
-    mock = AsyncMock(
-        side_effect=[_rate_limit_err(), _rate_limit_err(), _fake_response("done")]
-    )
+    mock = AsyncMock(side_effect=[_rate_limit_err(), _rate_limit_err(), _fake_response("done")])
     monkeypatch.setattr("zen_claw.providers.litellm_provider.acompletion", mock)
 
     result = await _provider(max_retries=5).chat([{"role": "user", "content": "hi"}])

@@ -28,6 +28,7 @@ async def test_cron_limit_enforced_per_session(tmp_path: Path) -> None:
     assert res3.error.code == "cron_limit_reached"
     assert "Max cron jobs (2) reached" in res3.error.message
 
+
 @pytest.mark.asyncio
 async def test_cron_limit_is_independent_per_session(tmp_path: Path) -> None:
     service = CronService(tmp_path / "cron_jobs.json")

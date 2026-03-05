@@ -45,7 +45,7 @@ SUBAGENT_HARD_DENY_TOOLS: set[str] = {
 class SubagentManager:
     """
     Manages background subagent execution.
-    
+
     Subagents are lightweight agent instances that run in the background
     to handle specific tasks. They share the same LLM provider but have
     isolated context and a focused system prompt.
@@ -70,6 +70,7 @@ class SubagentManager:
             WebFetchConfig,
             WebSearchConfig,
         )
+
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
@@ -80,6 +81,9 @@ class SubagentManager:
         self.exec_config = exec_config or ExecToolConfig()
         self.tool_policy_config = tool_policy_config or ToolPolicyConfig()
         self.restrict_to_workspace = restrict_to_workspace
+        from zen_claw.agent.skills import SkillsLoader
+
+        self.skills = SkillsLoader(workspace)
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def spawn(
@@ -89,16 +93,18 @@ class SubagentManager:
         origin_channel: str = "cli",
         origin_chat_id: str = "direct",
         parent_trace_id: str | None = None,
+        skill_pins: dict[str, str] | None = None,
     ) -> str:
         """
         Spawn a subagent to execute a task in the background.
-        
+
         Args:
             task: The task description for the subagent.
             label: Optional human-readable label for the task.
             origin_channel: The channel to announce results to.
             origin_chat_id: The chat ID to announce results to.
-        
+            skill_pins: Optional skill version pins.
+
         Returns:
             Status message indicating the subagent was started.
         """
@@ -113,7 +119,9 @@ class SubagentManager:
 
         # Create background task
         bg_task = asyncio.create_task(
-            self._run_subagent(task_id, task, display_label, origin, trace_id)
+            self._run_subagent(
+                task_id, task, display_label, origin, trace_id, skill_pins=skill_pins
+            )
         )
         self._running_tasks[task_id] = bg_task
 
@@ -133,6 +141,7 @@ class SubagentManager:
         label: str,
         origin: dict[str, str],
         trace_id: str,
+        skill_pins: dict[str, str] | None = None,
     ) -> None:
         """Execute the subagent task and announce the result."""
         logger.info(
@@ -155,16 +164,18 @@ class SubagentManager:
             tools.register(ReadFileTool(allowed_dir=allowed_dir))
             tools.register(WriteFileTool(allowed_dir=allowed_dir))
             tools.register(ListDirTool(allowed_dir=allowed_dir))
-            tools.register(ExecTool(
-                working_dir=str(self.workspace),
-                timeout=self.exec_config.timeout,
-                restrict_to_workspace=self.restrict_to_workspace,
-                mode=self.exec_config.mode,
-                sidecar_url=self.exec_config.sidecar_url,
-                sidecar_approval_token=self.exec_config.sidecar_approval_token.get_secret_value(),
-                sidecar_fallback_to_local=self.exec_config.sidecar_fallback_to_local,
-                sidecar_healthcheck=self.exec_config.sidecar_healthcheck,
-            ))
+            tools.register(
+                ExecTool(
+                    working_dir=str(self.workspace),
+                    timeout=self.exec_config.timeout,
+                    restrict_to_workspace=self.restrict_to_workspace,
+                    mode=self.exec_config.mode,
+                    sidecar_url=self.exec_config.sidecar_url,
+                    sidecar_approval_token=self.exec_config.sidecar_approval_token.get_secret_value(),
+                    sidecar_fallback_to_local=self.exec_config.sidecar_fallback_to_local,
+                    sidecar_healthcheck=self.exec_config.sidecar_healthcheck,
+                )
+            )
             tools.register(
                 WebSearchTool(
                     api_key=self.brave_api_key,
@@ -186,7 +197,7 @@ class SubagentManager:
             self._apply_subagent_policy(tools)
 
             # Build messages with subagent-specific prompt
-            system_prompt = self._build_subagent_prompt(task)
+            system_prompt = self._build_subagent_prompt(task, skill_pins=skill_pins)
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": task},
@@ -219,11 +230,13 @@ class SubagentManager:
                         }
                         for tc in response.tool_calls
                     ]
-                    messages.append({
-                        "role": "assistant",
-                        "content": response.content or "",
-                        "tool_calls": tool_call_dicts,
-                    })
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": response.content or "",
+                            "tool_calls": tool_call_dicts,
+                        }
+                    )
 
                     # Execute tools
                     for tool_call in response.tool_calls:
@@ -247,12 +260,14 @@ class SubagentManager:
                             if isinstance(result, ToolResult)
                             else str(result)
                         )
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_call.name,
-                            "content": tool_content,
-                        })
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_call.name,
+                                "content": tool_content,
+                            }
+                        )
                 else:
                     final_result = response.content
                     break
@@ -317,8 +332,14 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
             + TraceContext.event_text("subagent.announce", trace_id, task_id=task_id)
         )
 
-    def _build_subagent_prompt(self, task: str) -> str:
+    def _build_subagent_prompt(self, task: str, skill_pins: dict[str, str] | None = None) -> str:
         """Build a focused system prompt for the subagent."""
+        skills_info = ""
+        if skill_pins:
+            skills_info = "\n\n## Available Skills (Pinned Versions)\n"
+            for logical, physical in skill_pins.items():
+                skills_info += f"- {logical}: accessible at skills/{physical}/\n"
+
         return f"""# Subagent
 
 You are a subagent spawned by the main agent to complete a specific task.
@@ -330,7 +351,7 @@ You are a subagent spawned by the main agent to complete a specific task.
 1. Stay focused - complete only the assigned task, nothing else
 2. Your final response will be reported back to the main agent
 3. Do not initiate conversations or take on side tasks
-4. Be concise but informative in your findings
+4. Be concise but informative in your findings{skills_info}
 
 ## What You Can Do
 - Read and write files in the workspace
@@ -359,7 +380,10 @@ When you have completed the task, provide a clear summary of your findings or ac
             allow=self.tool_policy_config.subagent.allow,
             deny=self.tool_policy_config.subagent.deny,
         )
-        allow_sensitive = self.tool_policy_config.allow_subagent_sensitive_tools and self._allow_sensitive_override_enabled()
+        allow_sensitive = (
+            self.tool_policy_config.allow_subagent_sensitive_tools
+            and self._allow_sensitive_override_enabled()
+        )
         if not allow_sensitive:
             # Hard guardrail: these tools stay denied even if allowlisted by config.
             tools.set_policy_scope(
@@ -389,5 +413,3 @@ When you have completed the task, provide a clear summary of your findings or ac
             return False
         token = os.getenv("zen-claw_ALLOW_SUBAGENT_SENSITIVE_TOOLS", "").strip().lower()
         return token in {"1", "true", "yes", "on"}
-
-

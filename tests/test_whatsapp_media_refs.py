@@ -48,5 +48,3 @@ def test_handle_bridge_message_passes_media_refs() -> None:
     assert captured["chat_id"] == "12345@s.whatsapp.net"
     assert captured["content"] == "hello\n[media_ref: media://whatsapp/image/img_1]"
     assert captured["media"] == ["media://whatsapp/image/img_1"]
-
-

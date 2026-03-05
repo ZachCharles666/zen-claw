@@ -44,7 +44,9 @@ class FakeTools:
     def get_definitions(self) -> list[dict[str, Any]]:
         return []
 
-    async def execute(self, name: str, arguments: dict[str, Any], trace_id: str | None = None) -> ToolResult:
+    async def execute(
+        self, name: str, arguments: dict[str, Any], trace_id: str | None = None
+    ) -> ToolResult:
         self.calls += 1
         return self._result
 
@@ -125,13 +127,17 @@ def test_run_plan_phase_skips_when_planning_disabled(tmp_path: Path, monkeypatch
     assert provider.calls == 0
 
 
-def test_plan_then_execute_flow_keeps_plan_message_and_completes(tmp_path: Path, monkeypatch) -> None:
+def test_plan_then_execute_flow_keeps_plan_message_and_completes(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider(
         [
             LLMResponse(content="1) call tool"),
             LLMResponse(
                 content="tool step",
-                tool_calls=[ToolCallRequest(id="t1", name="dummy_search", arguments={"query": "x"})],
+                tool_calls=[
+                    ToolCallRequest(id="t1", name="dummy_search", arguments={"query": "x"})
+                ],
             ),
             LLMResponse(content="final"),
         ]
@@ -149,7 +155,9 @@ def test_plan_then_execute_flow_keeps_plan_message_and_completes(tmp_path: Path,
     assert any(m.get("role") == "tool" and "result for x" in str(m.get("content")) for m in out)
 
 
-def test_run_execute_reflect_loop_injects_reflection_prompt_on_error(tmp_path: Path, monkeypatch) -> None:
+def test_run_execute_reflect_loop_injects_reflection_prompt_on_error(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider(
         [
             LLMResponse(
@@ -224,7 +232,9 @@ def test_run_execute_reflect_loop_respects_reflection_budget(tmp_path: Path, mon
     assert len(reflected) == 1
 
 
-def test_run_execute_reflect_loop_reflects_on_policy_denied_tool(tmp_path: Path, monkeypatch) -> None:
+def test_run_execute_reflect_loop_reflects_on_policy_denied_tool(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider(
         [
             LLMResponse(
@@ -243,13 +253,12 @@ def test_run_execute_reflect_loop_reflects_on_policy_denied_tool(tmp_path: Path,
 
     final, out = asyncio.run(loop._run_execute_reflect_loop(messages, "trace-5"))
     assert final == "fallback response"
-    assert any(
-        m.get("role") == "user" and "kind=permission" in str(m.get("content"))
-        for m in out
-    )
+    assert any(m.get("role") == "user" and "kind=permission" in str(m.get("content")) for m in out)
 
 
-def test_run_execute_reflect_loop_parameter_error_then_recovery(tmp_path: Path, monkeypatch) -> None:
+def test_run_execute_reflect_loop_parameter_error_then_recovery(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider(
         [
             LLMResponse(
@@ -258,7 +267,9 @@ def test_run_execute_reflect_loop_parameter_error_then_recovery(tmp_path: Path, 
             ),
             LLMResponse(
                 content="second try fixed args",
-                tool_calls=[ToolCallRequest(id="t2", name="dummy_search", arguments={"query": "openclaw"})],
+                tool_calls=[
+                    ToolCallRequest(id="t2", name="dummy_search", arguments={"query": "openclaw"})
+                ],
             ),
             LLMResponse(content="done after correction"),
         ]
@@ -272,14 +283,10 @@ def test_run_execute_reflect_loop_parameter_error_then_recovery(tmp_path: Path, 
     final, out = asyncio.run(loop._run_execute_reflect_loop(messages, "trace-6"))
     assert final == "done after correction"
     # Ensure reflection for parameter error happened.
-    assert any(
-        m.get("role") == "user" and "kind=parameter" in str(m.get("content"))
-        for m in out
-    )
+    assert any(m.get("role") == "user" and "kind=parameter" in str(m.get("content")) for m in out)
     # Ensure second tool result exists (successful corrected call).
     assert any(
-        m.get("role") == "tool" and "result for openclaw" in str(m.get("content"))
-        for m in out
+        m.get("role") == "tool" and "result for openclaw" in str(m.get("content")) for m in out
     )
     learning_file = tmp_path / "memory" / "TOOLS_LEARNING.md"
     assert learning_file.exists()
@@ -288,7 +295,9 @@ def test_run_execute_reflect_loop_parameter_error_then_recovery(tmp_path: Path, 
     assert '"query": "openclaw"' in learning_text
 
 
-def test_run_execute_reflect_loop_honors_max_reflections_config(tmp_path: Path, monkeypatch) -> None:
+def test_run_execute_reflect_loop_honors_max_reflections_config(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider(
         [
             LLMResponse(
@@ -325,7 +334,9 @@ def test_run_execute_reflect_loop_honors_max_reflections_config(tmp_path: Path, 
     assert len(reflected) == 2
 
 
-def test_run_execute_reflect_loop_uses_vision_model_when_image_payload_present(tmp_path: Path, monkeypatch) -> None:
+def test_run_execute_reflect_loop_uses_vision_model_when_image_payload_present(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider([LLMResponse(content="vision final")])
     loop = _build_loop(tmp_path, provider, monkeypatch)
     loop.vision_model = "fake-vision-model"
@@ -345,7 +356,9 @@ def test_run_execute_reflect_loop_uses_vision_model_when_image_payload_present(t
     assert provider.models[-1] == "fake-vision-model"
 
 
-def test_run_execute_reflect_loop_keeps_default_model_without_image_payload(tmp_path: Path, monkeypatch) -> None:
+def test_run_execute_reflect_loop_keeps_default_model_without_image_payload(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider([LLMResponse(content="text final")])
     loop = _build_loop(tmp_path, provider, monkeypatch)
     loop.vision_model = "fake-vision-model"
@@ -359,7 +372,9 @@ def test_run_execute_reflect_loop_keeps_default_model_without_image_payload(tmp_
     assert provider.models[-1] == "fake-model"
 
 
-def test_run_execute_reflect_loop_uses_vision_model_for_media_image_references(tmp_path: Path, monkeypatch) -> None:
+def test_run_execute_reflect_loop_uses_vision_model_for_media_image_references(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider([LLMResponse(content="vision ref final")])
     loop = _build_loop(tmp_path, provider, monkeypatch)
     loop.vision_model = "fake-vision-model"
@@ -406,12 +421,16 @@ def test_record_tool_learning_dedupes_same_signature(tmp_path: Path, monkeypatch
     assert text.count("tool=dummy_search") == 1
 
 
-def test_auto_parameter_rewrite_applies_learned_mapping_before_execution(tmp_path: Path, monkeypatch) -> None:
+def test_auto_parameter_rewrite_applies_learned_mapping_before_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
     provider = FakeProvider(
         [
             LLMResponse(
                 content="call with old args",
-                tool_calls=[ToolCallRequest(id="t1", name="dummy_search", arguments={"q": "openclaw"})],
+                tool_calls=[
+                    ToolCallRequest(id="t1", name="dummy_search", arguments={"q": "openclaw"})
+                ],
             ),
             LLMResponse(content="done with rewrite"),
         ]
@@ -434,8 +453,5 @@ def test_auto_parameter_rewrite_applies_learned_mapping_before_execution(tmp_pat
     final, out = asyncio.run(loop._run_execute_reflect_loop(msgs, "trace-rewrite"))
     assert final == "done with rewrite"
     assert any(
-        m.get("role") == "tool" and "result for openclaw" in str(m.get("content"))
-        for m in out
+        m.get("role") == "tool" and "result for openclaw" in str(m.get("content")) for m in out
     )
-
-

@@ -90,5 +90,3 @@ async def test_cron_remove_requires_confirmation_when_enabled(tmp_path: Path) ->
 
     removed = await owner.execute(action="remove", job_id=job_id, confirm=True)
     assert removed.ok is True
-
-

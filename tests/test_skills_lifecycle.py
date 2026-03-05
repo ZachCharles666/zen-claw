@@ -570,7 +570,9 @@ def test_install_skill_from_zip_rejects_path_traversal(tmp_path: Path) -> None:
 
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("../escape/SKILL.md", "# bad\n")
-        zf.writestr("../escape/manifest.json", '{"name":"escape","version":"1.0.0","description":"x"}')
+        zf.writestr(
+            "../escape/manifest.json", '{"name":"escape","version":"1.0.0","description":"x"}'
+        )
 
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
     ok, msg = loader.install_skill_from_zip(zip_path)
@@ -660,5 +662,3 @@ def test_install_skill_dry_run_does_not_write(tmp_path: Path) -> None:
     assert ok is True
     assert "dry-run ok" in msg
     assert not (workspace / "skills" / "alpha").exists()
-
-

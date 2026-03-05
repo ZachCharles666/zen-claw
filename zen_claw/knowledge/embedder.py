@@ -7,8 +7,7 @@ from typing import Protocol
 
 
 class Embedder(Protocol):
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        ...
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
 @dataclass
@@ -21,6 +20,7 @@ class LocalEmbedder:
     def _get_model(self):
         if self._model is None:
             from sentence_transformers import SentenceTransformer
+
             self._model = SentenceTransformer(self.model_name)
         return self._model
 
@@ -42,6 +42,7 @@ class OpenAIEmbedder:
         if not texts:
             return []
         import httpx
+
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"

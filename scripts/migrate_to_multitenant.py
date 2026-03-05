@@ -29,7 +29,9 @@ def migrate(data_dir: Path, dry_run: bool = False) -> None:
         }
         if not dry_run:
             target.mkdir(parents=True, exist_ok=True)
-            tenant_file.write_text(json.dumps(tenant_data, indent=2, ensure_ascii=False), encoding="utf-8")
+            tenant_file.write_text(
+                json.dumps(tenant_data, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
         print(f"  Created {tenant_file}")
 
     moved: list[str] = []

@@ -121,5 +121,3 @@ async def test_web_search_proxy_healthcheck_fallback_to_local(monkeypatch) -> No
     result = await tool.execute("hello")
     assert result.ok is True
     assert result.content == "local-search-ok"
-
-

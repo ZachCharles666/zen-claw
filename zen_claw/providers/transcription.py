@@ -28,7 +28,7 @@ def is_supported_audio_file(file_path: str | Path) -> bool:
 class GroqTranscriptionProvider:
     """
     Voice transcription provider using Groq's Whisper API.
-    
+
     Groq offers extremely fast transcription with a generous free tier.
     """
 
@@ -39,10 +39,10 @@ class GroqTranscriptionProvider:
     async def transcribe(self, file_path: str | Path) -> str:
         """
         Transcribe an audio file using Groq.
-        
+
         Args:
             file_path: Path to the audio file.
-            
+
         Returns:
             Transcribed text.
         """
@@ -70,10 +70,7 @@ class GroqTranscriptionProvider:
                     }
 
                     response = await client.post(
-                        self.api_url,
-                        headers=headers,
-                        files=files,
-                        timeout=60.0
+                        self.api_url, headers=headers, files=files, timeout=60.0
                     )
 
                     response.raise_for_status()

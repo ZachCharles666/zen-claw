@@ -19,7 +19,7 @@ def test_web_fetch_proxy_config_camel_case() -> None:
                     "proxyUrl": "http://127.0.0.1:4499/v1/fetch",
                     "proxyHealthcheck": True,
                     "proxyFallbackToLocal": True,
-                }
+                },
             }
         }
     }
@@ -36,5 +36,3 @@ def test_web_fetch_proxy_config_camel_case() -> None:
     assert config.tools.web.fetch.proxy_fallback_to_local is True
     assert config.tools.effective_search().mode == "proxy"
     assert config.tools.effective_fetch().mode == "proxy"
-
-

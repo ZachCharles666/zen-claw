@@ -15,6 +15,7 @@ from zen_claw.agent.tools.database import (
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _create_db(workspace: Path, name: str = "test.db") -> Path:
     db = workspace / name
     conn = sqlite3.connect(str(db))
@@ -26,6 +27,7 @@ def _create_db(workspace: Path, name: str = "test.db") -> Path:
 
 
 # ── DatabaseMigrateTool tests ─────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_migrate_applies_new_migration(tmp_path: Path):
@@ -132,6 +134,7 @@ async def test_migrate_rejects_path_outside_workspace(tmp_path: Path):
 
 # ── DatabaseInspectTool tests ─────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_inspect_returns_table_info(tmp_path: Path):
     _create_db(tmp_path)
@@ -165,6 +168,7 @@ async def test_inspect_db_not_found(tmp_path: Path):
 
 
 # ── DatabaseQueryTool tests ───────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_query_basic_select(tmp_path: Path):
@@ -208,6 +212,7 @@ async def test_query_rejects_path_outside_workspace(tmp_path: Path):
 
 # ── DatabaseExecuteTool tests ─────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_execute_basic_insert(tmp_path: Path):
     _create_db(tmp_path)
@@ -242,6 +247,7 @@ async def test_execute_rejects_path_outside_workspace(tmp_path: Path):
 
 
 # ── DatabaseInspectTool tests (continued) ────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_inspect_includes_indexes(tmp_path: Path):

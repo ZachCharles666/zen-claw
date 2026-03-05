@@ -76,8 +76,9 @@ def test_backoff_wait_prevents_relaunch(tmp_path: Path) -> None:
 def test_healthy_external_process_not_restarted(tmp_path: Path) -> None:
     sup = _supervisor(tmp_path)
     spec = _dummy_spec()
-    with patch("zen_claw.runtime.sidecar_supervisor._check_health", return_value=True), patch(
-        "subprocess.Popen", side_effect=AssertionError("Popen should not be called")
+    with (
+        patch("zen_claw.runtime.sidecar_supervisor._check_health", return_value=True),
+        patch("subprocess.Popen", side_effect=AssertionError("Popen should not be called")),
     ):
         asyncio.run(sup._ensure_running(spec))
     state_file = tmp_path / "state" / f"{spec.name}.json"

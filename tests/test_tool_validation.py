@@ -89,5 +89,3 @@ async def test_registry_returns_validation_error() -> None:
     assert result.ok is False
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.PARAMETER
-
-

@@ -30,5 +30,3 @@ def test_execution_controller_reflection_prompt_contains_error_details() -> None
     prompt = ctrl.build_reflection_prompt(hints)
     assert "kind=permission" in prompt
     assert "blocked by policy" in prompt
-
-

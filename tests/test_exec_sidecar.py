@@ -30,7 +30,9 @@ class _FakeClient:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
 
-    async def post(self, url: str, headers: dict, json: dict | None = None, content: bytes | None = None) -> _FakeResponse:
+    async def post(
+        self, url: str, headers: dict, json: dict | None = None, content: bytes | None = None
+    ) -> _FakeResponse:
         if self._exc is not None:
             raise self._exc
         assert url

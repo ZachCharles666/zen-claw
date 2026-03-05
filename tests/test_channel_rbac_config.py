@@ -29,9 +29,7 @@ def test_channel_rbac_fields_default_empty() -> None:
 def test_channel_rate_limit_by_channel_accepts_camel_case() -> None:
     raw = {
         "channels": {
-            "outboundRateLimitByChannel": {
-                "Discord": {"perSec": 1.5, "burst": 2, "mode": "drop"}
-            }
+            "outboundRateLimitByChannel": {"Discord": {"perSec": 1.5, "burst": 2, "mode": "drop"}}
         }
     }
     cfg = Config.model_validate(convert_keys(raw))

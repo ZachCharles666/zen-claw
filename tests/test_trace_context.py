@@ -84,5 +84,3 @@ async def test_registry_execute_accepts_trace_id() -> None:
     result = await registry.execute("echo", {"value": "ok"}, trace_id="t-1")
     assert result.ok is True
     assert result.content == "ok"
-
-

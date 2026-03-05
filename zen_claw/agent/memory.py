@@ -13,7 +13,7 @@ from zen_claw.utils.helpers import ensure_dir, today_date
 class MemoryStore:
     """
     Memory system for the agent.
-    
+
     Supports daily notes (memory/YYYY-MM-DD.md) and long-term memory (MEMORY.md).
     """
 
@@ -72,10 +72,10 @@ class MemoryStore:
     def get_recent_memories(self, days: int = 7, max_chars: int | None = None) -> str:
         """
         Get memories from the last N days.
-        
+
         Args:
             days: Number of days to look back.
-        
+
         Returns:
             Combined memory content.
         """
@@ -85,7 +85,11 @@ class MemoryStore:
             return ""
 
         memories = []
-        budget = max_chars if isinstance(max_chars, int) and max_chars > 0 else self._default_recent_max_chars
+        budget = (
+            max_chars
+            if isinstance(max_chars, int) and max_chars > 0
+            else self._default_recent_max_chars
+        )
         today = datetime.now().date()
 
         for i in range(days):
@@ -115,12 +119,16 @@ class MemoryStore:
     def get_memory_context(self, include_recent_days: int = 3, max_chars: int | None = None) -> str:
         """
         Get memory context for the agent.
-        
+
         Returns:
             Formatted memory context including long-term and recent memories.
         """
         parts = []
-        budget = max_chars if isinstance(max_chars, int) and max_chars > 0 else self._default_context_max_chars
+        budget = (
+            max_chars
+            if isinstance(max_chars, int) and max_chars > 0
+            else self._default_context_max_chars
+        )
 
         # Long-term memory
         long_term = self.read_long_term()
@@ -252,7 +260,9 @@ class MemoryStore:
             return ""
         return "## Recent Memory\n" + "\n".join(f"- {s}" for s in selected)
 
-    def get_tool_learning_context(self, max_chars: int = 900, query: str | None = None, max_items: int = 8) -> str:
+    def get_tool_learning_context(
+        self, max_chars: int = 900, query: str | None = None, max_items: int = 8
+    ) -> str:
         """Return bounded tool-learning notes for prompt guidance."""
         text = self.read_tool_learning().strip()
         if not text:
@@ -291,7 +301,12 @@ class MemoryStore:
             line = raw.strip()
             if not line.startswith("- "):
                 continue
-            if " tool=" not in line or " sig=" not in line or " from=" not in line or " to=" not in line:
+            if (
+                " tool=" not in line
+                or " sig=" not in line
+                or " from=" not in line
+                or " to=" not in line
+            ):
                 continue
             try:
                 prefix, after_error = line.split(" error=", 1)
@@ -303,7 +318,11 @@ class MemoryStore:
                     to_part, trace_part = after_to, ""
                 tool = prefix.split(" tool=", 1)[1].split(" sig=", 1)[0].strip()
                 sig = prefix.split(" sig=", 1)[1].strip()
-                error_message = json.loads(error_part.strip()) if error_part.strip().startswith('"') else error_part.strip()
+                error_message = (
+                    json.loads(error_part.strip())
+                    if error_part.strip().startswith('"')
+                    else error_part.strip()
+                )
                 failed_args = json.loads(from_part.strip())
                 corrected_args = json.loads(to_part.strip())
                 if not isinstance(failed_args, dict) or not isinstance(corrected_args, dict):
@@ -350,7 +369,9 @@ class MemoryStore:
                 score += 1.0
         return score
 
-    def suggest_tool_arg_rewrite(self, tool_name: str, args: dict[str, Any], query: str | None = None) -> dict[str, Any] | None:
+    def suggest_tool_arg_rewrite(
+        self, tool_name: str, args: dict[str, Any], query: str | None = None
+    ) -> dict[str, Any] | None:
         """
         Suggest rewritten args from learned correction patterns.
 
@@ -403,5 +424,3 @@ class MemoryStore:
                 raise PermissionError(f"Refuse to write through symlink: {file_path}")
         except ValueError:
             raise PermissionError(f"Refuse to write outside memory dir: {file_path}") from None
-
-

@@ -47,7 +47,11 @@ class _Provider(LLMProvider):
 
     async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7):
         self.called_models.append(str(model or ""))
-        return LLMResponse(content="ok", tool_calls=[], usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12})
+        return LLMResponse(
+            content="ok",
+            tool_calls=[],
+            usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+        )
 
     def get_default_model(self) -> str:
         return "default-model"
@@ -98,4 +102,3 @@ def test_runtime_usage_verbose_and_clear(tmp_path: Path, monkeypatch) -> None:
     assert "已清空" in out_clear
     session = loop.sessions.get_or_create("cli:s1")
     assert session.messages == []
-

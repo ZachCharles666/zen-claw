@@ -53,7 +53,9 @@ class _SidecarSessionsBase(Tool):
         target = f"{base_path}/v1/sessions{suffix}"
         return parsed._replace(path=target, params="", query="", fragment="").geturl()
 
-    def _hmac_headers(self, *, trace_id: str, method: str, path: str, body_bytes: bytes) -> dict[str, str] | None:
+    def _hmac_headers(
+        self, *, trace_id: str, method: str, path: str, body_bytes: bytes
+    ) -> dict[str, str] | None:
         if self.sidecar_approval_mode != "hmac":
             return None
         if not trace_id or not self.sidecar_approval_token:
@@ -105,7 +107,10 @@ class SessionsSpawnTool(_SidecarSessionsBase):
                 "command": {"type": "string", "description": "Shell command to run in background"},
                 "working_dir": {"type": "string", "description": "Optional working directory"},
                 "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
-                "pty": {"type": "boolean", "description": "Request pseudo-terminal mode for interactive-ish commands"},
+                "pty": {
+                    "type": "boolean",
+                    "description": "Request pseudo-terminal mode for interactive-ish commands",
+                },
             },
             "required": ["command"],
         }
@@ -163,14 +168,22 @@ class SessionsSpawnTool(_SidecarSessionsBase):
                     json=None if self.sidecar_approval_mode == "hmac" else payload,
                 )
         except httpx.TimeoutException as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout"
+            )
         except httpx.RequestError as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable"
+            )
 
         try:
             data = resp.json()
         except Exception:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "Sidecar returned invalid JSON", code="sessions_invalid_response")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                "Sidecar returned invalid JSON",
+                code="sessions_invalid_response",
+            )
 
         if resp.status_code >= 400:
             return ToolResult.failure(
@@ -236,14 +249,22 @@ class SessionsListTool(_SidecarSessionsBase):
                     )
                 resp = await client.get(self._sessions_url(), headers=headers)
         except httpx.TimeoutException as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout"
+            )
         except httpx.RequestError as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable"
+            )
 
         try:
             data = resp.json()
         except Exception:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "Sidecar returned invalid JSON", code="sessions_invalid_response")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                "Sidecar returned invalid JSON",
+                code="sessions_invalid_response",
+            )
 
         if resp.status_code >= 400:
             return ToolResult.failure(
@@ -255,7 +276,9 @@ class SessionsListTool(_SidecarSessionsBase):
 
         sessions = data.get("sessions")
         if not isinstance(sessions, list):
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "Invalid sessions payload", code="sessions_invalid_payload")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, "Invalid sessions payload", code="sessions_invalid_payload"
+            )
         if not sessions:
             return ToolResult.success("No sessions.", sessions=[])
 
@@ -325,14 +348,22 @@ class SessionsKillTool(_SidecarSessionsBase):
                     json=None if self.sidecar_approval_mode == "hmac" else {},
                 )
         except httpx.TimeoutException as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout"
+            )
         except httpx.RequestError as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable"
+            )
 
         try:
             data = resp.json()
         except Exception:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "Sidecar returned invalid JSON", code="sessions_invalid_response")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                "Sidecar returned invalid JSON",
+                code="sessions_invalid_response",
+            )
 
         if resp.status_code >= 400:
             return ToolResult.failure(
@@ -344,8 +375,12 @@ class SessionsKillTool(_SidecarSessionsBase):
 
         killed = bool(data.get("killed"))
         if killed:
-            return ToolResult.success(f"Killed session {session_id}", session_id=session_id, sidecar=True)
-        return ToolResult.success(f"Session {session_id} is not running", session_id=session_id, sidecar=True)
+            return ToolResult.success(
+                f"Killed session {session_id}", session_id=session_id, sidecar=True
+            )
+        return ToolResult.success(
+            f"Session {session_id} is not running", session_id=session_id, sidecar=True
+        )
 
 
 class SessionsWriteTool(_SidecarSessionsBase):
@@ -407,14 +442,22 @@ class SessionsWriteTool(_SidecarSessionsBase):
                     json=None if self.sidecar_approval_mode == "hmac" else payload,
                 )
         except httpx.TimeoutException as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout"
+            )
         except httpx.RequestError as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable"
+            )
 
         try:
             data = resp.json()
         except Exception:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "Sidecar returned invalid JSON", code="sessions_invalid_response")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                "Sidecar returned invalid JSON",
+                code="sessions_invalid_response",
+            )
 
         if resp.status_code >= 400:
             return ToolResult.failure(
@@ -450,8 +493,17 @@ class SessionsReadTool(_SidecarSessionsBase):
             "type": "object",
             "properties": {
                 "session_id": {"type": "string", "description": "Session ID to read"},
-                "cursor": {"type": "integer", "minimum": 0, "description": "Read cursor offset (default: 0)"},
-                "max_bytes": {"type": "integer", "minimum": 1, "maximum": 8192, "description": "Maximum bytes to read"},
+                "cursor": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Read cursor offset (default: 0)",
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8192,
+                    "description": "Maximum bytes to read",
+                },
             },
             "required": ["session_id"],
         }
@@ -498,16 +550,28 @@ class SessionsReadTool(_SidecarSessionsBase):
                         )
                         or {}
                     )
-                resp = await client.get(self._sessions_url(f"/{session_id}/read"), headers=headers, params=params or None)
+                resp = await client.get(
+                    self._sessions_url(f"/{session_id}/read"),
+                    headers=headers,
+                    params=params or None,
+                )
         except httpx.TimeoutException as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout"
+            )
         except httpx.RequestError as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable"
+            )
 
         try:
             data = resp.json()
         except Exception:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "Sidecar returned invalid JSON", code="sessions_invalid_response")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                "Sidecar returned invalid JSON",
+                code="sessions_invalid_response",
+            )
 
         if resp.status_code >= 400:
             return ToolResult.failure(
@@ -566,7 +630,9 @@ class SessionsSignalTool(_SidecarSessionsBase):
             "required": ["session_id"],
         }
 
-    async def execute(self, session_id: str, signal: str | None = None, **kwargs: Any) -> ToolResult:
+    async def execute(
+        self, session_id: str, signal: str | None = None, **kwargs: Any
+    ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
         payload: dict[str, Any] = {"signal": str(signal or "interrupt")}
         body_bytes = hmac_body_json(payload)
@@ -605,14 +671,22 @@ class SessionsSignalTool(_SidecarSessionsBase):
                     json=None if self.sidecar_approval_mode == "hmac" else payload,
                 )
         except httpx.TimeoutException as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout"
+            )
         except httpx.RequestError as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable"
+            )
 
         try:
             data = resp.json()
         except Exception:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "Sidecar returned invalid JSON", code="sessions_invalid_response")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                "Sidecar returned invalid JSON",
+                code="sessions_invalid_response",
+            )
 
         if resp.status_code >= 400:
             return ToolResult.failure(
@@ -704,14 +778,22 @@ class SessionsResizeTool(_SidecarSessionsBase):
                     json=None if self.sidecar_approval_mode == "hmac" else payload,
                 )
         except httpx.TimeoutException as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request timed out: {e}", code="sessions_timeout"
+            )
         except httpx.RequestError as e:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, f"Sidecar request failed: {e}", code="sessions_unreachable"
+            )
 
         try:
             data = resp.json()
         except Exception:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "Sidecar returned invalid JSON", code="sessions_invalid_response")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                "Sidecar returned invalid JSON",
+                code="sessions_invalid_response",
+            )
 
         if resp.status_code >= 400:
             return ToolResult.failure(
@@ -732,5 +814,3 @@ class SessionsResizeTool(_SidecarSessionsBase):
             applied=applied,
             sidecar=True,
         )
-
-

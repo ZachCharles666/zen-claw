@@ -44,21 +44,34 @@ class KnowledgeSearchTool(Tool):
         self._manager = NotebookManager(self._data_dir)
         self._default_notebook = default_notebook
 
-    async def execute(self, query: str, notebook_id: str = "", top_k: int = 5, **kwargs: Any) -> ToolResult:
+    async def execute(
+        self, query: str, notebook_id: str = "", top_k: int = 5, **kwargs: Any
+    ) -> ToolResult:
         nb_name = notebook_id or self._default_notebook
         nb = self._manager.get(nb_name)
         if not nb:
-            return ToolResult.failure(ToolErrorKind.PARAMETER, f"notebook not found: {nb_name}", code="notebook_not_found")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, f"notebook not found: {nb_name}", code="notebook_not_found"
+            )
         try:
             retriever = HybridRetriever.from_notebook(nb, self._data_dir)
             results = retriever.search(query=query, top_k=top_k)
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"knowledge search failed: {exc}", code="knowledge_search_failed")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                f"knowledge search failed: {exc}",
+                code="knowledge_search_failed",
+            )
         payload = {
             "notebook": nb.name,
             "query": query,
             "results": [
-                {"content": r.content, "source": r.source, "score": float(r.rrf_score or r.score), "page": r.page}
+                {
+                    "content": r.content,
+                    "source": r.source,
+                    "score": float(r.rrf_score or r.score),
+                    "page": r.page,
+                }
                 for r in results
             ],
         }
@@ -86,11 +99,20 @@ class KnowledgeAddTool(Tool):
             retriever = HybridRetriever.from_notebook(nb, self._data_dir)
             chunks = await retriever.add_documents(docs)
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"knowledge ingest failed: {exc}", code="knowledge_add_failed")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                f"knowledge ingest failed: {exc}",
+                code="knowledge_add_failed",
+            )
         self._manager.bump_doc_count(nb.id, max(1, len(docs)))
         return ToolResult.success(
             json.dumps(
-                {"notebook": nb.name, "source": source, "documents": len(docs), "chunks_added": int(chunks)},
+                {
+                    "notebook": nb.name,
+                    "source": source,
+                    "documents": len(docs),
+                    "chunks_added": int(chunks),
+                },
                 ensure_ascii=False,
             )
         )

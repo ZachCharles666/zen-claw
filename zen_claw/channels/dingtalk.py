@@ -23,6 +23,7 @@ from zen_claw.providers.transcription import GroqTranscriptionProvider, is_suppo
 
 try:
     from dingtalk_stream import CallbackMessage, DingTalkStreamClient
+
     DINGTALK_STREAM_AVAILABLE = True
 except ImportError:
     DINGTALK_STREAM_AVAILABLE = False
@@ -31,7 +32,9 @@ except ImportError:
 class DingTalkChannel(BaseChannel):
     name = "dingtalk"
 
-    def __init__(self, config: DingTalkConfig, bus: MessageBus, media_root: Path | None = None) -> None:
+    def __init__(
+        self, config: DingTalkConfig, bus: MessageBus, media_root: Path | None = None
+    ) -> None:
         super().__init__(config, bus, media_root=media_root)
         self.config = config
         self.groq_api_key = os.environ.get("GROQ_API_KEY", "")
@@ -48,7 +51,9 @@ class DingTalkChannel(BaseChannel):
             # Prefer Stream mode if AppKey and AppSecret are provided
             logger.info("Starting DingTalk in Stream (WebSocket) mode")
             self._client = DingTalkStreamClient(self.config.app_key, self.config.app_secret)
-            self._client.register_callback_listener('/v1.0/im/bot/messages/get', self._on_stream_message)
+            self._client.register_callback_listener(
+                "/v1.0/im/bot/messages/get", self._on_stream_message
+            )
 
             # Start stream client in background (it uses its own thread/loop)
             def _start_client():
@@ -63,9 +68,7 @@ class DingTalkChannel(BaseChannel):
             def _on_executor_done(fut: asyncio.Future) -> None:
                 exc = fut.exception()
                 if exc:
-                    logger.error(
-                        "DingTalk stream thread raised unhandled exception: {}", exc
-                    )
+                    logger.error("DingTalk stream thread raised unhandled exception: {}", exc)
                 else:
                     logger.warning("DingTalk stream client thread exited")
                 self._running = False
@@ -74,9 +77,13 @@ class DingTalkChannel(BaseChannel):
             self._executor_future.add_done_callback(_on_executor_done)
         else:
             if not self.config.webhook_url:
-                logger.warning("DingTalk: Neither Stream (AppKey/Secret) nor Webhook URL configured, or dingtalk-stream not installed. Channel will run but not receive events directly unless webhook is routed by API Gateway.")
+                logger.warning(
+                    "DingTalk: Neither Stream (AppKey/Secret) nor Webhook URL configured, or dingtalk-stream not installed. Channel will run but not receive events directly unless webhook is routed by API Gateway."
+                )
             else:
-                logger.info(f"Starting DingTalk in Webhook mode, webhook URL: {self.config.webhook_url[:20]}...")
+                logger.info(
+                    f"Starting DingTalk in Webhook mode, webhook URL: {self.config.webhook_url[:20]}..."
+                )
 
         await self._stop_event.wait()
         self._running = False
@@ -87,7 +94,9 @@ class DingTalkChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         if not self.config.webhook_url:
-            logger.warning("DingTalk: webhook_url is required to send messages, even in Stream mode.")
+            logger.warning(
+                "DingTalk: webhook_url is required to send messages, even in Stream mode."
+            )
             return
 
         content_str = msg.content or ""
@@ -115,11 +124,15 @@ class DingTalkChannel(BaseChannel):
     @staticmethod
     def compute_outgoing_sign(secret: str, timestamp_ms: int) -> str:
         plain = f"{timestamp_ms}\n{secret}"
-        sig = hmac.new(secret.encode("utf-8"), plain.encode("utf-8"), digestmod=hashlib.sha256).digest()
+        sig = hmac.new(
+            secret.encode("utf-8"), plain.encode("utf-8"), digestmod=hashlib.sha256
+        ).digest()
         return urllib.parse.quote_plus(base64.b64encode(sig).decode("utf-8"))
 
     @staticmethod
-    def verify_incoming_sign(timestamp_str: str, sign_header: str, secret: str, max_age_ms: int = 3600_000) -> bool:
+    def verify_incoming_sign(
+        timestamp_str: str, sign_header: str, secret: str, max_age_ms: int = 3600_000
+    ) -> bool:
         if not secret:
             return True
         try:
@@ -130,7 +143,9 @@ class DingTalkChannel(BaseChannel):
             return False
         plain = f"{ts_ms}\n{secret}"
         expected = base64.b64encode(
-            hmac.new(secret.encode("utf-8"), plain.encode("utf-8"), digestmod=hashlib.sha256).digest()
+            hmac.new(
+                secret.encode("utf-8"), plain.encode("utf-8"), digestmod=hashlib.sha256
+            ).digest()
         ).decode("utf-8")
         return hmac.compare_digest(sign_header, expected)
 
@@ -148,7 +163,11 @@ class DingTalkChannel(BaseChannel):
             content = str((body.get("text") or {}).get("content", "")).strip()
         elif msg_type == "picture":
             content = "[image]"
-            pic_url = body.get("content", {}).get("downloadCode") or body.get("content", {}).get("picUrl") or ""
+            pic_url = (
+                body.get("content", {}).get("downloadCode")
+                or body.get("content", {}).get("picUrl")
+                or ""
+            )
             if pic_url:
                 content += f"\n[media_ref: {pic_url}]"
         elif msg_type == "audio":
@@ -164,7 +183,12 @@ class DingTalkChannel(BaseChannel):
             content = f"[{msg_type} message]"
 
         if content:
-            await self._handle_message(sender_id=sender, chat_id=chat_id, content=content, metadata={"dingtalk_raw": body, "mode": "webhook"})
+            await self._handle_message(
+                sender_id=sender,
+                chat_id=chat_id,
+                content=content,
+                metadata={"dingtalk_raw": body, "mode": "webhook"},
+            )
         return {"success": True}
 
     async def _post_to_dingtalk(self, payload: dict[str, Any]) -> None:

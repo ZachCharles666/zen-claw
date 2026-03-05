@@ -96,4 +96,3 @@ class CredentialGetTool(Tool):
                 code="credential_not_found",
             )
         return ToolResult.success(value)
-

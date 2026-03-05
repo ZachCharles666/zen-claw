@@ -29,8 +29,7 @@ def _make_test_db(tmp_path: Path) -> Path:
 def _sleep_command(tmp_path: Path, seconds: int = 15) -> str:
     script = tmp_path / "sleep_service.py"
     script.write_text(
-        f"import time\n"
-        f"time.sleep({seconds})\n",
+        f"import time\ntime.sleep({seconds})\n",
         encoding="utf-8",
     )
     return f"{sys.executable} {script}"

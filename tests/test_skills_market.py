@@ -63,7 +63,9 @@ def local_registry(tmp_path: Path):
     catalog_path = tmp_path / "index.json"
     catalog_path.write_text(json.dumps(SAMPLE_CATALOG), encoding="utf-8")
     cache_path = tmp_path / "registry_cache.json"
-    registry = SkillsRegistry(registry_url=f"file://{catalog_path}", cache_path=cache_path, cache_ttl_sec=3600)
+    registry = SkillsRegistry(
+        registry_url=f"file://{catalog_path}", cache_path=cache_path, cache_ttl_sec=3600
+    )
     return registry, catalog_path
 
 
@@ -121,7 +123,9 @@ def test_registry_caches_to_disk(local_registry, tmp_path: Path):
     registry.fetch()
     assert cache.exists()
     cached = json.loads(cache.read_text(encoding="utf-8"))
-    assert "skills" in cached and len(cached["skills"]) == 3
+    assert "hmac_sig" in cached and "payload" in cached
+    payload = json.loads(cached["payload"])
+    assert "skills" in payload and len(payload["skills"]) == 3
 
 
 def test_registry_uses_cache_on_second_call(local_registry):
@@ -161,7 +165,9 @@ def test_registry_invalid_catalog_skips_bad_entries(tmp_path: Path):
     }
     path = tmp_path / "index.json"
     path.write_text(json.dumps(catalog), encoding="utf-8")
-    registry = SkillsRegistry(registry_url=f"file://{path}", cache_path=tmp_path / "cache.json", cache_ttl_sec=0)
+    registry = SkillsRegistry(
+        registry_url=f"file://{path}", cache_path=tmp_path / "cache.json", cache_ttl_sec=0
+    )
     rows = registry.fetch()
     assert len(rows) == 1 and rows[0].name == "good-skill"
 
@@ -202,7 +208,9 @@ def _add_integrity(skill_dir: Path) -> None:
     for f in sorted(skill_dir.rglob("*")):
         if f.is_file() and f.name != "integrity.json":
             files[str(f.relative_to(skill_dir))] = hashlib.sha256(f.read_bytes()).hexdigest()
-    (skill_dir / "integrity.json").write_text(json.dumps({"files": files}, indent=2), encoding="utf-8")
+    (skill_dir / "integrity.json").write_text(
+        json.dumps({"files": files}, indent=2), encoding="utf-8"
+    )
 
 
 def test_publisher_skill_not_found(tmp_path: Path):
@@ -251,7 +259,9 @@ def test_publisher_success_without_integrity(tmp_path: Path):
 def test_publisher_integrity_check_fails_when_file_tampered(tmp_path: Path):
     skill_dir = _make_skill_dir(tmp_path, "tampered-skill")
     _add_integrity(skill_dir)
-    (skill_dir / "tools" / "main.py").write_text("def get_tools(): return ['x']\n", encoding="utf-8")
+    (skill_dir / "tools" / "main.py").write_text(
+        "def get_tools(): return ['x']\n", encoding="utf-8"
+    )
     pub = SkillsPublisher(workspace=tmp_path, require_integrity=True)
     result = pub.publish("tampered-skill")
     assert result.ok is False

@@ -75,22 +75,32 @@ class SocialPlatformPostTool(Tool):
         except httpx.TimeoutException as exc:
             return ToolResult.failure(ToolErrorKind.RETRYABLE, str(exc), code="social_post_timeout")
         except httpx.RequestError as exc:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, str(exc), code="social_post_proxy_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, str(exc), code="social_post_proxy_unreachable"
+            )
         try:
             data = resp.json()
         except Exception:
             return ToolResult.failure(
-                ToolErrorKind.RUNTIME, "Proxy returned non-JSON response", code="social_post_invalid_response"
+                ToolErrorKind.RUNTIME,
+                "Proxy returned non-JSON response",
+                code="social_post_invalid_response",
             )
         if resp.status_code >= 400 or not bool(data.get("ok", True)):
             msg = str(data.get("error") or f"HTTP {resp.status_code}")
             code = str(data.get("error_code") or "social_post_failed")
-            kind = ToolErrorKind.PERMISSION if resp.status_code in {401, 403} else ToolErrorKind.RUNTIME
+            kind = (
+                ToolErrorKind.PERMISSION
+                if resp.status_code in {401, 403}
+                else ToolErrorKind.RUNTIME
+            )
             return ToolResult.failure(kind, msg, code=code)
         body = data.get("body") or ""
         try:
             parsed = json.loads(body) if isinstance(body, str) else body
-            return ToolResult.success(json.dumps(parsed, ensure_ascii=False), http_status=data.get("status"))
+            return ToolResult.success(
+                json.dumps(parsed, ensure_ascii=False), http_status=data.get("status")
+            )
         except Exception:
             return ToolResult.success(str(body), http_status=data.get("status"))
 
@@ -105,7 +115,10 @@ class SocialPlatformLikeTool(Tool):
         "properties": {
             "base_url": {"type": "string", "description": "Base URL of the social platform API."},
             "post_id": {"type": "string", "description": "ID of the post to upvote."},
-            "auth_header": {"type": "string", "description": "Authorization header value (e.g. 'Bearer <token>')."},
+            "auth_header": {
+                "type": "string",
+                "description": "Authorization header value (e.g. 'Bearer <token>').",
+            },
         },
         "required": ["base_url", "post_id", "auth_header"],
     }
@@ -127,7 +140,9 @@ class SocialPlatformLikeTool(Tool):
 
         pid = str(post_id or "").strip()
         if not pid:
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "post_id is required", code="missing_post_id")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, "post_id is required", code="missing_post_id"
+            )
 
         target_url = str(base_url).rstrip("/") + f"/api/posts/{pid}/upvote"
         trace_id = str(kwargs.get("trace_id") or "")
@@ -146,24 +161,36 @@ class SocialPlatformLikeTool(Tool):
         except httpx.TimeoutException as exc:
             return ToolResult.failure(ToolErrorKind.RETRYABLE, str(exc), code="social_like_timeout")
         except httpx.RequestError as exc:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, str(exc), code="social_like_proxy_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, str(exc), code="social_like_proxy_unreachable"
+            )
         try:
             data = resp.json()
         except Exception:
             return ToolResult.failure(
-                ToolErrorKind.RUNTIME, "Proxy returned non-JSON response", code="social_like_invalid_response"
+                ToolErrorKind.RUNTIME,
+                "Proxy returned non-JSON response",
+                code="social_like_invalid_response",
             )
         if resp.status_code >= 400 or not bool(data.get("ok", True)):
             msg = str(data.get("error") or f"HTTP {resp.status_code}")
             code = str(data.get("error_code") or "social_like_failed")
-            kind = ToolErrorKind.PERMISSION if resp.status_code in {401, 403} else ToolErrorKind.RUNTIME
+            kind = (
+                ToolErrorKind.PERMISSION
+                if resp.status_code in {401, 403}
+                else ToolErrorKind.RUNTIME
+            )
             return ToolResult.failure(kind, msg, code=code)
         body = data.get("body") or "{}"
         try:
             parsed = json.loads(body) if isinstance(body, str) else body
-            return ToolResult.success(json.dumps(parsed, ensure_ascii=False), http_status=data.get("status"))
+            return ToolResult.success(
+                json.dumps(parsed, ensure_ascii=False), http_status=data.get("status")
+            )
         except Exception:
             return ToolResult.success(str(body), http_status=data.get("status"))
+
+
 class SocialPlatformGetTool(Tool):
     name = "social_platform_get"
     description = "GET from social platform REST API endpoint (via net-proxy)."
@@ -214,22 +241,31 @@ class SocialPlatformGetTool(Tool):
         except httpx.TimeoutException as exc:
             return ToolResult.failure(ToolErrorKind.RETRYABLE, str(exc), code="social_get_timeout")
         except httpx.RequestError as exc:
-            return ToolResult.failure(ToolErrorKind.RETRYABLE, str(exc), code="social_get_proxy_unreachable")
+            return ToolResult.failure(
+                ToolErrorKind.RETRYABLE, str(exc), code="social_get_proxy_unreachable"
+            )
         try:
             data = resp.json()
         except Exception:
             return ToolResult.failure(
-                ToolErrorKind.RUNTIME, "Proxy returned non-JSON response", code="social_get_invalid_response"
+                ToolErrorKind.RUNTIME,
+                "Proxy returned non-JSON response",
+                code="social_get_invalid_response",
             )
         if resp.status_code >= 400 or not bool(data.get("ok", True)):
             msg = str(data.get("error") or f"HTTP {resp.status_code}")
             code = str(data.get("error_code") or "social_get_failed")
-            kind = ToolErrorKind.PERMISSION if resp.status_code in {401, 403} else ToolErrorKind.RUNTIME
+            kind = (
+                ToolErrorKind.PERMISSION
+                if resp.status_code in {401, 403}
+                else ToolErrorKind.RUNTIME
+            )
             return ToolResult.failure(kind, msg, code=code)
         body = data.get("body") or ""
         try:
             parsed = json.loads(body) if isinstance(body, str) else body
-            return ToolResult.success(json.dumps(parsed, ensure_ascii=False), http_status=data.get("status"))
+            return ToolResult.success(
+                json.dumps(parsed, ensure_ascii=False), http_status=data.get("status")
+            )
         except Exception:
             return ToolResult.success(str(body), http_status=data.get("status"))
-

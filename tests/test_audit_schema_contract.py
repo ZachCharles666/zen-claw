@@ -30,5 +30,3 @@ def test_audit_event_name_convention() -> None:
     event = "tool.policy.denied"
     assert event.count(".") >= 2
     assert event == event.lower()
-
-

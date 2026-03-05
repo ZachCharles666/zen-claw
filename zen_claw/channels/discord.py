@@ -24,7 +24,9 @@ class DiscordChannel(BaseChannel):
 
     name = "discord"
 
-    def __init__(self, config: DiscordConfig, bus: MessageBus, media_root=None, groq_api_key: str = ""):
+    def __init__(
+        self, config: DiscordConfig, bus: MessageBus, media_root=None, groq_api_key: str = ""
+    ):
         super().__init__(config, bus, media_root=media_root)
         self.config: DiscordConfig = config
         self.groq_api_key = groq_api_key
@@ -215,13 +217,17 @@ class DiscordChannel(BaseChannel):
                 continue
             try:
                 media_dir.mkdir(parents=True, exist_ok=True)
-                file_path = media_dir / f"{attachment.get('id', 'file')}_{filename.replace('/', '_')}"
+                file_path = (
+                    media_dir / f"{attachment.get('id', 'file')}_{filename.replace('/', '_')}"
+                )
                 resp = await self._http.get(url)
                 resp.raise_for_status()
                 file_path.write_bytes(resp.content)
                 media_paths.append(str(file_path))
                 ref_type = self._ref_type_from_content_type(content_type)
-                media_ref = self._build_media_uri("discord", ref_type, str(attachment.get("id", "file")))
+                media_ref = self._build_media_uri(
+                    "discord", ref_type, str(attachment.get("id", "file"))
+                )
                 media_refs.append(media_ref)
                 content_parts.append(f"[media_ref: {media_ref}]")
                 content_parts.append(f"[attachment: {file_path}]")
@@ -297,5 +303,3 @@ class DiscordChannel(BaseChannel):
         if ctype.startswith("video/"):
             return "video"
         return "file"
-
-

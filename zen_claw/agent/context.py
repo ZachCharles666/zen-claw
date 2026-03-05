@@ -17,11 +17,21 @@ from zen_claw.agent.tools.result import ToolResult
 class ContextBuilder:
     """
     Builds the context (system prompt + messages) for the agent.
-    
+
     Assembles bootstrap files, memory, skills, and conversation history
     into a coherent prompt for the LLM.
     """
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md", ".agentrules", "ARCHITECTURE.md"]
+
+    BOOTSTRAP_FILES = [
+        "AGENTS.md",
+        "SOUL.md",
+        "USER.md",
+        "TOOLS.md",
+        "IDENTITY.md",
+        ".agentrules",
+        "ARCHITECTURE.md",
+    ]
+
     def __init__(self, workspace: Path, memory_recall_mode: str = "sqlite", max_tokens: int = 8192):
         self.workspace = workspace
         self.memory_recall_mode = memory_recall_mode
@@ -32,6 +42,7 @@ class ContextBuilder:
         elif memory_recall_mode == "sqlite":
             try:
                 from zen_claw.agent.memory_sqlite import SqliteVectorRecallStrategy
+
                 recall_strategy = SqliteVectorRecallStrategy(workspace / "memory" / "memory.db")
             except Exception as exc:
                 logger.debug("sqlite memory recall unavailable, fallback to keyword: {}", exc)
@@ -40,6 +51,7 @@ class ContextBuilder:
             try:
                 from zen_claw.agent.memory_recall import RagRecallStrategy
                 from zen_claw.config.loader import get_data_dir
+
                 recall_strategy = RagRecallStrategy(data_dir=get_data_dir(), notebook_id="default")
             except Exception:
                 recall_strategy = KeywordRecallStrategy()
@@ -55,13 +67,19 @@ class ContextBuilder:
             (Path.home() / ".zen-claw" / "media").resolve(),
         ]
 
-    def build_system_prompt(self, skill_names: list[str] | None = None, memory_query: str | None = None) -> str:
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        memory_query: str | None = None,
+        pins: dict[str, str] | None = None,
+    ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
-        
+
         Args:
             skill_names: Optional list of skills to include.
-        
+            pins: Optional version pins for skills.
+
         Returns:
             Complete system prompt.
         """
@@ -94,7 +112,7 @@ class ContextBuilder:
         # 1. Always-loaded skills: include full content
         always_skills = self.skills.get_always_skills()
         if always_skills:
-            always_content = self.skills.load_skills_for_context(always_skills)
+            always_content = self.skills.load_skills_for_context(always_skills, pins=pins)
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
@@ -114,7 +132,7 @@ class ContextBuilder:
                 seen.add(n)
                 requested.append(n)
             if requested:
-                requested_content = self.skills.load_skills_for_context(requested)
+                requested_content = self.skills.load_skills_for_context(requested, pins=pins)
                 if requested_content:
                     parts.append(f"# Requested Skills\n\n{requested_content}")
 
@@ -133,6 +151,7 @@ Skills with available="false" need dependencies installed first - you can try in
     def _get_identity(self) -> str:
         """Get the core identity section."""
         from datetime import datetime
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
@@ -186,6 +205,7 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
+        pins: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Build the complete message list for an LLM call.
@@ -197,6 +217,7 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
             media: Optional list of local file paths for images/media.
             channel: Current channel (telegram, feishu, etc.).
             chat_id: Current chat/user ID.
+            pins: Optional version pins for skills.
 
         Returns:
             List of messages including system prompt.
@@ -204,7 +225,13 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         messages = []
 
         # System prompt
-        system_prompt = self.build_system_prompt(skill_names, memory_query=current_message)
+        try:
+            system_prompt = self.build_system_prompt(
+                skill_names, memory_query=current_message, pins=pins
+            )
+        except TypeError:
+            # Backward-compatible fallback for patched/legacy callables that do not accept pins.
+            system_prompt = self.build_system_prompt(skill_names, memory_query=current_message)
         if channel and chat_id:
             system_prompt += f"\n\n## Current Session\nChannel: {channel}\nChat ID: {chat_id}"
         messages.append({"role": "system", "content": system_prompt})
@@ -228,10 +255,14 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
             if len(messages) == 2 and isinstance(messages[0].get("content"), str):
                 system = dict(messages[0])
                 latest = messages[1]
-                target_chars = max(256, self.max_tokens * 4 - self._estimate_tokens([latest]) * 4 - 64)
+                target_chars = max(
+                    256, self.max_tokens * 4 - self._estimate_tokens([latest]) * 4 - 64
+                )
                 text = str(system.get("content") or "")
                 if len(text) > target_chars:
-                    system["content"] = text[:target_chars] + "\n\n[Context truncated due to max_tokens]"
+                    system["content"] = (
+                        text[:target_chars] + "\n\n[Context truncated due to max_tokens]"
+                    )
                     return [system, latest]
             return messages
 
@@ -261,7 +292,9 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
             target_chars = max(256, self.max_tokens * 4 - self._estimate_tokens([latest]) * 4 - 64)
             if len(sys_text) > target_chars:
                 system = dict(system)
-                system["content"] = sys_text[:target_chars] + "\n\n[Context truncated due to max_tokens]"
+                system["content"] = (
+                    sys_text[:target_chars] + "\n\n[Context truncated due to max_tokens]"
+                )
                 pruned = [system, latest]
         return pruned
 
@@ -315,7 +348,9 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
                 continue
             if mime.startswith("image/"):
                 b64 = base64.b64encode(p.read_bytes()).decode()
-                images.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+                images.append(
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                )
                 continue
 
             # Keep audio/video as metadata blocks to preserve user intent without
@@ -370,43 +405,40 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         messages: list[dict[str, Any]],
         tool_call_id: str,
         tool_name: str,
-        result: str | ToolResult
+        result: str | ToolResult,
     ) -> list[dict[str, Any]]:
         """
         Add a tool result to the message list.
-        
+
         Args:
             messages: Current message list.
             tool_call_id: ID of the tool call.
             tool_name: Name of the tool.
             result: Tool execution result.
-        
+
         Returns:
             Updated message list.
         """
         content = result.to_tool_message_content() if isinstance(result, ToolResult) else result
-        messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "name": tool_name,
-            "content": content
-        })
+        messages.append(
+            {"role": "tool", "tool_call_id": tool_call_id, "name": tool_name, "content": content}
+        )
         return messages
 
     def add_assistant_message(
         self,
         messages: list[dict[str, Any]],
         content: str | None,
-        tool_calls: list[dict[str, Any]] | None = None
+        tool_calls: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Add an assistant message to the message list.
-        
+
         Args:
             messages: Current message list.
             content: Message content.
             tool_calls: Optional tool calls.
-        
+
         Returns:
             Updated message list.
         """
@@ -417,4 +449,3 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
 
         messages.append(msg)
         return messages
-

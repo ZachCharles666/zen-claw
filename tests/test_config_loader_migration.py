@@ -76,5 +76,3 @@ def test_detect_legacy_tool_fields_returns_all_present_paths() -> None:
     }
     out = _detect_legacy_tool_fields(tools)
     assert out == ["tools.exec", "tools.web.search", "tools.web.fetch"]
-
-

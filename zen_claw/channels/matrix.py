@@ -87,7 +87,9 @@ class MatrixChannel(BaseChannel):
     async def _sync_loop(self) -> None:
         while self._running and self.config.access_token:
             try:
-                data = await self._matrix_get("/_matrix/client/v3/sync", params={"timeout": "25000", "since": self._since})
+                data = await self._matrix_get(
+                    "/_matrix/client/v3/sync", params={"timeout": "25000", "since": self._since}
+                )
                 await self._process_sync_response(data)
             except asyncio.CancelledError:
                 break
@@ -339,7 +341,9 @@ class MatrixChannel(BaseChannel):
         return mxc_url, {"msgtype": msgtype, "body": path.name, "info": info}
 
     def _build_text_payload(self, msg: OutboundMessage) -> dict:
-        formatted = str(msg.metadata.get("matrix_formatted_body") or msg.metadata.get("formatted_body") or "").strip()
+        formatted = str(
+            msg.metadata.get("matrix_formatted_body") or msg.metadata.get("formatted_body") or ""
+        ).strip()
         if formatted:
             return {
                 "msgtype": "m.text",
@@ -362,7 +366,9 @@ class MatrixChannel(BaseChannel):
             return
         try:
             store_path = str(self.media_root / "matrix-crypto")
-            self._nio_client = nio.AsyncClient(self.config.homeserver, self.config.user_id, store_path=store_path)
+            self._nio_client = nio.AsyncClient(
+                self.config.homeserver, self.config.user_id, store_path=store_path
+            )
             self._nio_client.access_token = self.config.access_token
             if self.config.device_id:
                 self._nio_client.device_id = self.config.device_id

@@ -83,6 +83,7 @@ class RagRecallStrategy(MemoryRecallStrategy):
 
     def __init__(self, data_dir: "Path", notebook_id: str = "default"):  # noqa: F821
         from pathlib import Path as _Path
+
         self._data_dir = _Path(data_dir)
         self._notebook_id = notebook_id or "default"
         self._fallback = KeywordRecallStrategy()
@@ -108,7 +109,11 @@ class RagRecallStrategy(MemoryRecallStrategy):
         if retriever is None:
             return
         existing = {row.get("content", "") for row in retriever._bm25_corpus}
-        new_rows = [{"content": c, "source": "memory", "page": None} for c in candidates if c not in existing]
+        new_rows = [
+            {"content": c, "source": "memory", "page": None}
+            for c in candidates
+            if c not in existing
+        ]
         if new_rows:
             retriever._bm25_corpus.extend(new_rows)
 
@@ -122,14 +127,22 @@ class RagRecallStrategy(MemoryRecallStrategy):
         retriever = self._get_retriever()
         if retriever is None:
             # Graceful degradation
-            return [(self._fallback.score(query, c), c) for c in candidates if self._fallback.score(query, c) > 0]
+            return [
+                (self._fallback.score(query, c), c)
+                for c in candidates
+                if self._fallback.score(query, c) > 0
+            ]
 
         self._sync_corpus(candidates)
         candidate_set = set(candidates)
         try:
             results = retriever.search(query=query, top_k=min(50, max(5, len(candidates))))
         except Exception:
-            return [(self._fallback.score(query, c), c) for c in candidates if self._fallback.score(query, c) > 0]
+            return [
+                (self._fallback.score(query, c), c)
+                for c in candidates
+                if self._fallback.score(query, c) > 0
+            ]
 
         scored: list[tuple[float, str]] = []
         matched = set()

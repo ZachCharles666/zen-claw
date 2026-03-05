@@ -12,7 +12,10 @@ def test_print_effective_tool_backends_includes_policy_summary(monkeypatch) -> N
     cfg.tools.policy.kill_switch_enabled = True
     cfg.tools.policy.kill_switch_reason = "maintenance"
     cfg.tools.policy.cron_allowed_channels = ["discord", "telegram"]
-    cfg.tools.policy.cron_allowed_actions_by_channel = {"discord": ["list"], "telegram": ["add", "list", "remove"]}
+    cfg.tools.policy.cron_allowed_actions_by_channel = {
+        "discord": ["list"],
+        "telegram": ["add", "list", "remove"],
+    }
     cfg.tools.policy.cron_require_remove_confirmation = True
     cfg.tools.policy.channel_policies = {
         "discord": ToolPolicyLayerConfig(deny=["exec"]),
@@ -189,5 +192,3 @@ def test_print_node_token_rotation_status(monkeypatch) -> None:
     assert "revoked=1" in output
     assert "expired=1" in output
     assert "expiringSoon=1" in output
-
-

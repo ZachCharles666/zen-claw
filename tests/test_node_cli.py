@@ -47,7 +47,7 @@ def test_node_cli_register_and_task_flow(tmp_path: Path, monkeypatch) -> None:
             "--type",
             "message.send",
             "--payload",
-            "{\"text\":\"hello\"}",
+            '{"text":"hello"}',
             "--idempotency-key",
             "msg-001",
         ],
@@ -81,7 +81,7 @@ def test_node_cli_register_and_task_flow(tmp_path: Path, monkeypatch) -> None:
             task_id,
             "--ok",
             "--result",
-            "{\"sent\":true}",
+            '{"sent":true}',
         ],
     )
     assert result.exit_code == 0
@@ -97,7 +97,7 @@ def test_node_cli_register_and_task_flow(tmp_path: Path, monkeypatch) -> None:
             "--type",
             "message.send",
             "--payload",
-            "{\"text\":\"hello\"}",
+            '{"text":"hello"}',
             "--idempotency-key",
             "msg-001",
         ],
@@ -118,7 +118,7 @@ def test_node_cli_register_and_task_flow(tmp_path: Path, monkeypatch) -> None:
             "--type",
             "browser.open",
             "--payload",
-            "{\"url\":\"http://127.0.0.1\"}",
+            '{"url":"http://127.0.0.1"}',
         ],
     )
     assert denied.exit_code == 1
@@ -131,7 +131,16 @@ def test_node_cli_policy_set_and_policy_denied(tmp_path: Path, monkeypatch) -> N
 
     reg = runner.invoke(
         app,
-        ["node", "register", "--name", "policy-node", "--platform", "android", "--capability", "notify"],
+        [
+            "node",
+            "register",
+            "--name",
+            "policy-node",
+            "--platform",
+            "android",
+            "--capability",
+            "notify",
+        ],
     )
     assert reg.exit_code == 0
     node_id = json.loads(reg.output)["node_id"]
@@ -172,7 +181,7 @@ def test_node_cli_policy_set_and_policy_denied(tmp_path: Path, monkeypatch) -> N
             "--type",
             "agent.prompt",
             "--payload",
-            "{\"prompt\":\"hello\"}",
+            '{"prompt":"hello"}',
         ],
     )
     assert denied.exit_code == 1
@@ -185,7 +194,16 @@ def test_node_cli_task_add_dsl_static_denied(tmp_path: Path, monkeypatch) -> Non
 
     reg = runner.invoke(
         app,
-        ["node", "register", "--name", "dsl-node", "--platform", "android", "--capability", "notify"],
+        [
+            "node",
+            "register",
+            "--name",
+            "dsl-node",
+            "--platform",
+            "android",
+            "--capability",
+            "notify",
+        ],
     )
     assert reg.exit_code == 0
     node_id = json.loads(reg.output)["node_id"]
@@ -201,7 +219,7 @@ def test_node_cli_task_add_dsl_static_denied(tmp_path: Path, monkeypatch) -> Non
             "--type",
             "agent.prompt",
             "--payload",
-            "{\"prompt\":\"run this while true forever\"}",
+            '{"prompt":"run this while true forever"}',
         ],
     )
     assert denied.exit_code == 1
@@ -215,7 +233,16 @@ def test_node_cli_task_add_idempotency_replay_conflict(tmp_path: Path, monkeypat
 
     reg = runner.invoke(
         app,
-        ["node", "register", "--name", "idem-node", "--platform", "android", "--capability", "notify"],
+        [
+            "node",
+            "register",
+            "--name",
+            "idem-node",
+            "--platform",
+            "android",
+            "--capability",
+            "notify",
+        ],
     )
     assert reg.exit_code == 0
     node_id = json.loads(reg.output)["node_id"]
@@ -231,7 +258,7 @@ def test_node_cli_task_add_idempotency_replay_conflict(tmp_path: Path, monkeypat
             "--type",
             "message.send",
             "--payload",
-            "{\"text\":\"hello\"}",
+            '{"text":"hello"}',
             "--idempotency-key",
             "k-1",
         ],
@@ -249,7 +276,7 @@ def test_node_cli_task_add_idempotency_replay_conflict(tmp_path: Path, monkeypat
             "--type",
             "message.send",
             "--payload",
-            "{\"text\":\"hello-2\"}",
+            '{"text":"hello-2"}',
             "--idempotency-key",
             "k-1",
         ],
@@ -265,7 +292,16 @@ def test_node_cli_approval_commands(tmp_path: Path, monkeypatch) -> None:
 
     reg = runner.invoke(
         app,
-        ["node", "register", "--name", "approval-node", "--platform", "android", "--capability", "notify"],
+        [
+            "node",
+            "register",
+            "--name",
+            "approval-node",
+            "--platform",
+            "android",
+            "--capability",
+            "notify",
+        ],
     )
     assert reg.exit_code == 0
     node_id = json.loads(reg.output)["node_id"]
@@ -299,7 +335,7 @@ def test_node_cli_approval_commands(tmp_path: Path, monkeypatch) -> None:
             "--type",
             "agent.prompt",
             "--payload",
-            "{\"prompt\":\"hello\"}",
+            '{"prompt":"hello"}',
             "--required-capability",
             "notify",
         ],
@@ -320,7 +356,17 @@ def test_node_cli_approval_commands(tmp_path: Path, monkeypatch) -> None:
 
     approve2 = runner.invoke(
         app,
-        ["node", "task", "approve", "--task-id", task_id, "--by", "ops2", "--note", "second signoff"],
+        [
+            "node",
+            "task",
+            "approve",
+            "--task-id",
+            task_id,
+            "--by",
+            "ops2",
+            "--note",
+            "second signoff",
+        ],
     )
     assert approve2.exit_code == 0
     list_after_second = runner.invoke(app, ["node", "task", "list", "--node-id", node_id])
@@ -340,7 +386,7 @@ def test_node_cli_approval_commands(tmp_path: Path, monkeypatch) -> None:
             "--type",
             "agent.prompt",
             "--payload",
-            "{\"prompt\":\"world\"}",
+            '{"prompt":"world"}',
             "--required-capability",
             "notify",
             "--idempotency-key",
@@ -385,7 +431,16 @@ def test_node_cli_token_commands(tmp_path: Path, monkeypatch) -> None:
 
     reg = runner.invoke(
         app,
-        ["node", "register", "--name", "token-node", "--platform", "android", "--capability", "notify"],
+        [
+            "node",
+            "register",
+            "--name",
+            "token-node",
+            "--platform",
+            "android",
+            "--capability",
+            "notify",
+        ],
     )
     assert reg.exit_code == 0
     reg_data = json.loads(reg.output)
@@ -399,7 +454,9 @@ def test_node_cli_token_commands(tmp_path: Path, monkeypatch) -> None:
     assert show_data["token"]
     assert "***" in show_data["token"]
 
-    rotate = runner.invoke(app, ["node", "token", "rotate", "--node-id", node_id, "--ttl-sec", "60"])
+    rotate = runner.invoke(
+        app, ["node", "token", "rotate", "--node-id", node_id, "--ttl-sec", "60"]
+    )
     assert rotate.exit_code == 0
     rotate_data = json.loads(rotate.output)
     assert rotate_data["node_id"] == node_id
@@ -421,7 +478,16 @@ def test_node_cli_token_scan_and_rotate(tmp_path: Path, monkeypatch) -> None:
 
     reg = runner.invoke(
         app,
-        ["node", "register", "--name", "scan-node", "--platform", "android", "--capability", "notify"],
+        [
+            "node",
+            "register",
+            "--name",
+            "scan-node",
+            "--platform",
+            "android",
+            "--capability",
+            "notify",
+        ],
     )
     assert reg.exit_code == 0
     node_id = json.loads(reg.output)["node_id"]
@@ -435,7 +501,9 @@ def test_node_cli_token_scan_and_rotate(tmp_path: Path, monkeypatch) -> None:
     scan_data = json.loads(scan.output)
     assert any(r.get("node_id") == node_id for r in scan_data.get("candidates", []))
 
-    rotate = runner.invoke(app, ["node", "token", "scan", "--within-sec", "0", "--rotate", "--ttl-sec", "120"])
+    rotate = runner.invoke(
+        app, ["node", "token", "scan", "--within-sec", "0", "--rotate", "--ttl-sec", "120"]
+    )
     assert rotate.exit_code == 0
     rotate_data = json.loads(rotate.output)
     assert any(r.get("node_id") == node_id for r in rotate_data.get("rotated", []))

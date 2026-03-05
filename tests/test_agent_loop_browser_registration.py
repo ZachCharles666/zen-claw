@@ -37,7 +37,11 @@ class _InMemorySessionManager:
                 self.messages.append({"role": role, "content": content, **kwargs})
 
             def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-                recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+                recent = (
+                    self.messages[-max_messages:]
+                    if len(self.messages) > max_messages
+                    else self.messages
+                )
                 return [{"role": m["role"], "content": m["content"]} for m in recent]
 
         return _Session(key)
@@ -46,7 +50,9 @@ class _InMemorySessionManager:
         return None
 
 
-def test_agent_loop_registers_browser_tools_when_sidecar_enabled(tmp_path: Path, monkeypatch) -> None:
+def test_agent_loop_registers_browser_tools_when_sidecar_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     loop = AgentLoop(
         bus=MessageBus(),

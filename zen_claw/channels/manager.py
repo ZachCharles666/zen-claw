@@ -57,7 +57,7 @@ class _TokenBucketRateLimiter:
 class ChannelManager:
     """
     Manages chat channels and coordinates message routing.
-    
+
     Responsibilities:
     - Initialize enabled channels (Telegram, WhatsApp, etc.)
     - Start/stop channels
@@ -81,7 +81,9 @@ class ChannelManager:
             rate_per_sec=self.config.channels.outbound_rate_limit_per_sec,
             burst=self.config.channels.outbound_rate_limit_burst,
         )
-        self._default_rate_limit_mode = str(self.config.channels.outbound_rate_limit_mode or "delay").strip().lower()
+        self._default_rate_limit_mode = (
+            str(self.config.channels.outbound_rate_limit_mode or "delay").strip().lower()
+        )
         self._channel_rate_limiter: dict[str, _TokenBucketRateLimiter] = {}
         self._channel_rate_limit_mode: dict[str, str] = {}
         for ch, cfg in self.config.channels.outbound_rate_limit_by_channel.items():
@@ -103,8 +105,12 @@ class ChannelManager:
             self._channel_rate_limiter[ch] = _TokenBucketRateLimiter(rate_per_sec=rate, burst=burst)
             self._channel_rate_limit_mode[ch] = mode
         self._drop_notice_enabled = bool(self.config.channels.outbound_rate_limit_drop_notice)
-        self._drop_notice_cooldown_sec = max(1, int(self.config.channels.outbound_rate_limit_drop_notice_cooldown_sec))
-        self._drop_notice_text = str(self.config.channels.outbound_rate_limit_drop_notice_text or "").strip()
+        self._drop_notice_cooldown_sec = max(
+            1, int(self.config.channels.outbound_rate_limit_drop_notice_cooldown_sec)
+        )
+        self._drop_notice_text = str(
+            self.config.channels.outbound_rate_limit_drop_notice_text or ""
+        ).strip()
         self._last_drop_notice_at: dict[str, float] = {}
 
         self._init_channels()
@@ -166,7 +172,9 @@ class ChannelManager:
         if not ch:
             return
         channels = self._rate_stats.setdefault("channels", {})
-        row = channels.setdefault(ch, {"delayed_count": 0, "dropped_count": 0, "last_delay_ms": 0, "last_event_unix": 0})
+        row = channels.setdefault(
+            ch, {"delayed_count": 0, "dropped_count": 0, "last_delay_ms": 0, "last_event_unix": 0}
+        )
         now = int(time.time())
         row["last_event_unix"] = now
         if event == "delay":
@@ -233,6 +241,7 @@ class ChannelManager:
         if self.config.channels.telegram.enabled:
             try:
                 from zen_claw.channels.telegram import TelegramChannel
+
                 self.channels["telegram"] = TelegramChannel(
                     self.config.channels.telegram,
                     self.bus,
@@ -248,6 +257,7 @@ class ChannelManager:
         if self.config.channels.whatsapp.enabled:
             try:
                 from zen_claw.channels.whatsapp import WhatsAppChannel
+
                 self.channels["whatsapp"] = WhatsAppChannel(
                     self.config.channels.whatsapp,
                     self.bus,
@@ -262,6 +272,7 @@ class ChannelManager:
         if self.config.channels.discord.enabled:
             try:
                 from zen_claw.channels.discord import DiscordChannel
+
                 self.channels["discord"] = DiscordChannel(
                     self.config.channels.discord,
                     self.bus,
@@ -352,6 +363,7 @@ class ChannelManager:
         if self.config.channels.feishu.enabled:
             try:
                 from zen_claw.channels.feishu import FeishuChannel
+
                 self.channels["feishu"] = FeishuChannel(
                     self.config.channels.feishu,
                     self.bus,
@@ -472,10 +484,7 @@ class ChannelManager:
 
         while True:
             try:
-                msg = await asyncio.wait_for(
-                    self.bus.consume_outbound(),
-                    timeout=1.0
-                )
+                msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=1.0)
 
                 channel = self.channels.get(msg.channel)
                 trace_id, msg.metadata = TraceContext.ensure_trace_id(msg.metadata)
@@ -685,10 +694,7 @@ class ChannelManager:
     def get_status(self) -> dict[str, Any]:
         """Get status of all channels."""
         return {
-            name: {
-                "enabled": True,
-                "running": channel.is_running
-            }
+            name: {"enabled": True, "running": channel.is_running}
             for name, channel in self.channels.items()
         }
 
@@ -696,5 +702,3 @@ class ChannelManager:
     def enabled_channels(self) -> list[str]:
         """Get list of enabled channel names."""
         return list(self.channels.keys())
-
-

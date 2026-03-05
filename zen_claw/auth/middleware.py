@@ -45,10 +45,14 @@ class MultiTenantAuthMiddleware(BaseHTTPMiddleware):
             if auth.lower().startswith("bearer "):
                 token = auth[7:].strip()
         if not token:
-            return RedirectResponse(url=f"{self.login_path}?next={quote(path, safe='')}", status_code=302)
+            return RedirectResponse(
+                url=f"{self.login_path}?next={quote(path, safe='')}", status_code=302
+            )
         payload = self.session_manager.validate_session(token)
         if payload is None:
-            return RedirectResponse(url=f"{self.login_path}?next={quote(path, safe='')}", status_code=302)
+            return RedirectResponse(
+                url=f"{self.login_path}?next={quote(path, safe='')}", status_code=302
+            )
         request.state.user = payload
         request.state.tenant_id = payload.get("tid")
         return await call_next(request)

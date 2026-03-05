@@ -6,7 +6,9 @@ from typer.testing import CliRunner
 from zen_claw.cli.commands import app
 
 
-def test_config_production_check_passes_with_gateway_and_env_policy(tmp_path: Path, monkeypatch) -> None:
+def test_config_production_check_passes_with_gateway_and_env_policy(
+    tmp_path: Path, monkeypatch
+) -> None:
     cfg = tmp_path / "config.prod.json"
     cfg.write_text(
         json.dumps(
@@ -32,7 +34,9 @@ def test_config_production_check_passes_with_gateway_and_env_policy(tmp_path: Pa
     assert "Key rotation policy set: 60 days" in out.output
 
 
-def test_config_production_check_strict_fails_on_missing_policy_envs(tmp_path: Path, monkeypatch) -> None:
+def test_config_production_check_strict_fails_on_missing_policy_envs(
+    tmp_path: Path, monkeypatch
+) -> None:
     cfg = tmp_path / "config.json"
     cfg.write_text(
         json.dumps(
@@ -52,7 +56,9 @@ def test_config_production_check_strict_fails_on_missing_policy_envs(tmp_path: P
     assert "Runtime env tag" in out.output
 
 
-def test_config_production_check_fails_on_invalid_rotation_value(tmp_path: Path, monkeypatch) -> None:
+def test_config_production_check_fails_on_invalid_rotation_value(
+    tmp_path: Path, monkeypatch
+) -> None:
     cfg = tmp_path / "config.prod.json"
     cfg.write_text(
         json.dumps(

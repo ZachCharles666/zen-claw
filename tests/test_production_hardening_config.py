@@ -44,5 +44,3 @@ def test_production_hardening_disables_all_fallbacks() -> None:
     assert cfg.tools.network.exec.sidecar_fallback_to_local is False
     assert cfg.tools.network.search.proxy_fallback_to_local is False
     assert cfg.tools.network.fetch.proxy_fallback_to_local is False
-
-

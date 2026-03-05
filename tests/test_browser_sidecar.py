@@ -127,7 +127,9 @@ async def test_browser_open_max_steps_override(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "session_id": "s-open"}))
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
-    tool = BrowserOpenTool(mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser", max_steps=20)
+    tool = BrowserOpenTool(
+        mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser", max_steps=20
+    )
     result = await tool.execute(url="https://example.com", maxSteps=50)
     assert result.ok is True
     assert fake.last_json["policy"]["max_steps"] == 50
@@ -137,7 +139,9 @@ async def test_browser_open_max_steps_override_minimum(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "session_id": "s-open"}))
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
-    tool = BrowserOpenTool(mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser", max_steps=20)
+    tool = BrowserOpenTool(
+        mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser", max_steps=20
+    )
     result = await tool.execute(url="https://example.com", maxSteps=0)
     assert result.ok is True
     assert fake.last_json["policy"]["max_steps"] == 1

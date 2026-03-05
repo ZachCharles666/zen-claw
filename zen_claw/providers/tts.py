@@ -14,8 +14,9 @@ from loguru import logger
 
 class TTSProvider(ABC):
     @abstractmethod
-    async def synthesize(self, text: str, voice: str | None = None, output_format: str = "mp3") -> bytes:
-        ...
+    async def synthesize(
+        self, text: str, voice: str | None = None, output_format: str = "mp3"
+    ) -> bytes: ...
 
     async def synthesize_to_file(
         self,
@@ -46,7 +47,9 @@ class EdgeTTSProvider(TTSProvider):
     def __init__(self, default_voice: str | None = None) -> None:
         self.default_voice = default_voice or self.DEFAULT_VOICE
 
-    async def synthesize(self, text: str, voice: str | None = None, output_format: str = "mp3") -> bytes:
+    async def synthesize(
+        self, text: str, voice: str | None = None, output_format: str = "mp3"
+    ) -> bytes:
         try:
             import edge_tts
         except ImportError as exc:
@@ -133,7 +136,13 @@ class EdgeTTSProvider(TTSProvider):
             locale = str(v.get("Locale", ""))
             if locale_filter and not locale.startswith(locale_filter):
                 continue
-            rows.append({"name": str(v.get("ShortName", "")), "locale": locale, "gender": str(v.get("Gender", ""))})
+            rows.append(
+                {
+                    "name": str(v.get("ShortName", "")),
+                    "locale": locale,
+                    "gender": str(v.get("Gender", "")),
+                }
+            )
         return rows
 
 
@@ -145,7 +154,9 @@ class MinimaxTTSProvider(TTSProvider):
         self.api_key = api_key or os.environ.get("zen_claw_MINIMAX_API_KEY", "")
         self.group_id = group_id or os.environ.get("zen_claw_MINIMAX_GROUP_ID", "")
 
-    async def synthesize(self, text: str, voice: str | None = None, output_format: str = "mp3") -> bytes:
+    async def synthesize(
+        self, text: str, voice: str | None = None, output_format: str = "mp3"
+    ) -> bytes:
         if not self.api_key:
             raise RuntimeError("MiniMax API key not configured")
         import httpx
@@ -154,8 +165,18 @@ class MinimaxTTSProvider(TTSProvider):
             "model": "speech-01-turbo",
             "text": text,
             "stream": False,
-            "voice_setting": {"voice_id": voice or self.DEFAULT_VOICE, "speed": 1.0, "vol": 1.0, "pitch": 0},
-            "audio_setting": {"sample_rate": 32000, "bitrate": 128000, "format": "mp3", "channel": 1},
+            "voice_setting": {
+                "voice_id": voice or self.DEFAULT_VOICE,
+                "speed": 1.0,
+                "vol": 1.0,
+                "pitch": 0,
+            },
+            "audio_setting": {
+                "sample_rate": 32000,
+                "bitrate": 128000,
+                "format": "mp3",
+                "channel": 1,
+            },
         }
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         params = {"GroupId": self.group_id} if self.group_id else {}
@@ -173,20 +194,31 @@ class OpenAITTSProvider(TTSProvider):
     DEFAULT_VOICE = "nova"
     DEFAULT_MODEL = "tts-1"
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, model: str | None = None) -> None:
+    def __init__(
+        self, api_key: str | None = None, api_base: str | None = None, model: str | None = None
+    ) -> None:
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.api_base = api_base or "https://api.openai.com/v1"
         self.model = model or self.DEFAULT_MODEL
 
-    async def synthesize(self, text: str, voice: str | None = None, output_format: str = "mp3") -> bytes:
+    async def synthesize(
+        self, text: str, voice: str | None = None, output_format: str = "mp3"
+    ) -> bytes:
         if not self.api_key:
             raise RuntimeError("OpenAI API key not configured")
         import httpx
 
-        payload = {"model": self.model, "input": text, "voice": voice or self.DEFAULT_VOICE, "response_format": output_format}
+        payload = {
+            "model": self.model,
+            "input": text,
+            "voice": voice or self.DEFAULT_VOICE,
+            "response_format": output_format,
+        }
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(f"{self.api_base.rstrip('/')}/audio/speech", json=payload, headers=headers)
+            resp = await client.post(
+                f"{self.api_base.rstrip('/')}/audio/speech", json=payload, headers=headers
+            )
             resp.raise_for_status()
             return resp.content
 
@@ -194,7 +226,11 @@ class OpenAITTSProvider(TTSProvider):
 def get_tts_provider(config: Any) -> TTSProvider:
     providers_cfg = getattr(config, "providers", None)
     provider_name = getattr(providers_cfg, "tts", "edge") if providers_cfg else "edge"
-    default_voice = getattr(providers_cfg, "tts_default_voice", EdgeTTSProvider.DEFAULT_VOICE) if providers_cfg else EdgeTTSProvider.DEFAULT_VOICE
+    default_voice = (
+        getattr(providers_cfg, "tts_default_voice", EdgeTTSProvider.DEFAULT_VOICE)
+        if providers_cfg
+        else EdgeTTSProvider.DEFAULT_VOICE
+    )
     if provider_name in {"", "edge"}:
         return EdgeTTSProvider(default_voice=default_voice)
     if provider_name == "minimax":
@@ -211,4 +247,6 @@ def get_tts_provider(config: Any) -> TTSProvider:
     if provider_name == "off":
         raise ValueError("TTS is disabled (providers.tts = 'off')")
     logger.error(f"Unknown TTS provider: {provider_name}")
-    raise ValueError(f"Unknown TTS provider: '{provider_name}'. Valid options: edge, minimax, openai, off")
+    raise ValueError(
+        f"Unknown TTS provider: '{provider_name}'. Valid options: edge, minimax, openai, off"
+    )

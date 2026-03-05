@@ -80,5 +80,3 @@ def test_context_serializes_tool_error_result() -> None:
     content = out[-1]["content"]
     assert isinstance(content, str)
     assert content.startswith("[tool_error]")
-
-

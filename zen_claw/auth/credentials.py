@@ -34,10 +34,14 @@ class CredentialVault:
             except Exception as exc:
                 raise ValueError(f"Invalid {cls._KEY_ENV_VAR}: {exc}") from exc
             if len(raw) != 32:
-                raise ValueError(f"Invalid {cls._KEY_ENV_VAR}: decoded length must be 32, got {len(raw)}")
+                raise ValueError(
+                    f"Invalid {cls._KEY_ENV_VAR}: decoded length must be 32, got {len(raw)}"
+                )
             return env_key.encode("ascii")
 
-        key_file = (key_dir if key_dir is not None else Path.home() / ".zen-claw") / cls._KEY_FILE_NAME
+        key_file = (
+            key_dir if key_dir is not None else Path.home() / ".zen-claw"
+        ) / cls._KEY_FILE_NAME
         if key_file.exists():
             stored = key_file.read_text(encoding="ascii").strip()
             try:
@@ -45,7 +49,9 @@ class CredentialVault:
             except Exception as exc:
                 raise RuntimeError(f"Failed to parse vault key file {key_file}: {exc}") from exc
             if len(raw) != 32:
-                raise RuntimeError(f"Stored vault key is corrupted: expected 32 bytes, got {len(raw)}")
+                raise RuntimeError(
+                    f"Stored vault key is corrupted: expected 32 bytes, got {len(raw)}"
+                )
             return stored.encode("ascii")
 
         return cls._generate_and_save_key(key_file)
@@ -154,4 +160,3 @@ class CredentialVault:
 
     def list_keys(self, platform: str) -> list[str]:
         return sorted(self._load_platform(platform).keys())
-

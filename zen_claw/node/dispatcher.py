@@ -41,14 +41,14 @@ class NodeTaskDispatcher:
         self.channel_circuit_enabled = bool(channel_circuit_enabled)
         self.channel_circuit_window = max(1, int(channel_circuit_window))
         self.channel_circuit_min_samples = max(1, int(channel_circuit_min_samples))
-        self.channel_circuit_fail_rate_threshold = min(1.0, max(0.0, float(channel_circuit_fail_rate_threshold)))
+        self.channel_circuit_fail_rate_threshold = min(
+            1.0, max(0.0, float(channel_circuit_fail_rate_threshold))
+        )
         self.channel_circuit_open_sec = max(1.0, float(channel_circuit_open_sec))
         self.chaos_enabled = bool(chaos_enabled)
         self.chaos_fail_every = max(0, int(chaos_fail_every))
         self.chaos_channels = {
-            str(c).strip().lower()
-            for c in (chaos_channels or [])
-            if str(c).strip()
+            str(c).strip().lower() for c in (chaos_channels or []) if str(c).strip()
         }
         self._now = now_fn or time.monotonic
         self._channel_circuit: dict[str, dict[str, Any]] = {}
@@ -105,10 +105,7 @@ class NodeTaskDispatcher:
         try:
             if task_type == "agent.prompt":
                 prompt = str(
-                    payload.get("prompt")
-                    or payload.get("message")
-                    or payload.get("content")
-                    or ""
+                    payload.get("prompt") or payload.get("message") or payload.get("content") or ""
                 ).strip()
                 if not prompt:
                     raise ValueError("prompt/message/content is required")
@@ -242,7 +239,11 @@ class NodeTaskDispatcher:
     def _should_inject_chaos(self, channel: str) -> bool:
         if not self.chaos_enabled or self.chaos_fail_every <= 0:
             return False
-        if self.chaos_channels and "*" not in self.chaos_channels and channel not in self.chaos_channels:
+        if (
+            self.chaos_channels
+            and "*" not in self.chaos_channels
+            and channel not in self.chaos_channels
+        ):
             return False
         count = int(self._chaos_attempts_by_channel.get(channel, 0)) + 1
         self._chaos_attempts_by_channel[channel] = count

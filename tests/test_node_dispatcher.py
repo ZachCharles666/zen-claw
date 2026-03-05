@@ -326,7 +326,9 @@ async def test_node_dispatcher_waits_until_all_approvals_collected(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_node_high_risk_task_e2e_approval_to_gateway_execution_and_audit_verify(tmp_path: Path) -> None:
+async def test_node_high_risk_task_e2e_approval_to_gateway_execution_and_audit_verify(
+    tmp_path: Path,
+) -> None:
     svc = NodeService(tmp_path / "nodes.json", audit_secret="sec-1")
     reg = svc.register_node(name="phone-z", platform="android", capabilities=["notify"])
     node_id = reg["node_id"]
@@ -362,11 +364,16 @@ async def test_node_high_risk_task_e2e_approval_to_gateway_execution_and_audit_v
     did0 = await dispatcher.run_once()
     assert did0 is False
 
-    assert svc.approve_task(task_id=task["task_id"], approved_by="ops-a", note="first signoff") is True
+    assert (
+        svc.approve_task(task_id=task["task_id"], approved_by="ops-a", note="first signoff") is True
+    )
     did1 = await dispatcher.run_once()
     assert did1 is False
 
-    assert svc.approve_task(task_id=task["task_id"], approved_by="ops-b", note="second signoff") is True
+    assert (
+        svc.approve_task(task_id=task["task_id"], approved_by="ops-b", note="second signoff")
+        is True
+    )
     did2 = await dispatcher.run_once()
     assert did2 is True
     assert outbound == []

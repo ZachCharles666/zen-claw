@@ -118,7 +118,9 @@ class WebhookTriggerChannel(BaseChannel):
         expected = hmac.new(secret.encode("utf-8"), message, hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, str(signature or "").strip())
 
-    def validate_request(self, *, body: bytes, headers: dict[str, str], client_ip: str) -> tuple[bool, str]:
+    def validate_request(
+        self, *, body: bytes, headers: dict[str, str], client_ip: str
+    ) -> tuple[bool, str]:
         """Validate request auth headers and anti-replay rules."""
         if self.config.allow_unsigned_from_allowlist and self._ip_allowed(client_ip):
             return True, ""
@@ -143,7 +145,9 @@ class WebhookTriggerChannel(BaseChannel):
             return False, "timestamp_out_of_window"
         if not self._verify_signature(body, timestamp, nonce, signature):
             return False, "invalid_signature"
-        if not self._nonce_store.mark_once(nonce=nonce, now_unix=now, ttl_sec=int(self.config.nonce_ttl_sec)):
+        if not self._nonce_store.mark_once(
+            nonce=nonce, now_unix=now, ttl_sec=int(self.config.nonce_ttl_sec)
+        ):
             return False, "replayed_nonce"
         return True, ""
 
@@ -174,14 +178,10 @@ class WebhookTriggerChannel(BaseChannel):
         if not content:
             content = f"trigger:{agent_id}"
         sender_id = (
-            str((payload or {}).get("sender_id", "")).strip()
-            if isinstance(payload, dict)
-            else ""
+            str((payload or {}).get("sender_id", "")).strip() if isinstance(payload, dict) else ""
         ) or f"webhook:{agent_id}"
         chat_id = (
-            str((payload or {}).get("chat_id", "")).strip()
-            if isinstance(payload, dict)
-            else ""
+            str((payload or {}).get("chat_id", "")).strip() if isinstance(payload, dict) else ""
         ) or str(agent_id)
         meta = dict(metadata or {})
         meta["trigger_agent_id"] = str(agent_id)
@@ -193,4 +193,3 @@ class WebhookTriggerChannel(BaseChannel):
             content=content,
             metadata=meta,
         )
-

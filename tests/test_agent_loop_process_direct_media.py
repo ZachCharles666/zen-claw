@@ -28,7 +28,9 @@ class _FakeProvider(LLMProvider):
         return "fake-model"
 
 
-def test_process_direct_accepts_media_refs_and_injects_into_user_content(tmp_path: Path, monkeypatch) -> None:
+def test_process_direct_accepts_media_refs_and_injects_into_user_content(
+    tmp_path: Path, monkeypatch
+) -> None:
     @dataclass
     class _Session:
         key: str
@@ -39,7 +41,11 @@ def test_process_direct_accepts_media_refs_and_injects_into_user_content(tmp_pat
             self.messages.append({"role": role, "content": content, **kwargs})
 
         def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-            recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+            recent = (
+                self.messages[-max_messages:]
+                if len(self.messages) > max_messages
+                else self.messages
+            )
             return [{"role": m["role"], "content": m["content"]} for m in recent]
 
     class _InMemorySessionManager:
@@ -58,7 +64,9 @@ def test_process_direct_accepts_media_refs_and_injects_into_user_content(tmp_pat
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.get_always_skills", lambda self: [])
     monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.build_skills_summary", lambda self: "")
-    monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.load_skills_for_context", lambda self, names: "")
+    monkeypatch.setattr(
+        "zen_claw.agent.skills.SkillsLoader.load_skills_for_context", lambda self, names: ""
+    )
 
     provider = _FakeProvider()
     loop = AgentLoop(
@@ -89,6 +97,3 @@ def test_process_direct_accepts_media_refs_and_injects_into_user_content(tmp_pat
         and "feishu://image/img_key_123" in str(part.get("text"))
         for part in content
     )
-
-
-

@@ -34,7 +34,11 @@ class _FakeClient:
 
 
 async def test_social_post_tool_success(monkeypatch):
-    payload = {"ok": True, "status": 201, "body": json.dumps({"id": "post_123", "status": "created"})}
+    payload = {
+        "ok": True,
+        "status": 201,
+        "body": json.dumps({"id": "post_123", "status": "created"}),
+    }
     monkeypatch.setattr(
         "zen_claw.agent.tools.social_platform.httpx.AsyncClient",
         lambda timeout: _FakeClient(_FakeResp(200, payload)),
@@ -124,7 +128,13 @@ def _make_loop(tmp_path: Path, dry_run: bool = False):
     provider = MagicMock()
     config = MagicMock()
     config.agents.defaults.model = "test/model"
-    return SocialAgentLoop(config=config, platform_config=cfg, provider=provider, workspace=tmp_path, model="test/model")
+    return SocialAgentLoop(
+        config=config,
+        platform_config=cfg,
+        provider=provider,
+        workspace=tmp_path,
+        model="test/model",
+    )
 
 
 async def test_filter_interesting_returns_subset(tmp_path: Path):
@@ -206,6 +216,7 @@ async def test_run_once_skips_duplicate(tmp_path: Path):
 
 
 # ── SocialPlatformLikeTool tests ─────────────────────────────────────────────
+
 
 async def test_like_tool_success(monkeypatch):
     payload = {"ok": True, "status": 200, "body": json.dumps({"liked": True})}

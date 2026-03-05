@@ -10,13 +10,14 @@ from fastapi import HTTPException, status
 
 logger = logging.getLogger("zen_claw.tunnel.gateway")
 
+
 class TunnelGatewaySecurity:
     """
     Implements P4-A Exposure Guards:
     - Path constraints (only /webhook/*)
     - Method constraints (only POST)
     - Payload size limits
-    - Webhook Signature + key_id rotation 
+    - Webhook Signature + key_id rotation
     - Clock drift tolerance
     - Nonce TTL & Capacity limits (Memory Bomb defense)
     - DoS Circuit Breaker (IP/ASN Blacklisting)
@@ -24,11 +25,11 @@ class TunnelGatewaySecurity:
 
     def __init__(
         self,
-        max_payload_bytes: int = 2 * 1024 * 1024, # 2MB
-        clock_drift_seconds: int = 300, # 5 min tolerance
+        max_payload_bytes: int = 2 * 1024 * 1024,  # 2MB
+        clock_drift_seconds: int = 300,  # 5 min tolerance
         nonce_capacity: int = 10000,
         rate_limit_per_minute: int = 60,
-        circuit_breaker_threshold: int = 100 # Hits before blacklisting IP
+        circuit_breaker_threshold: int = 100,  # Hits before blacklisting IP
     ):
         self.max_payload_bytes = max_payload_bytes
         self.clock_drift_seconds = clock_drift_seconds
@@ -61,8 +62,10 @@ class TunnelGatewaySecurity:
 
             # If still over capacity, drop randomly (or oldest)
             if len(self._seen_nonces) > self.nonce_capacity:
-                logger.warning(f"Nonce capacity exceeded ({self.nonce_capacity}). Evicting aggressively.")
-                self._seen_nonces.clear() # Hard panic reset, better safe than OOM
+                logger.warning(
+                    f"Nonce capacity exceeded ({self.nonce_capacity}). Evicting aggressively."
+                )
+                self._seen_nonces.clear()  # Hard panic reset, better safe than OOM
 
     def _check_rate_limit(self, ip: str) -> bool:
         """Simple token bucket / counter rate limit per IP"""
@@ -87,12 +90,16 @@ class TunnelGatewaySecurity:
         # 0. DoS / Circuit Breaker Check
         if not self._check_rate_limit(client_ip):
             logger.warning(f"Request dropped by Circuit Breaker from {client_ip}")
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too Many Requests")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too Many Requests"
+            )
 
         # 1. Payload Size Check
         if len(request_body) > self.max_payload_bytes:
             logger.warning(f"Payload too large: {len(request_body)} bytes from {client_ip}")
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Payload Too Large")
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Payload Too Large"
+            )
 
         # Ensure headers exist
         req_sig = headers.get("x-claw-signature")
@@ -102,31 +109,41 @@ class TunnelGatewaySecurity:
 
         if not all([req_sig, req_ts_str, req_nonce, req_key_id]):
             logger.warning("Missing authentication headers.")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authentication Headers")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Authentication Headers"
+            )
 
         # 2. Key ID Check (Rotation Support)
         with self._lock:
             secret = self._active_keys.get(req_key_id)
             if not secret:
                 logger.warning(f"Unknown key_id provided: {req_key_id}")
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Key ID")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Key ID"
+                )
 
         # 3. Clock Drift Check
         try:
             req_ts = int(req_ts_str)
         except ValueError:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Timestamp format")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid Timestamp format"
+            )
 
         now = int(time.time())
         if abs(now - req_ts) > self.clock_drift_seconds:
             logger.warning(f"Timestamp drift exceeded: {now - req_ts}s.")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Timestamp Expired")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Timestamp Expired"
+            )
 
         # 4. Nonce Replay Check & Capacity
         with self._lock:
             if req_nonce in self._seen_nonces:
                 logger.warning(f"Replay attack detected. Nonce reused: {req_nonce}")
-                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Nonce already used")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED, detail="Nonce already used"
+                )
             self._seen_nonces[req_nonce] = time.time()
 
             # Periodically cleanup
@@ -140,7 +157,9 @@ class TunnelGatewaySecurity:
 
         if not hmac.compare_digest(req_sig, expected_sig):
             logger.warning("Signature mismatch.")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Signature")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Signature"
+            )
 
         return True
 

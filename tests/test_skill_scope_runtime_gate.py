@@ -52,7 +52,9 @@ def test_skill_scope_runtime_gate_enforce_rejects_mismatch(tmp_path: Path, monke
 
 
 @pytest.mark.asyncio
-async def test_skill_scope_runtime_gate_warn_clamps_uncovered_permissions(tmp_path: Path, monkeypatch) -> None:
+async def test_skill_scope_runtime_gate_warn_clamps_uncovered_permissions(
+    tmp_path: Path, monkeypatch
+) -> None:
     sample = tmp_path / "a.txt"
     sample.write_text("ok", encoding="utf-8")
     loop = _make_loop(tmp_path, monkeypatch, mode="warn")

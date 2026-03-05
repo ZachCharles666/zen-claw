@@ -83,4 +83,30 @@ class ToolResult:
             return self.content
         if not self.error:
             return "Error: Unknown tool error"
-        return f"Error [{self.error.kind.value}]: {self.error.message}"
+
+    def purify(self, sensitive_patterns: list[str] | None = None) -> "ToolResult":
+        """
+        Sanitize the tool result content to prevent leakage of sensitive info.
+        Removes absolute paths, secrets, and internal identifiers.
+        """
+        import re
+
+        content = self.content
+        # Remove common absolute path patterns (Windows/Unix)
+        content = re.sub(r'[A-Za-z]:\\[^\s*?"<>|]+', "[PATH]", content)
+        content = re.sub(
+            r"/[a-zA-Z0-9._/-]+",
+            lambda m: m.group(0) if m.group(0).count("/") < 3 else "[PATH]",
+            content,
+        )
+
+        # Mask obvious tokens/secrets
+        content = re.sub(
+            r'(token|key|secret|password)["\s:=]+([a-zA-Z0-9\-._~]{8,})',
+            r"\1: [REDACTED]",
+            content,
+            flags=re.I,
+        )
+
+        self.content = content
+        return self

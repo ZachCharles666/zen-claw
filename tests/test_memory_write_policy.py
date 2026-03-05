@@ -39,7 +39,9 @@ class _Session:
         self.messages.append({"role": role, "content": content, **kwargs})
 
     def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-        recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+        recent = (
+            self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+        )
         return [{"role": m["role"], "content": m["content"]} for m in recent]
 
 
@@ -113,7 +115,11 @@ def test_memory_write_policy_daily_routes_to_today_file(tmp_path: Path, monkeypa
 def test_memory_write_policy_skips_when_should_write_false(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     provider = _QueueProvider(
-        [LLMResponse(content='{"should_write": false, "memory_type": "long_term", "content": "Ignore me."}')]
+        [
+            LLMResponse(
+                content='{"should_write": false, "memory_type": "long_term", "content": "Ignore me."}'
+            )
+        ]
     )
     loop = AgentLoop(
         bus=MessageBus(),
@@ -128,5 +134,3 @@ def test_memory_write_policy_skips_when_should_write_false(tmp_path: Path, monke
 
     assert loop.context.memory.read_long_term() == ""
     assert loop.context.memory.read_today() == ""
-
-

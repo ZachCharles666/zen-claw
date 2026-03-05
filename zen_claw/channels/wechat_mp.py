@@ -32,7 +32,9 @@ except Exception:
 class WechatMPChannel(BaseChannel):
     name = "wechat_mp"
 
-    def __init__(self, config: WechatMPConfig, bus: MessageBus, media_root: Path | None = None) -> None:
+    def __init__(
+        self, config: WechatMPConfig, bus: MessageBus, media_root: Path | None = None
+    ) -> None:
         super().__init__(config, bus, media_root=media_root)
         self.config = config
         self.groq_api_key = os.environ.get("GROQ_API_KEY", "")
@@ -72,16 +74,22 @@ class WechatMPChannel(BaseChannel):
                 if uri.startswith("media://local/"):
                     local_path = self.media_root / uri.split("/")[-1]
                     if local_path.exists():
-                        media_id = await self.upload_media(local_path, "image", token) # Hardcode image for demo
+                        media_id = await self.upload_media(
+                            local_path, "image", token
+                        )  # Hardcode image for demo
                         if media_id:
                             # Send image message directly using a separate customer service API call
-                            await self._send_customer_service_image(to_user=to_user, media_id=media_id, access_token=token)
+                            await self._send_customer_service_image(
+                                to_user=to_user, media_id=media_id, access_token=token
+                            )
                         else:
                             content_str += f"\n[Attached Media {uri} failed to upload]"
 
         # Send text if it's not empty after stripping
         if content_str.strip():
-            await self._send_customer_service_message(to_user=to_user, text=content_str, access_token=token)
+            await self._send_customer_service_message(
+                to_user=to_user, text=content_str, access_token=token
+            )
 
     @staticmethod
     def verify_signature(token: str, timestamp: str, nonce: str, signature: str) -> bool:
@@ -176,7 +184,7 @@ class WechatMPChannel(BaseChannel):
                 chat_id=sender,
                 content=content,
                 media=media_refs,
-                metadata={"wechat_from_user": sender}
+                metadata={"wechat_from_user": sender},
             )
         return "success"
 
@@ -200,13 +208,18 @@ class WechatMPChannel(BaseChannel):
                     data = (await client.get(url)).json()
                 token = str(data.get("access_token", ""))
                 expires = int(data.get("expires_in", 7200))
-                self._access_token_cache[key] = {"token": token, "expires_at": time.time() + max(0, expires - 200)}
+                self._access_token_cache[key] = {
+                    "token": token,
+                    "expires_at": time.time() + max(0, expires - 200),
+                }
                 return token
             except Exception as exc:
                 logger.error(f"Wechat token fetch failed: {exc}")
                 return ""
 
-    async def _send_customer_service_message(self, to_user: str, text: str, access_token: str) -> None:
+    async def _send_customer_service_message(
+        self, to_user: str, text: str, access_token: str
+    ) -> None:
         url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={access_token}"
         payload = {"touser": to_user, "msgtype": "text", "text": {"content": text}}
         try:
@@ -215,7 +228,9 @@ class WechatMPChannel(BaseChannel):
         except Exception as exc:
             logger.error(f"Wechat send failed: {exc}")
 
-    async def _send_customer_service_image(self, to_user: str, media_id: str, access_token: str) -> None:
+    async def _send_customer_service_image(
+        self, to_user: str, media_id: str, access_token: str
+    ) -> None:
         url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={access_token}"
         payload = {"touser": to_user, "msgtype": "image", "image": {"media_id": media_id}}
         try:

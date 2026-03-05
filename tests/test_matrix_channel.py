@@ -13,7 +13,9 @@ def test_matrix_channel_start_send_stop() -> None:
         ch = MatrixChannel(MatrixConfig(enabled=True), MessageBus())
         await ch.start()
         assert ch.is_running is True
-        await ch.send(OutboundMessage(channel="matrix", chat_id="!room:matrix.org", content="hello"))
+        await ch.send(
+            OutboundMessage(channel="matrix", chat_id="!room:matrix.org", content="hello")
+        )
         await ch.stop()
         assert ch.is_running is False
 
@@ -31,7 +33,9 @@ def test_matrix_channel_registered_by_manager(tmp_path) -> None:
 def test_matrix_channel_send_payload() -> None:
     async def _run() -> None:
         bus = MessageBus()
-        cfg = MatrixConfig(enabled=True, homeserver="https://matrix.example.org", access_token="tok")
+        cfg = MatrixConfig(
+            enabled=True, homeserver="https://matrix.example.org", access_token="tok"
+        )
         ch = MatrixChannel(cfg, bus)
         captured: dict[str, object] = {}
 
@@ -62,7 +66,9 @@ def test_matrix_channel_send_payload() -> None:
 def test_matrix_channel_send_rich_text_and_media_upload() -> None:
     async def _run() -> None:
         bus = MessageBus()
-        cfg = MatrixConfig(enabled=True, homeserver="https://matrix.example.org", access_token="tok")
+        cfg = MatrixConfig(
+            enabled=True, homeserver="https://matrix.example.org", access_token="tok"
+        )
         ch = MatrixChannel(cfg, bus)
         calls: list[tuple[str, dict]] = []
 
@@ -104,7 +110,9 @@ def test_matrix_channel_send_rich_text_and_media_upload() -> None:
 def test_matrix_channel_process_sync_response_to_bus() -> None:
     async def _run() -> None:
         bus = MessageBus()
-        cfg = MatrixConfig(enabled=True, allow_from=["@alice:matrix.org"], user_id="@bot:matrix.org")
+        cfg = MatrixConfig(
+            enabled=True, allow_from=["@alice:matrix.org"], user_id="@bot:matrix.org"
+        )
         ch = MatrixChannel(cfg, bus)
         data = {
             "next_batch": "s123",
@@ -147,7 +155,12 @@ def test_matrix_channel_process_sync_response_to_bus() -> None:
 def test_matrix_channel_process_media_message_download() -> None:
     async def _run() -> None:
         bus = MessageBus()
-        cfg = MatrixConfig(enabled=True, allow_from=["@alice:matrix.org"], user_id="@bot:matrix.org", media_download=True)
+        cfg = MatrixConfig(
+            enabled=True,
+            allow_from=["@alice:matrix.org"],
+            user_id="@bot:matrix.org",
+            media_download=True,
+        )
         ch = MatrixChannel(cfg, bus)
 
         async def _fake_download(mxc_url: str):
@@ -290,7 +303,9 @@ def test_matrix_channel_send_encrypted_payload_path() -> None:
 def test_matrix_channel_process_encrypted_event_to_bus() -> None:
     async def _run() -> None:
         bus = MessageBus()
-        cfg = MatrixConfig(enabled=True, allow_from=["@alice:matrix.org"], user_id="@bot:matrix.org")
+        cfg = MatrixConfig(
+            enabled=True, allow_from=["@alice:matrix.org"], user_id="@bot:matrix.org"
+        )
         ch = MatrixChannel(cfg, bus)
         data = {
             "next_batch": "s234",

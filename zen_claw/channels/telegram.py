@@ -16,13 +16,15 @@ from zen_claw.utils.formatting import markdown_to_telegram_html
 class TelegramChannel(BaseChannel):
     """
     Telegram channel using long polling.
-    
+
     Simple and reliable - no webhook/public IP needed.
     """
 
     name = "telegram"
 
-    def __init__(self, config: TelegramConfig, bus: MessageBus, groq_api_key: str = "", media_root=None):
+    def __init__(
+        self, config: TelegramConfig, bus: MessageBus, groq_api_key: str = "", media_root=None
+    ):
         super().__init__(config, bus, media_root=media_root)
         self.config: TelegramConfig = config
         self.groq_api_key = groq_api_key
@@ -46,14 +48,21 @@ class TelegramChannel(BaseChannel):
         # Add message handler for text, photos, voice, documents
         self._app.add_handler(
             MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VOICE | filters.AUDIO | filters.Document.ALL)
+                (
+                    filters.TEXT
+                    | filters.PHOTO
+                    | filters.VOICE
+                    | filters.AUDIO
+                    | filters.Document.ALL
+                )
                 & ~filters.COMMAND,
-                self._on_message
+                self._on_message,
             )
         )
 
         # Add /start command handler
         from telegram.ext import CommandHandler
+
         self._app.add_handler(CommandHandler("start", self._on_start))
 
         logger.info("Starting Telegram bot (polling mode)...")
@@ -69,7 +78,7 @@ class TelegramChannel(BaseChannel):
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
             allowed_updates=["message"],
-            drop_pending_updates=True  # Ignore old messages on startup
+            drop_pending_updates=True,  # Ignore old messages on startup
         )
 
         # Keep running until stopped
@@ -98,21 +107,14 @@ class TelegramChannel(BaseChannel):
             chat_id = int(msg.chat_id)
             # Convert markdown to Telegram HTML
             html_content = markdown_to_telegram_html(msg.content)
-            await self._app.bot.send_message(
-                chat_id=chat_id,
-                text=html_content,
-                parse_mode="HTML"
-            )
+            await self._app.bot.send_message(chat_id=chat_id, text=html_content, parse_mode="HTML")
         except ValueError:
             logger.error(f"Invalid chat_id: {msg.chat_id}")
         except Exception as e:
             # Fallback to plain text if HTML parsing fails
             logger.warning(f"HTML parse failed, falling back to plain text: {e}")
             try:
-                await self._app.bot.send_message(
-                    chat_id=int(msg.chat_id),
-                    text=msg.content
-                )
+                await self._app.bot.send_message(chat_id=int(msg.chat_id), text=msg.content)
             except Exception as e2:
                 logger.error(f"Error sending Telegram message: {e2}")
 
@@ -123,8 +125,7 @@ class TelegramChannel(BaseChannel):
 
         user = update.effective_user
         await update.message.reply_text(
-            f"👋 Hi {user.first_name}! I'm zen_claw.\n\n"
-            "Send me a message and I'll respond!"
+            f"👋 Hi {user.first_name}! I'm zen_claw.\n\nSend me a message and I'll respond!"
         )
 
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -176,7 +177,7 @@ class TelegramChannel(BaseChannel):
         if media_file and self._app:
             try:
                 file = await self._app.bot.get_file(media_file.file_id)
-                ext = self._get_extension(media_type, getattr(media_file, 'mime_type', None))
+                ext = self._get_extension(media_type, getattr(media_file, "mime_type", None))
 
                 # Save to workspace/media/
                 media_dir = self.media_root
@@ -185,13 +186,16 @@ class TelegramChannel(BaseChannel):
                 file_path = media_dir / f"{media_file.file_id[:16]}{ext}"
                 await file.download_to_drive(str(file_path))
                 media_paths.append(str(file_path))
-                media_ref = self._build_media_uri("telegram", media_type or "file", media_file.file_id)
+                media_ref = self._build_media_uri(
+                    "telegram", media_type or "file", media_file.file_id
+                )
                 media_refs.append(media_ref)
                 content_parts.append(f"[media_ref: {media_ref}]")
 
                 # Handle voice transcription
                 if media_type == "voice" or media_type == "audio":
                     from zen_claw.providers.transcription import GroqTranscriptionProvider
+
                     transcriber = GroqTranscriptionProvider(api_key=self.groq_api_key)
                     transcription = await transcriber.transcribe(file_path)
                     if transcription:
@@ -224,20 +228,22 @@ class TelegramChannel(BaseChannel):
                 "first_name": user.first_name,
                 "is_group": message.chat.type != "private",
                 "media_refs": media_refs,
-            }
+            },
         )
 
     def _get_extension(self, media_type: str, mime_type: str | None) -> str:
         """Get file extension based on media type."""
         if mime_type:
             ext_map = {
-                "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
-                "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
+                "image/jpeg": ".jpg",
+                "image/png": ".png",
+                "image/gif": ".gif",
+                "audio/ogg": ".ogg",
+                "audio/mpeg": ".mp3",
+                "audio/mp4": ".m4a",
             }
             if mime_type in ext_map:
                 return ext_map[mime_type]
 
         type_map = {"image": ".jpg", "voice": ".ogg", "audio": ".mp3", "file": ""}
         return type_map.get(media_type, "")
-
-

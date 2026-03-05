@@ -24,7 +24,9 @@ class TestWechatMPSignature:
         assert WechatMPChannel.verify_signature(self.TOKEN, ts, nonce, sig) is True
 
     def test_wrong_signature(self):
-        assert WechatMPChannel.verify_signature(self.TOKEN, "1609459200", "abc123", "wrong") is False
+        assert (
+            WechatMPChannel.verify_signature(self.TOKEN, "1609459200", "abc123", "wrong") is False
+        )
 
     def test_wrong_token(self):
         ts = "1609459200"
@@ -72,19 +74,32 @@ class TestDingTalkSignature:
     def test_verify_valid_signature(self):
         ts = int(time.time() * 1000)
         sign = self._compute_sign(self.SECRET, ts)
-        assert DingTalkChannel.verify_incoming_sign(str(ts), sign, self.SECRET, max_age_ms=60_000) is True
+        assert (
+            DingTalkChannel.verify_incoming_sign(str(ts), sign, self.SECRET, max_age_ms=60_000)
+            is True
+        )
 
     def test_reject_wrong_signature(self):
         ts = int(time.time() * 1000)
-        assert DingTalkChannel.verify_incoming_sign(str(ts), "BADSIGN==", self.SECRET, max_age_ms=60_000) is False
+        assert (
+            DingTalkChannel.verify_incoming_sign(
+                str(ts), "BADSIGN==", self.SECRET, max_age_ms=60_000
+            )
+            is False
+        )
 
     def test_reject_expired_timestamp(self):
         old_ts = int((time.time() - 7200) * 1000)
         sign = self._compute_sign(self.SECRET, old_ts)
-        assert DingTalkChannel.verify_incoming_sign(str(old_ts), sign, self.SECRET, max_age_ms=60_000) is False
+        assert (
+            DingTalkChannel.verify_incoming_sign(str(old_ts), sign, self.SECRET, max_age_ms=60_000)
+            is False
+        )
 
     def test_no_secret_allows_all(self):
-        assert DingTalkChannel.verify_incoming_sign("123", "anything", "", max_age_ms=60_000) is True
+        assert (
+            DingTalkChannel.verify_incoming_sign("123", "anything", "", max_age_ms=60_000) is True
+        )
 
     def test_outgoing_sign_format(self):
         sign = DingTalkChannel.compute_outgoing_sign(self.SECRET, 1700000000000)
@@ -96,7 +111,10 @@ class TestDingTalkSignature:
 
 class TestDingTalkOutgoingFormat:
     def test_markdown_payload_structure(self):
-        payload = {"msgtype": "markdown", "markdown": {"title": "Agent Reply", "text": "# 你好\n\n这是一个测试"}}
+        payload = {
+            "msgtype": "markdown",
+            "markdown": {"title": "Agent Reply", "text": "# 你好\n\n这是一个测试"},
+        }
         assert payload["msgtype"] == "markdown"
         assert "title" in payload["markdown"]
         assert "text" in payload["markdown"]

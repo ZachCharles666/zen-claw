@@ -13,7 +13,11 @@ def test_tools_network_config_parses_camel_case() -> None:
                 },
                 "search": {"mode": "proxy", "proxyUrl": "http://127.0.0.1:4499/v1/search"},
                 "fetch": {"mode": "proxy", "proxyUrl": "http://127.0.0.1:4499/v1/fetch"},
-                "browser": {"mode": "sidecar", "sidecarUrl": "http://127.0.0.1:4500/v1/browser", "maxSteps": 10},
+                "browser": {
+                    "mode": "sidecar",
+                    "sidecarUrl": "http://127.0.0.1:4500/v1/browser",
+                    "maxSteps": 10,
+                },
             }
         }
     }
@@ -57,5 +61,3 @@ def test_tools_network_is_canonical_by_default() -> None:
     assert config.tools.effective_search().mode == config.tools.network.search.mode
     assert config.tools.effective_fetch().mode == config.tools.network.fetch.mode
     assert config.tools.effective_browser().mode == config.tools.network.browser.mode
-
-

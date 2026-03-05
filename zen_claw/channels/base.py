@@ -14,7 +14,7 @@ from zen_claw.observability.trace import TraceContext
 class BaseChannel(ABC):
     """
     Abstract base class for chat channel implementations.
-    
+
     Each channel (Telegram, Discord, etc.) should implement this interface
     to integrate with the zen-claw message bus.
     """
@@ -26,7 +26,7 @@ class BaseChannel(ABC):
     def __init__(self, config: Any, bus: MessageBus, media_root: Path | None = None):
         """
         Initialize the channel.
-        
+
         Args:
             config: Channel-specific configuration.
             bus: The message bus for communication.
@@ -41,7 +41,7 @@ class BaseChannel(ABC):
     async def start(self) -> None:
         """
         Start the channel and begin listening for messages.
-        
+
         This should be a long-running async task that:
         1. Connects to the chat platform
         2. Listens for incoming messages
@@ -58,7 +58,7 @@ class BaseChannel(ABC):
     async def send(self, msg: OutboundMessage) -> None:
         """
         Send a message through this channel.
-        
+
         Args:
             msg: The message to send.
         """
@@ -67,10 +67,10 @@ class BaseChannel(ABC):
     def is_allowed(self, sender_id: str) -> bool:
         """
         Check if a sender is allowed to use this bot.
-        
+
         Args:
             sender_id: The sender's identifier.
-        
+
         Returns:
             True if allowed, False otherwise.
         """
@@ -85,7 +85,9 @@ class BaseChannel(ABC):
         if admins or users:
             return any(tok in admins or tok in users for tok in sender_tokens)
 
-        allow_list = {str(v).strip() for v in getattr(self.config, "allow_from", []) if str(v).strip()}
+        allow_list = {
+            str(v).strip() for v in getattr(self.config, "allow_from", []) if str(v).strip()
+        }
         if not allow_list:
             logger.warning(
                 "Channel {}: no admins/users/allow_from configured — "
@@ -114,13 +116,13 @@ class BaseChannel(ABC):
         chat_id: str,
         content: str,
         media: list[str] | None = None,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """
         Handle an incoming message from the chat platform.
-        
+
         This method checks permissions and forwards to the bus.
-        
+
         Args:
             sender_id: The sender's identifier.
             chat_id: The chat/channel identifier.
@@ -131,6 +133,7 @@ class BaseChannel(ABC):
         trace_id, normalized_meta = TraceContext.ensure_trace_id(metadata)
         role = self.get_role(sender_id)
         normalized_meta["channel_role"] = role
+        normalized_meta["identity_verified"] = True
 
         if not self.is_allowed(sender_id):
             logger.warning(
@@ -145,7 +148,9 @@ class BaseChannel(ABC):
             sender_id=str(sender_id),
             chat_id=str(chat_id),
             content=content,
-            media=self._sanitize_media(self._merge_media_with_metadata_refs(media, normalized_meta)),
+            media=self._sanitize_media(
+                self._merge_media_with_metadata_refs(media, normalized_meta)
+            ),
             metadata=normalized_meta,
         )
 
@@ -208,5 +213,3 @@ class BaseChannel(ABC):
         mtype = str(media_type or "file").strip().lower()
         mid = str(media_id or "").strip()
         return f"media://{src}/{mtype}/{mid}"
-
-

@@ -56,7 +56,9 @@ def test_invoke_no_key_returns_401(client):
 
 
 def test_invoke_with_key(client, valid_key):
-    resp = client.post("/api/v1/agent/invoke", json={"message": "test"}, headers={"X-API-Key": valid_key})
+    resp = client.post(
+        "/api/v1/agent/invoke", json={"message": "test"}, headers={"X-API-Key": valid_key}
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert "response" in body
@@ -103,13 +105,17 @@ def test_chat_ws_uses_webchat_runtime_when_available(client, monkeypatch):
 
         async def pop_response(self, _session_id: str, timeout_sec: float = 0.0):
             _ = timeout_sec
-            return OutboundMessage(channel="webchat", chat_id="s", content=f"bus:{self.last_content}")
+            return OutboundMessage(
+                channel="webchat", chat_id="s", content=f"bus:{self.last_content}"
+            )
 
     class _Cfg:
         class _Channels:
             class _Webchat:
                 token = ""
+
             webchat = _Webchat()
+
         channels = _Channels()
 
     class _FakeRuntime:

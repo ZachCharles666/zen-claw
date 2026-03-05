@@ -88,7 +88,12 @@ def test_config_doctor_warns_when_browser_sidecar_allowlist_missing(tmp_path: Pa
         json.dumps(
             {
                 "agents": {"defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"}},
-                "providers": {"openrouter": {"apiKey": "sk-or-test", "apiBase": "https://openrouter.ai/api/v1"}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
                 "tools": {"network": {"browser": {"mode": "sidecar"}}},
             }
         ),
@@ -113,7 +118,12 @@ def test_config_doctor_no_browser_allowlist_warning_when_env_set(tmp_path: Path)
         json.dumps(
             {
                 "agents": {"defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"}},
-                "providers": {"openrouter": {"apiKey": "sk-or-test", "apiBase": "https://openrouter.ai/api/v1"}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
                 "tools": {"network": {"browser": {"mode": "sidecar"}}},
             }
         ),
@@ -138,8 +148,20 @@ def test_config_doctor_fails_when_webhook_trigger_enabled_without_auth_path(tmp_
         json.dumps(
             {
                 "agents": {"defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"}},
-                "providers": {"openrouter": {"apiKey": "sk-or-test", "apiBase": "https://openrouter.ai/api/v1"}},
-                "channels": {"webhookTrigger": {"enabled": True, "secret": "", "apiKey": "", "ipAllowlist": []}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
+                "channels": {
+                    "webhookTrigger": {
+                        "enabled": True,
+                        "secret": "",
+                        "apiKey": "",
+                        "ipAllowlist": [],
+                    }
+                },
             }
         ),
         encoding="utf-8",
@@ -158,7 +180,12 @@ def test_config_doctor_fails_when_matrix_enabled_without_any_auth_path(tmp_path:
         json.dumps(
             {
                 "agents": {"defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"}},
-                "providers": {"openrouter": {"apiKey": "sk-or-test", "apiBase": "https://openrouter.ai/api/v1"}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
                 "channels": {
                     "matrix": {
                         "enabled": True,
@@ -188,7 +215,12 @@ def test_config_doctor_warns_empty_agent_profile_in_strict_mode(tmp_path: Path) 
         json.dumps(
             {
                 "agents": {"defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"}},
-                "providers": {"openrouter": {"apiKey": "sk-or-test", "apiBase": "https://openrouter.ai/api/v1"}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
                 "channels": {"webchat": {"agentProfile": ""}},
             }
         ),

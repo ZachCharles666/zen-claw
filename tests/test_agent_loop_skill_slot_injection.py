@@ -41,9 +41,7 @@ def _write_skill(root: Path, name: str, body: str) -> None:
         f"name: {name}\n"
         "description: test skill\n"
         f"metadata: '{json.dumps(meta)}'\n"
-        "---\n\n"
-        + body
-        + "\n",
+        "---\n\n" + body + "\n",
         encoding="utf-8",
     )
 
@@ -59,7 +57,11 @@ def test_agent_loop_injects_requested_skill_into_system_prompt(tmp_path: Path, m
             self.messages.append({"role": role, "content": content, **kwargs})
 
         def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-            recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+            recent = (
+                self.messages[-max_messages:]
+                if len(self.messages) > max_messages
+                else self.messages
+            )
             return [{"role": m["role"], "content": m["content"]} for m in recent]
 
     class _InMemorySessionManager:
@@ -110,7 +112,11 @@ def test_production_hardening_forces_skill_permissions_enforce(tmp_path: Path, m
             self.messages.append({"role": role, "content": content, **kwargs})
 
         def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-            recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+            recent = (
+                self.messages[-max_messages:]
+                if len(self.messages) > max_messages
+                else self.messages
+            )
             return [{"role": m["role"], "content": m["content"]} for m in recent]
 
     class _InMemorySessionManager:
@@ -131,7 +137,9 @@ def test_production_hardening_forces_skill_permissions_enforce(tmp_path: Path, m
     # Create a skill with manifest permissions so enforce can be applied safely.
     skill_dir = tmp_path / "skills" / "foo"
     skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_dir.joinpath("SKILL.md").write_text("---\nname: foo\ndescription: x\n---\n\nx\n", encoding="utf-8")
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: foo\ndescription: x\n---\n\nx\n", encoding="utf-8"
+    )
     skill_dir.joinpath("manifest.json").write_text(
         json.dumps(
             {"name": "foo", "version": "1.0.0", "description": "x", "permissions": ["read_file"]},
@@ -157,7 +165,9 @@ def test_production_hardening_forces_skill_permissions_enforce(tmp_path: Path, m
     assert loop.skill_permissions_mode == "enforce"
 
 
-def test_untrusted_skill_isolation_denies_read_file_even_if_permitted(tmp_path: Path, monkeypatch) -> None:
+def test_untrusted_skill_isolation_denies_read_file_even_if_permitted(
+    tmp_path: Path, monkeypatch
+) -> None:
     @dataclass
     class _Session:
         key: str
@@ -168,7 +178,11 @@ def test_untrusted_skill_isolation_denies_read_file_even_if_permitted(tmp_path: 
             self.messages.append({"role": role, "content": content, **kwargs})
 
         def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-            recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+            recent = (
+                self.messages[-max_messages:]
+                if len(self.messages) > max_messages
+                else self.messages
+            )
             return [{"role": m["role"], "content": m["content"]} for m in recent]
 
     class _InMemorySessionManager:
@@ -188,7 +202,9 @@ def test_untrusted_skill_isolation_denies_read_file_even_if_permitted(tmp_path: 
 
     skill_dir = tmp_path / "skills" / "unsafe"
     skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_dir.joinpath("SKILL.md").write_text("---\nname: unsafe\ndescription: x\n---\n\nx\n", encoding="utf-8")
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: unsafe\ndescription: x\n---\n\nx\n", encoding="utf-8"
+    )
     skill_dir.joinpath("manifest.json").write_text(
         json.dumps(
             {
@@ -227,7 +243,9 @@ def test_untrusted_skill_isolation_denies_read_file_even_if_permitted(tmp_path: 
     assert result.meta.get("policy_scope") == "skill_untrusted"
 
 
-def test_untrusted_skill_isolation_enforce_requires_sidecar_and_proxy(tmp_path: Path, monkeypatch) -> None:
+def test_untrusted_skill_isolation_enforce_requires_sidecar_and_proxy(
+    tmp_path: Path, monkeypatch
+) -> None:
     @dataclass
     class _Session:
         key: str
@@ -238,7 +256,11 @@ def test_untrusted_skill_isolation_enforce_requires_sidecar_and_proxy(tmp_path: 
             self.messages.append({"role": role, "content": content, **kwargs})
 
         def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-            recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+            recent = (
+                self.messages[-max_messages:]
+                if len(self.messages) > max_messages
+                else self.messages
+            )
             return [{"role": m["role"], "content": m["content"]} for m in recent]
 
     class _InMemorySessionManager:
@@ -258,7 +280,9 @@ def test_untrusted_skill_isolation_enforce_requires_sidecar_and_proxy(tmp_path: 
 
     skill_dir = tmp_path / "skills" / "unsafe"
     skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_dir.joinpath("SKILL.md").write_text("---\nname: unsafe\ndescription: x\n---\n\nx\n", encoding="utf-8")
+    skill_dir.joinpath("SKILL.md").write_text(
+        "---\nname: unsafe\ndescription: x\n---\n\nx\n", encoding="utf-8"
+    )
     skill_dir.joinpath("manifest.json").write_text(
         json.dumps(
             {
@@ -288,5 +312,3 @@ def test_untrusted_skill_isolation_enforce_requires_sidecar_and_proxy(tmp_path: 
             web_search_config=WebSearchConfig(mode="local"),
             web_fetch_config=WebFetchConfig(mode="local"),
         )
-
-

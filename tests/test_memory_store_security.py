@@ -53,5 +53,3 @@ def test_ensure_safe_write_target_rejects_outside_parent(tmp_path: Path) -> None
         assert False, "expected PermissionError"
     except PermissionError:
         pass
-
-

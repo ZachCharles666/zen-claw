@@ -63,5 +63,3 @@ def test_sqlite_mode_falls_back_to_keyword_on_runtime_error(tmp_path: Path, monk
     )
     ctx = ContextBuilder(tmp_path, memory_recall_mode="sqlite")
     assert isinstance(ctx.memory.recall_strategy, KeywordRecallStrategy)
-
-

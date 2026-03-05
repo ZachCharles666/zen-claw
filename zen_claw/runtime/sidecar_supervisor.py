@@ -264,9 +264,15 @@ class SidecarSupervisor:
         self.go_executable = go_executable
         self.monitor_interval_sec = monitor_interval_sec
         self._specs = _build_service_specs(config, self.workspace)
-        self._fail_window_sec = max(1, int(getattr(config.tools, "sidecar_supervisor_fail_window_sec", 120)))
-        self._fail_threshold = max(1, int(getattr(config.tools, "sidecar_supervisor_fail_threshold", 5)))
-        self._circuit_open_sec = max(1, int(getattr(config.tools, "sidecar_supervisor_circuit_open_sec", 120)))
+        self._fail_window_sec = max(
+            1, int(getattr(config.tools, "sidecar_supervisor_fail_window_sec", 120))
+        )
+        self._fail_threshold = max(
+            1, int(getattr(config.tools, "sidecar_supervisor_fail_threshold", 5))
+        )
+        self._circuit_open_sec = max(
+            1, int(getattr(config.tools, "sidecar_supervisor_circuit_open_sec", 120))
+        )
         self._procs: dict[str, subprocess.Popen[str]] = {}
         self._started_at: dict[str, int] = {}
         self._monitor_task: asyncio.Task | None = None
@@ -340,7 +346,9 @@ class SidecarSupervisor:
             )
             return
         if _check_health(spec.health_url):
-            self._write_state(spec.name, managed=False, pid=None, started_at_unix=None, status="external_healthy")
+            self._write_state(
+                spec.name, managed=False, pid=None, started_at_unix=None, status="external_healthy"
+            )
             return
 
         if proc is not None and proc.poll() is None:
@@ -349,14 +357,22 @@ class SidecarSupervisor:
         launch_cmd = self._resolve_launch_command(spec)
         if launch_cmd is None:
             self._record_start_failure(spec.name)
-            self._write_state(spec.name, managed=True, pid=None, started_at_unix=None, status="launcher_not_found")
+            self._write_state(
+                spec.name, managed=True, pid=None, started_at_unix=None, status="launcher_not_found"
+            )
             logger.warning(f"sidecar supervisor cannot start {spec.name}: launcher not found")
             return
 
         cwd = Path.cwd() / spec.cwd
         if not cwd.exists():
             self._record_start_failure(spec.name)
-            self._write_state(spec.name, managed=True, pid=None, started_at_unix=None, status="binary_path_missing")
+            self._write_state(
+                spec.name,
+                managed=True,
+                pid=None,
+                started_at_unix=None,
+                status="binary_path_missing",
+            )
             logger.warning(f"sidecar supervisor cannot start {spec.name}: missing path {cwd}")
             return
 
@@ -402,12 +418,16 @@ class SidecarSupervisor:
                 started_at_unix=self._started_at[spec.name],
                 status="running",
             )
-            logger.info(f"sidecar supervisor started {spec.name} pid={proc_new.pid} bind={spec.bind_address}")
+            logger.info(
+                f"sidecar supervisor started {spec.name} pid={proc_new.pid} bind={spec.bind_address}"
+            )
             return
 
         self._terminate_process(proc_new)
         self._record_start_failure(spec.name)
-        self._write_state(spec.name, managed=True, pid=None, started_at_unix=None, status="start_failed")
+        self._write_state(
+            spec.name, managed=True, pid=None, started_at_unix=None, status="start_failed"
+        )
         logger.warning(f"sidecar supervisor failed to start {spec.name}")
 
     def _state_path(self, name: str) -> Path:

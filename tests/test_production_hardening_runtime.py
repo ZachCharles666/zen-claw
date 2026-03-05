@@ -40,7 +40,9 @@ def _build_strict_config() -> Config:
     return Config.model_validate(convert_keys(raw))
 
 
-def test_production_hardening_enforced_in_agent_runtime_tool_instances(tmp_path: Path, monkeypatch) -> None:
+def test_production_hardening_enforced_in_agent_runtime_tool_instances(
+    tmp_path: Path, monkeypatch
+) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     cfg = _build_strict_config()
@@ -69,5 +71,3 @@ def test_production_hardening_enforced_in_agent_runtime_tool_instances(tmp_path:
     assert fetch_tool.proxy_fallback_to_local is False
 
     assert cfg.tools.policy.allow_subagent_sensitive_tools is False
-
-

@@ -25,8 +25,8 @@ def test_collect_sidecar_status_includes_exec_pid_and_uptime(tmp_path: Path) -> 
     state_file.write_text(
         (
             "{"
-            f"\"name\":\"sec-execd\",\"managed\":true,\"pid\":{os.getpid()},"
-            f"\"started_at_unix\":{int(time.time()) - 10},\"status\":\"running\""
+            f'"name":"sec-execd","managed":true,"pid":{os.getpid()},'
+            f'"started_at_unix":{int(time.time()) - 10},"status":"running"'
             "}"
         ),
         encoding="utf-8",
@@ -49,8 +49,8 @@ def test_collect_sidecar_status_includes_browser_sidecar(tmp_path: Path) -> None
     state_file.write_text(
         (
             "{"
-            f"\"name\":\"browser-sidecar\",\"managed\":true,\"pid\":{os.getpid()},"
-            f"\"started_at_unix\":{int(time.time()) - 5},\"status\":\"running\""
+            f'"name":"browser-sidecar","managed":true,"pid":{os.getpid()},'
+            f'"started_at_unix":{int(time.time()) - 5},"status":"running"'
             "}"
         ),
         encoding="utf-8",
@@ -64,13 +64,15 @@ def test_collect_sidecar_status_includes_browser_sidecar(tmp_path: Path) -> None
     assert row["status"] == "running"
 
 
-def test_collect_sidecar_status_preserves_backoff_or_circuit_state(tmp_path: Path, monkeypatch) -> None:
+def test_collect_sidecar_status_preserves_backoff_or_circuit_state(
+    tmp_path: Path, monkeypatch
+) -> None:
     cfg = Config()
     cfg.tools.network.exec.mode = "sidecar"
 
     state_file = tmp_path / "sec-execd.json"
     state_file.write_text(
-        "{\"name\":\"sec-execd\",\"managed\":true,\"pid\":null,\"started_at_unix\":null,\"status\":\"circuit_open_42s\"}",
+        '{"name":"sec-execd","managed":true,"pid":null,"started_at_unix":null,"status":"circuit_open_42s"}',
         encoding="utf-8",
     )
 
@@ -157,7 +159,9 @@ def test_sidecar_supervisor_records_exponential_backoff(tmp_path: Path, monkeypa
     assert second == (t + 1) + 2
 
 
-def test_sidecar_supervisor_opens_circuit_after_failure_threshold(tmp_path: Path, monkeypatch) -> None:
+def test_sidecar_supervisor_opens_circuit_after_failure_threshold(
+    tmp_path: Path, monkeypatch
+) -> None:
     cfg = Config()
     cfg.agents.defaults.workspace = str(tmp_path / "ws")
     cfg.tools.network.exec.mode = "sidecar"

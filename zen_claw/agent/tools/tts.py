@@ -47,7 +47,9 @@ class TextToSpeechTool(Tool):
         try:
             resolved.relative_to(self.workspace)
         except ValueError as exc:
-            raise ValueError(f"Output path '{output_filename}' is outside the workspace boundary.") from exc
+            raise ValueError(
+                f"Output path '{output_filename}' is outside the workspace boundary."
+            ) from exc
         return resolved
 
     async def execute(
@@ -59,7 +61,9 @@ class TextToSpeechTool(Tool):
         **kwargs: Any,
     ) -> ToolResult:
         if not text or not text.strip():
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "text parameter is required and cannot be empty")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, "text parameter is required and cannot be empty"
+            )
         if len(text) > 5000:
             text = text[:5000]
         try:

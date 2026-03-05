@@ -111,5 +111,3 @@ async def test_registry_blocks_all_tools_when_kill_switch_enabled() -> None:
     assert result.error.code == "tool_kill_switch_enabled"
     assert result.meta.get("policy_scope") == "global_kill_switch"
     assert "incident" in result.error.message
-
-

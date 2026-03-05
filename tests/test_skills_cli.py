@@ -206,7 +206,9 @@ def test_skills_cli_verify_integrity_detects_mismatch(tmp_path: Path, monkeypatc
     assert "integrity mismatch: SKILL.md" in out.output
 
 
-def test_skills_cli_verify_integrity_require_mode_fails_when_missing(tmp_path: Path, monkeypatch) -> None:
+def test_skills_cli_verify_integrity_require_mode_fails_when_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
     runner = CliRunner()
     workspace = tmp_path / "ws"
     builtin = tmp_path / "builtin"
@@ -226,7 +228,9 @@ def test_skills_cli_verify_integrity_require_mode_fails_when_missing(tmp_path: P
     )
     _patch_workspace(monkeypatch, workspace, builtin)
 
-    out = runner.invoke(app, ["skills", "verify-integrity", "--name", "alpha", "--require-integrity"])
+    out = runner.invoke(
+        app, ["skills", "verify-integrity", "--name", "alpha", "--require-integrity"]
+    )
     assert out.exit_code == 1
     assert "integrity missing in manifest.json" in out.output
 
@@ -532,5 +536,3 @@ def test_skills_cli_install_dry_run(tmp_path: Path, monkeypatch) -> None:
     assert out.exit_code == 0
     assert "dry-run ok" in out.output
     assert not (workspace / "skills" / "alpha").exists()
-
-

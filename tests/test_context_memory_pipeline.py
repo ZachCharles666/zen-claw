@@ -32,8 +32,6 @@ def test_memory_extractor_parse_json_and_fallback() -> None:
     assert "concise" in parsed.content
 
     wrapped = extractor.parse(
-        "Result:\n```json\n{\"should_write\": false, \"memory_type\": \"daily\", \"content\": \"\"}\n```"
+        'Result:\n```json\n{"should_write": false, "memory_type": "daily", "content": ""}\n```'
     )
     assert wrapped.should_write is False
-
-

@@ -33,7 +33,9 @@ class AgentSignTool(Tool):
 
     async def execute(self, message: str, **kwargs: Any) -> ToolResult:
         if not str(message or "").strip():
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "message must not be empty", code="sign_empty_message")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, "message must not be empty", code="sign_empty_message"
+            )
         try:
             identity = _get_identity(self._workspace, self._key_dir_override)
             sig = identity.sign(str(message).encode("utf-8"))
@@ -41,7 +43,9 @@ class AgentSignTool(Tool):
         except AgentIdentityError as exc:
             return ToolResult.failure(ToolErrorKind.RUNTIME, str(exc), code="identity_error")
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"Signing failed: {exc}", code="sign_failed")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"Signing failed: {exc}", code="sign_failed"
+            )
         return ToolResult.success(
             json.dumps(
                 {"message": message, "signature": sig, "public_key": pub, "algorithm": "ed25519"},
@@ -67,9 +71,14 @@ class AgentPublicKeyTool(Tool):
         except AgentIdentityError as exc:
             return ToolResult.failure(ToolErrorKind.RUNTIME, str(exc), code="identity_error")
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"Failed to retrieve public key: {exc}", code="pubkey_failed")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"Failed to retrieve public key: {exc}", code="pubkey_failed"
+            )
         return ToolResult.success(
-            json.dumps({"public_key": pub, "algorithm": "ed25519", "created_at": created_at}, ensure_ascii=False)
+            json.dumps(
+                {"public_key": pub, "algorithm": "ed25519", "created_at": created_at},
+                ensure_ascii=False,
+            )
         )
 
 
@@ -90,10 +99,13 @@ class AgentVerifyTool(Tool):
         self._workspace = workspace
         self._key_dir_override = key_dir_override
 
-    async def execute(self, public_key: str, message: str, signature: str, **kwargs: Any) -> ToolResult:
+    async def execute(
+        self, public_key: str, message: str, signature: str, **kwargs: Any
+    ) -> ToolResult:
         try:
             valid = AgentIdentity.verify(public_key, str(message).encode("utf-8"), signature)
             return ToolResult.success(json.dumps({"valid": valid}, ensure_ascii=False))
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"Verification error: {exc}", code="verify_failed")
-
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"Verification error: {exc}", code="verify_failed"
+            )

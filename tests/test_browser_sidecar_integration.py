@@ -70,7 +70,9 @@ def _is_env_sidecar_unhealthy(code: str) -> bool:
     return str(code or "") in {"browser_sidecar_unhealthy", "browser_sidecar_unreachable"}
 
 
-def _start_sidecar(*, allow_domains: str = "127.0.0.1,localhost", timeout_sec: int | None = None) -> tuple[subprocess.Popen[str], str]:
+def _start_sidecar(
+    *, allow_domains: str = "127.0.0.1,localhost", timeout_sec: int | None = None
+) -> tuple[subprocess.Popen[str], str]:
     sidecar_dir = Path("browser/sidecar")
     node = "node.exe" if os.name == "nt" else "node"
     sidecar_port = _find_free_port()
@@ -162,7 +164,9 @@ async def test_browser_sidecar_e2e_open_extract_screenshot(tmp_path: Path) -> No
             sidecar_healthcheck=True,
             allowed_domains=["127.0.0.1", "localhost"],
         )
-        typed = await type_tool.execute(sessionId=session_id, selector="#q", text="zen-claw", clear=True)
+        typed = await type_tool.execute(
+            sessionId=session_id, selector="#q", text="zen-claw", clear=True
+        )
         assert typed.ok is True
 
         click_tool = BrowserClickTool(
@@ -247,9 +251,17 @@ async def test_browser_sidecar_e2e_open_timeout() -> None:
             timeout_sec=8,
         )
         timeout_result = await open_tool.execute(url=f"http://127.0.0.1:{page_port}/slow")
-        if not timeout_result.ok and timeout_result.error and _is_env_sidecar_unhealthy(timeout_result.error.code):
+        if (
+            not timeout_result.ok
+            and timeout_result.error
+            and _is_env_sidecar_unhealthy(timeout_result.error.code)
+        ):
             pytest.skip("browser sidecar health is unstable in current environment")
-        if not timeout_result.ok and timeout_result.error and _is_env_browser_launch_blocked(timeout_result.error.message):
+        if (
+            not timeout_result.ok
+            and timeout_result.error
+            and _is_env_browser_launch_blocked(timeout_result.error.message)
+        ):
             pytest.skip("browser launch blocked by environment permissions")
         assert timeout_result.ok is False
         assert timeout_result.error is not None

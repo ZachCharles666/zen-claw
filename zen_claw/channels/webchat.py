@@ -22,7 +22,9 @@ class WebChatChannel(BaseChannel):
     def __init__(self, config: WebChatConfig, bus: MessageBus, media_root=None):
         super().__init__(config, bus, media_root=media_root)
         self.config: WebChatConfig = config
-        self._session_outbound: dict[str, asyncio.Queue[OutboundMessage]] = defaultdict(asyncio.Queue)
+        self._session_outbound: dict[str, asyncio.Queue[OutboundMessage]] = defaultdict(
+            asyncio.Queue
+        )
         self._transcriber = GroqTranscriptionProvider(api_key=os.environ.get("GROQ_API_KEY"))
 
     async def start(self) -> None:
@@ -72,7 +74,9 @@ class WebChatChannel(BaseChannel):
                 return text
         return ""
 
-    async def pop_response(self, session_id: str, timeout_sec: float = 0.0) -> OutboundMessage | None:
+    async def pop_response(
+        self, session_id: str, timeout_sec: float = 0.0
+    ) -> OutboundMessage | None:
         """Pop next outbound message for a webchat session."""
         queue = self._session_outbound[str(session_id)]
         if timeout_sec <= 0:

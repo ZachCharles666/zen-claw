@@ -16,16 +16,17 @@ def get_config_path() -> Path:
 def get_data_dir() -> Path:
     """Get the zen-claw data directory."""
     from zen_claw.utils.helpers import get_data_path
+
     return get_data_path()
 
 
 def load_config(config_path: Path | None = None) -> Config:
     """
     Load configuration from file or create default.
-    
+
     Args:
         config_path: Optional path to config file. Uses default if not provided.
-    
+
     Returns:
         Loaded configuration object.
     """
@@ -47,7 +48,7 @@ def load_config(config_path: Path | None = None) -> Config:
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """
     Save configuration to file.
-    
+
     Args:
         config: Configuration to save.
         config_path: Optional path to save to. Uses default if not provided.
@@ -56,7 +57,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     # Convert to camelCase format; mode='json' serialises SecretStr as plain strings
-    data = config.model_dump(mode='json')
+    data = config.model_dump(mode="json")
     data = convert_to_camel(data)
 
     with open(path, "w") as f:
@@ -192,5 +193,3 @@ def snake_to_camel(name: str) -> str:
     """Convert snake_case to camelCase."""
     components = name.split("_")
     return components[0] + "".join(x.title() for x in components[1:])
-
-

@@ -16,7 +16,7 @@ from zen_claw.utils.formatting import strip_markdown
 class WhatsAppChannel(BaseChannel):
     """
     WhatsApp channel that connects to a Node.js bridge.
-    
+
     The bridge uses @whiskeysockets/baileys to handle the WhatsApp Web protocol.
     Communication between Python and Node.js is via WebSocket.
     """
@@ -81,11 +81,7 @@ class WhatsAppChannel(BaseChannel):
 
         try:
             content = strip_markdown(msg.content)
-            payload = {
-                "type": "send",
-                "to": msg.chat_id,
-                "text": content
-            }
+            payload = {"type": "send", "to": msg.chat_id, "text": content}
             await self._ws.send(json.dumps(payload))
         except Exception as e:
             logger.error(f"Error sending WhatsApp message: {e}")
@@ -115,12 +111,16 @@ class WhatsAppChannel(BaseChannel):
 
             # Handle voice transcription if it's a voice message
             if content == "[Voice Message]":
-                logger.info(f"Voice message received from {sender_id}, but direct download from bridge is not yet supported.")
+                logger.info(
+                    f"Voice message received from {sender_id}, but direct download from bridge is not yet supported."
+                )
                 content = "[Voice Message: Transcription not available for WhatsApp yet]"
 
             media_refs = self._extract_media_refs(data)
             if media_refs:
-                content = (content + "\n" if content else "") + "\n".join(f"[media_ref: {r}]" for r in media_refs)
+                content = (content + "\n" if content else "") + "\n".join(
+                    f"[media_ref: {r}]" for r in media_refs
+                )
 
             await self._handle_message(
                 sender_id=sender_id,
@@ -130,8 +130,8 @@ class WhatsAppChannel(BaseChannel):
                 metadata={
                     "message_id": data.get("id"),
                     "timestamp": data.get("timestamp"),
-                    "is_group": data.get("isGroup", False)
-                }
+                    "is_group": data.get("isGroup", False),
+                },
             )
 
         elif msg_type == "status":
@@ -169,5 +169,3 @@ class WhatsAppChannel(BaseChannel):
         for r in refs[:8]:
             out.append(self._build_media_uri("whatsapp", media_type, r))
         return out
-
-

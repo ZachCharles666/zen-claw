@@ -100,5 +100,3 @@ def test_channel_rbac_matches_compound_sender_tokens() -> None:
     ch = DummyChannel(config, MessageBus())
     assert ch.is_allowed("123|alice") is True
     assert ch.get_role("123|alice") == "admin"
-
-

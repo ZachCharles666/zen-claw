@@ -9,6 +9,7 @@ from zen_claw.agent.memory_recall import RagRecallStrategy
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _make_strategy(tmp_path: Path, notebook_id: str = "default") -> RagRecallStrategy:
     return RagRecallStrategy(data_dir=tmp_path, notebook_id=notebook_id)
 
@@ -22,6 +23,7 @@ def _make_fake_result(content: str, rrf_score: float = 0.0, score: float = 0.0):
 
 
 # ── tests: initialization ─────────────────────────────────────────────────────
+
 
 def test_rag_strategy_initialises_without_chromadb(tmp_path: Path):
     """Strategy should construct even when chromadb is not installed."""
@@ -45,6 +47,7 @@ def test_rag_strategy_fallback_when_retriever_unavailable(tmp_path: Path):
 
 
 # ── tests: bulk_score with mocked retriever ───────────────────────────────────
+
 
 def test_bulk_score_returns_rag_results_for_matching_candidates(tmp_path: Path):
     strat = _make_strategy(tmp_path)
@@ -115,6 +118,7 @@ def test_score_single_returns_zero_when_no_match(tmp_path: Path):
 
 
 # ── tests: ContextBuilder integration ────────────────────────────────────────
+
 
 def test_context_builder_rag_mode_falls_back_gracefully(tmp_path: Path):
     """ContextBuilder with memory_recall_mode='rag' should not raise."""

@@ -34,7 +34,11 @@ def test_agent_cli_media_option_injects_refs_into_user_content(tmp_path: Path, m
             self.messages.append({"role": role, "content": content, **kwargs})
 
         def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-            recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+            recent = (
+                self.messages[-max_messages:]
+                if len(self.messages) > max_messages
+                else self.messages
+            )
             return [{"role": m["role"], "content": m["content"]} for m in recent]
 
     class _InMemorySessionManager:
@@ -62,7 +66,9 @@ def test_agent_cli_media_option_injects_refs_into_user_content(tmp_path: Path, m
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.get_always_skills", lambda self: [])
     monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.build_skills_summary", lambda self: "")
-    monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.load_skills_for_context", lambda self, names: "")
+    monkeypatch.setattr(
+        "zen_claw.agent.skills.SkillsLoader.load_skills_for_context", lambda self, names: ""
+    )
 
     out = CliRunner().invoke(
         app,
@@ -78,5 +84,3 @@ def test_agent_cli_media_option_injects_refs_into_user_content(tmp_path: Path, m
     serialized = json.dumps(content, ensure_ascii=False)
     assert "Attached media references" in serialized
     assert "feishu://image/img_key_123" in serialized
-
-

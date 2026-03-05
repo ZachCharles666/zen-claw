@@ -48,7 +48,9 @@ def _prepare_data_dir(data_dir: Path) -> None:
     (data_dir / "channels").mkdir(parents=True, exist_ok=True)
     (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
     (data_dir / "cron" / "jobs.json").write_text('{"jobs":[]}', encoding="utf-8")
-    (data_dir / "channels" / "rate_limit_stats.json").write_text('{"channels":{}}', encoding="utf-8")
+    (data_dir / "channels" / "rate_limit_stats.json").write_text(
+        '{"channels":{}}', encoding="utf-8"
+    )
     (data_dir / "nodes" / "state.json").write_text(
         '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
         encoding="utf-8",
@@ -76,7 +78,9 @@ def test_build_dashboard_snapshot_structure(monkeypatch, tmp_path: Path) -> None
     data_dir = tmp_path / "data"
     _prepare_data_dir(data_dir)
     monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
-    monkeypatch.setattr("zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: [])
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
     snap = build_dashboard_snapshot(Config())
     assert "agent" in snap
     assert "cron" in snap

@@ -94,7 +94,9 @@ def test_soft_rollback_outside_grace_window(tmp_path: Path) -> None:
 def test_gc_expired_routes(tmp_path: Path) -> None:
     store = AgentRouteStore(tmp_path / "routes.db")
     now = 1_700_000_200_000
-    store.set_route(channel="signal", chat_id="c1", user_id="u1", agent_id="a1", at_ms=now - 100_000)
+    store.set_route(
+        channel="signal", chat_id="c1", user_id="u1", agent_id="a1", at_ms=now - 100_000
+    )
     store.set_route(channel="signal", chat_id="c1", user_id="u2", agent_id="a2", at_ms=now - 1_000)
     deleted = store.gc_expired_routes(ttl_ms=10_000, now_ms=now)
     assert deleted == 1
@@ -110,5 +112,7 @@ def test_channel_manager_route_bind_resolve_and_rollback(tmp_path: Path) -> None
     assert bound == "agent-a"
     assert mgr.resolve_agent(channel="webchat", chat_id="s1", user_id="u1") == "agent-a"
     mgr.bind_agent(channel="webchat", chat_id="s1", user_id="u1", agent_id="agent-b")
-    rolled = mgr.mark_agent_error(channel="webchat", chat_id="s1", user_id="u1", current_agent_id="agent-b")
+    rolled = mgr.mark_agent_error(
+        channel="webchat", chat_id="s1", user_id="u1", current_agent_id="agent-b"
+    )
     assert rolled == "agent-a"

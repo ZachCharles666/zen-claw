@@ -35,7 +35,9 @@ class HybridRetriever:
     async def add_documents(self, docs: list[Document]) -> int:
         chunks: list[dict[str, Any]] = []
         for doc in docs:
-            for chunk in self._chunker.chunk_with_metadata(doc.content, source=doc.source, page=doc.page):
+            for chunk in self._chunker.chunk_with_metadata(
+                doc.content, source=doc.source, page=doc.page
+            ):
                 chunks.append(chunk)
         if not chunks:
             return 0

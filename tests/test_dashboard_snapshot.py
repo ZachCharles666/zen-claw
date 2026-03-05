@@ -5,7 +5,9 @@ from zen_claw.config.schema import Config
 from zen_claw.dashboard.server import build_dashboard_snapshot
 
 
-def test_build_dashboard_snapshot_includes_cron_sidecar_rate_limit(monkeypatch, tmp_path: Path) -> None:
+def test_build_dashboard_snapshot_includes_cron_sidecar_rate_limit(
+    monkeypatch, tmp_path: Path
+) -> None:
     cfg = Config()
     cfg.agents.defaults.model = "openrouter/anthropic/claude-3.5-sonnet"
     cfg.tools.policy.production_hardening = True
@@ -55,12 +57,32 @@ def test_build_dashboard_snapshot_includes_cron_sidecar_rate_limit(monkeypatch, 
             {
                 "version": 1,
                 "nodes": {
-                    "n1": {"name": "phone-a", "platform": "android", "status": "active", "last_seen_ms": 123},
-                    "n2": {"name": "phone-b", "platform": "ios", "status": "inactive", "last_seen_ms": 88},
+                    "n1": {
+                        "name": "phone-a",
+                        "platform": "android",
+                        "status": "active",
+                        "last_seen_ms": 123,
+                    },
+                    "n2": {
+                        "name": "phone-b",
+                        "platform": "ios",
+                        "status": "inactive",
+                        "last_seen_ms": 88,
+                    },
                 },
                 "tasks": [
-                    {"task_id": "t1", "node_id": "n1", "task_type": "agent.prompt", "status": "pending"},
-                    {"task_id": "t2", "node_id": "n1", "task_type": "agent.prompt", "status": "running"},
+                    {
+                        "task_id": "t1",
+                        "node_id": "n1",
+                        "task_type": "agent.prompt",
+                        "status": "pending",
+                    },
+                    {
+                        "task_id": "t2",
+                        "node_id": "n1",
+                        "task_type": "agent.prompt",
+                        "status": "running",
+                    },
                     {
                         "task_id": "t3",
                         "node_id": "n2",
@@ -130,7 +152,9 @@ def test_build_dashboard_snapshot_includes_cron_sidecar_rate_limit(monkeypatch, 
     assert "api_base" not in snapshot["providers"][0]
 
 
-def test_build_dashboard_snapshot_detects_approval_chain_tamper(monkeypatch, tmp_path: Path) -> None:
+def test_build_dashboard_snapshot_detects_approval_chain_tamper(
+    monkeypatch, tmp_path: Path
+) -> None:
     cfg = Config()
     data_dir = tmp_path / "data"
     (data_dir / "cron").mkdir(parents=True, exist_ok=True)
@@ -154,15 +178,22 @@ def test_build_dashboard_snapshot_detects_approval_chain_tamper(monkeypatch, tmp
     )
 
     monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
-    monkeypatch.setattr("zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: [])
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
 
     snapshot = build_dashboard_snapshot(cfg)
     assert snapshot["node"]["approval_chain_ok"] is False
     assert snapshot["node"]["approval_chain_checked"] == 0
-    assert snapshot["node"]["approval_chain_error"] in {"approval hash mismatch", "approval chain broken"}
+    assert snapshot["node"]["approval_chain_error"] in {
+        "approval hash mismatch",
+        "approval chain broken",
+    }
 
 
-def test_build_dashboard_snapshot_node_details_include_latest_task(monkeypatch, tmp_path: Path) -> None:
+def test_build_dashboard_snapshot_node_details_include_latest_task(
+    monkeypatch, tmp_path: Path
+) -> None:
     cfg = Config()
     data_dir = tmp_path / "data"
     (data_dir / "cron").mkdir(parents=True, exist_ok=True)
@@ -186,8 +217,20 @@ def test_build_dashboard_snapshot_node_details_include_latest_task(monkeypatch, 
                     },
                 },
                 "tasks": [
-                    {"task_id": "t1", "node_id": "n1", "task_type": "message.send", "status": "pending", "updated_at_ms": 10},
-                    {"task_id": "t2", "node_id": "n1", "task_type": "agent.prompt", "status": "running", "updated_at_ms": 20},
+                    {
+                        "task_id": "t1",
+                        "node_id": "n1",
+                        "task_type": "message.send",
+                        "status": "pending",
+                        "updated_at_ms": 10,
+                    },
+                    {
+                        "task_id": "t2",
+                        "node_id": "n1",
+                        "task_type": "agent.prompt",
+                        "status": "running",
+                        "updated_at_ms": 20,
+                    },
                 ],
                 "approval_events": [],
             }
@@ -196,7 +239,9 @@ def test_build_dashboard_snapshot_node_details_include_latest_task(monkeypatch, 
     )
 
     monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
-    monkeypatch.setattr("zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: [])
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
     snapshot = build_dashboard_snapshot(cfg)
     row = snapshot["node"]["nodes"][0]
     assert row["allow_gateway_tasks"] is False

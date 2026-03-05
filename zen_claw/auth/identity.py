@@ -43,11 +43,15 @@ class AgentIdentity:
         try:
             from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
         except Exception as exc:
-            raise AgentIdentityError("cryptography package is required for identity features") from exc
+            raise AgentIdentityError(
+                "cryptography package is required for identity features"
+            ) from exc
         if self._private_key is None:
             raise AgentIdentityError("Keypair not loaded. Call get_or_create_keypair() first.")
         if self._pub_hex is None:
-            self._pub_hex = self._private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+            self._pub_hex = (
+                self._private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+            )
         return self._pub_hex
 
     def created_at(self) -> str | None:
@@ -78,7 +82,9 @@ class AgentIdentity:
             from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
             from cryptography.hazmat.primitives.serialization import load_pem_private_key
         except Exception as exc:
-            raise AgentIdentityError("cryptography package is required for identity features") from exc
+            raise AgentIdentityError(
+                "cryptography package is required for identity features"
+            ) from exc
         self._check_key_permissions(path)
         try:
             key = load_pem_private_key(path.read_bytes(), password=None)
@@ -106,7 +112,9 @@ class AgentIdentity:
                 PublicFormat,
             )
         except Exception as exc:
-            raise AgentIdentityError("cryptography package is required for identity features") from exc
+            raise AgentIdentityError(
+                "cryptography package is required for identity features"
+            ) from exc
         self._key_dir.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(self._key_dir, 0o700)

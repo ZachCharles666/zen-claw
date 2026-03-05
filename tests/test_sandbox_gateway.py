@@ -12,6 +12,7 @@ def mock_exec_tool():
     """Returns a basic local ExecTool for testing."""
     return ExecTool(mode="local")
 
+
 @pytest.mark.asyncio
 async def test_gateway_directory_isolation(tmp_path, mock_exec_tool):
     workspace = tmp_path / "workspace"
@@ -31,6 +32,7 @@ async def test_gateway_directory_isolation(tmp_path, mock_exec_tool):
     assert not result.ok
     assert result.error.kind == ToolErrorKind.PERMISSION
     assert result.error.code == "gateway_path_traversal"
+
 
 @pytest.mark.asyncio
 async def test_gateway_environment_sanitization(tmp_path, mock_exec_tool):

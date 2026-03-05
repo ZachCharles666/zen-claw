@@ -35,14 +35,14 @@ class ExecTool(Tool):
         self.timeout = timeout
         self.working_dir = working_dir
         self.deny_patterns = deny_patterns or [
-            r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
-            r"\bdel\s+/[fq]\b",              # del /f, del /q
-            r"\brmdir\s+/s\b",               # rmdir /s
-            r"\b(format|mkfs|diskpart)\b",   # disk operations
-            r"\bdd\s+if=",                   # dd
-            r">\s*/dev/sd",                  # write to disk
+            r"\brm\s+-[rf]{1,2}\b",  # rm -r, rm -rf, rm -fr
+            r"\bdel\s+/[fq]\b",  # del /f, del /q
+            r"\brmdir\s+/s\b",  # rmdir /s
+            r"\b(format|mkfs|diskpart)\b",  # disk operations
+            r"\bdd\s+if=",  # dd
+            r">\s*/dev/sd",  # write to disk
             r"\b(shutdown|reboot|poweroff)\b",  # system power
-            r":\(\)\s*\{.*\};\s*:",          # fork bomb
+            r":\(\)\s*\{.*\};\s*:",  # fork bomb
         ]
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
@@ -66,19 +66,22 @@ class ExecTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to execute"
-                },
+                "command": {"type": "string", "description": "The shell command to execute"},
                 "working_dir": {
                     "type": "string",
-                    "description": "Optional working directory for the command"
-                }
+                    "description": "Optional working directory for the command",
+                },
             },
-            "required": ["command"]
+            "required": ["command"],
         }
 
-    async def execute(self, command: str, working_dir: str | None = None, env: dict[str, str] | None = None, **kwargs: Any) -> ToolResult:
+    async def execute(
+        self,
+        command: str,
+        working_dir: str | None = None,
+        env: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> ToolResult:
         cwd = working_dir or self.working_dir or os.getcwd()
         trace_id = str(kwargs.get("trace_id") or "")
         guard = self._guard_command(command, cwd)
@@ -87,11 +90,15 @@ class ExecTool(Tool):
             return ToolResult.failure(ToolErrorKind.PERMISSION, message, code=code)
 
         if self.mode == "sidecar":
-            return await self._execute_via_sidecar(command=command, cwd=cwd, env=env, trace_id=trace_id)
+            return await self._execute_via_sidecar(
+                command=command, cwd=cwd, env=env, trace_id=trace_id
+            )
 
         return await self._execute_local(command=command, cwd=cwd, env=env)
 
-    async def _execute_local(self, command: str, cwd: str, env: dict[str, str] | None = None) -> ToolResult:
+    async def _execute_local(
+        self, command: str, cwd: str, env: dict[str, str] | None = None
+    ) -> ToolResult:
         try:
             process = await asyncio.create_subprocess_shell(
                 command,
@@ -102,10 +109,7 @@ class ExecTool(Tool):
             )
 
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=self.timeout
-                )
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=self.timeout)
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()  # reap the process to avoid zombie accumulation
@@ -152,7 +156,9 @@ class ExecTool(Tool):
                 code="exec_failed",
             )
 
-    async def _execute_via_sidecar(self, command: str, cwd: str, env: dict[str, str] | None = None, trace_id: str = "") -> ToolResult:
+    async def _execute_via_sidecar(
+        self, command: str, cwd: str, env: dict[str, str] | None = None, trace_id: str = ""
+    ) -> ToolResult:
         payload = {
             "command": command,
             "working_dir": cwd,
@@ -203,7 +209,9 @@ class ExecTool(Tool):
                             code="exec_sidecar_unhealthy",
                         )
                 if self.sidecar_approval_mode == "hmac":
-                    response = await client.post(self.sidecar_url, headers=headers, content=body_bytes)
+                    response = await client.post(
+                        self.sidecar_url, headers=headers, content=body_bytes
+                    )
                 else:
                     response = await client.post(self.sidecar_url, headers=headers, json=payload)
         except httpx.TimeoutException as e:
@@ -235,8 +243,14 @@ class ExecTool(Tool):
         if response.status_code >= 400:
             err_msg = str(data.get("error_message") or f"HTTP {response.status_code}")
             err_code = str(data.get("error_code") or "exec_sidecar_http_error")
-            kind = ToolErrorKind.PERMISSION if response.status_code in (401, 403) else ToolErrorKind.RUNTIME
-            return ToolResult.failure(kind, err_msg, code=err_code, http_status=response.status_code)
+            kind = (
+                ToolErrorKind.PERMISSION
+                if response.status_code in (401, 403)
+                else ToolErrorKind.RUNTIME
+            )
+            return ToolResult.failure(
+                kind, err_msg, code=err_code, http_status=response.status_code
+            )
 
         ok = bool(data.get("ok"))
         stdout = str(data.get("stdout") or "")
@@ -293,19 +307,28 @@ class ExecTool(Tool):
 
         for pattern in self.deny_patterns:
             if re.search(pattern, lower):
-                return ("exec_guard_dangerous_pattern", "Command blocked by safety guard (dangerous pattern detected)")
+                return (
+                    "exec_guard_dangerous_pattern",
+                    "Command blocked by safety guard (dangerous pattern detected)",
+                )
 
         if self.allow_patterns:
             if not any(re.search(p, lower) for p in self.allow_patterns):
-                return ("exec_guard_not_allowlisted", "Command blocked by safety guard (not in allowlist)")
+                return (
+                    "exec_guard_not_allowlisted",
+                    "Command blocked by safety guard (not in allowlist)",
+                )
 
         if self.restrict_to_workspace:
             # Double URL-decode to catch %2e%2e/ and double-encoded %252e%252e/ variants.
             # Note: authoritative path enforcement should also occur at the sidecar/
             # filesystem layer; this string-level check is a best-effort pre-execution guard.
             cmd_decoded = unquote(unquote(cmd)).lower()
-            if any(p in cmd_decoded for p in ("../", "..\\" , "\x00")):
-                return ("exec_path_traversal", "Command blocked by safety guard (path traversal detected)")
+            if any(p in cmd_decoded for p in ("../", "..\\", "\x00")):
+                return (
+                    "exec_path_traversal",
+                    "Command blocked by safety guard (path traversal detected)",
+                )
 
             cwd_path = Path(cwd).resolve()
 
@@ -318,8 +341,9 @@ class ExecTool(Tool):
                 except Exception:
                     continue
                 if cwd_path not in p.parents and p != cwd_path:
-                    return ("exec_path_outside_working_dir", "Command blocked by safety guard (path outside working dir)")
+                    return (
+                        "exec_path_outside_working_dir",
+                        "Command blocked by safety guard (path outside working dir)",
+                    )
 
         return None
-
-

@@ -11,7 +11,7 @@ from zen_claw.bus.events import InboundMessage, OutboundMessage
 class MessageBus:
     """
     Async message bus that decouples chat channels from the agent core.
-    
+
     Channels push messages to the inbound queue, and the agent processes
     them and pushes responses to the outbound queue.
     """
@@ -19,7 +19,9 @@ class MessageBus:
     def __init__(self):
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=1000)
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=1000)
-        self._outbound_subscribers: dict[str, list[Callable[[OutboundMessage], Awaitable[None]]]] = {}
+        self._outbound_subscribers: dict[
+            str, list[Callable[[OutboundMessage], Awaitable[None]]]
+        ] = {}
         self._running = False
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
@@ -39,9 +41,7 @@ class MessageBus:
         return await self.outbound.get()
 
     def subscribe_outbound(
-        self,
-        channel: str,
-        callback: Callable[[OutboundMessage], Awaitable[None]]
+        self, channel: str, callback: Callable[[OutboundMessage], Awaitable[None]]
     ) -> None:
         """Subscribe to outbound messages for a specific channel."""
         if channel not in self._outbound_subscribers:
@@ -79,5 +79,3 @@ class MessageBus:
     def outbound_size(self) -> int:
         """Number of pending outbound messages."""
         return self.outbound.qsize()
-
-

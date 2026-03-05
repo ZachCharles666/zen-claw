@@ -163,5 +163,3 @@ def test_discord_handle_message_create_caps_attachments_processed(tmp_path: Path
 
     asyncio.run(ch._handle_message_create(payload))
     assert len(captured["media"]) == 8
-
-

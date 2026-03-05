@@ -53,22 +53,37 @@ def test_skills_install_market_download_success(tmp_path: Path, monkeypatch) -> 
         description="x",
         download_url="https://downloads.example.com/web-search.zip",
     )
-    monkeypatch.setattr("zen_claw.skills.registry.SkillsRegistry.fetch", lambda self, force=False: [row])
+    monkeypatch.setattr(
+        "zen_claw.skills.registry.SkillsRegistry.fetch", lambda self, force=False: [row]
+    )
 
     payload = _skill_zip_bytes("web-search")
 
     class _Resp:
-        content = payload
+        status_code = 200
+        headers = {"Content-Length": str(len(payload))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def iter_bytes(self, chunk_size=8192):
+            for i in range(0, len(payload), chunk_size):
+                yield payload[i : i + chunk_size]
 
         def raise_for_status(self):
             return None
 
-    monkeypatch.setattr("httpx.get", lambda *args, **kwargs: _Resp())
+    monkeypatch.setattr("zen_claw.cli.commands._resolve_safe_ip", lambda host: "93.184.216.34")
+    monkeypatch.setattr("httpx.stream", lambda *args, **kwargs: _Resp())
 
     out = runner.invoke(app, ["skills", "install", "market:web-search"])
     assert out.exit_code == 0
     assert "installed skill: web-search" in out.output
-    assert (workspace / "skills" / "web-search" / "SKILL.md").exists()
+    installed = sorted((workspace / "skills").glob("web-search*/SKILL.md"))
+    assert installed
 
 
 def test_skills_install_market_rejects_yanked(tmp_path: Path, monkeypatch) -> None:
@@ -84,7 +99,9 @@ def test_skills_install_market_rejects_yanked(tmp_path: Path, monkeypatch) -> No
         download_url="https://downloads.example.com/bad.zip",
         yanked=True,
     )
-    monkeypatch.setattr("zen_claw.skills.registry.SkillsRegistry.fetch", lambda self, force=False: [row])
+    monkeypatch.setattr(
+        "zen_claw.skills.registry.SkillsRegistry.fetch", lambda self, force=False: [row]
+    )
 
     out = runner.invoke(app, ["skills", "install", "market:bad-skill"])
     assert out.exit_code == 1
@@ -100,4 +117,3 @@ def test_skills_install_url_rejects_untrusted_host(tmp_path: Path, monkeypatch) 
     out = runner.invoke(app, ["skills", "install", "https://evil.example.com/skill.zip"])
     assert out.exit_code == 1
     assert "not in trusted hosts" in out.output.lower()
-

@@ -30,7 +30,9 @@ class _CollectChannel:
 
 
 @pytest.mark.asyncio
-async def test_channel_manager_dispatch_drop_mode_records_runtime_stats(tmp_path: Path, monkeypatch) -> None:
+async def test_channel_manager_dispatch_drop_mode_records_runtime_stats(
+    tmp_path: Path, monkeypatch
+) -> None:
     data_dir = tmp_path / "data"
     monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
 

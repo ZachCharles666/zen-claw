@@ -99,7 +99,7 @@ class TextChunker:
                 merged = "\n".join(current).strip()
                 if len(merged) >= cfg.min_chars:
                     chunks.append(merged)
-                overlap = merged[-cfg.overlap_chars:] if cfg.overlap_chars else ""
+                overlap = merged[-cfg.overlap_chars :] if cfg.overlap_chars else ""
                 current = [overlap, unit] if overlap else [unit]
                 current_len = len(overlap) + len(unit) + (1 if overlap else 0)
             else:
@@ -115,7 +115,9 @@ class TextChunker:
             chunks.append(text.strip())
         return chunks
 
-    def chunk_with_metadata(self, text: str, source: str = "", page: int | None = None) -> list[dict]:
+    def chunk_with_metadata(
+        self, text: str, source: str = "", page: int | None = None
+    ) -> list[dict]:
         chunks = self.chunk(text)
         return [
             {"content": c, "source": source, "page": page, "chunk_index": i}

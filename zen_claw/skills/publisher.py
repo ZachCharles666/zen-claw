@@ -24,7 +24,9 @@ class PublishResult:
 
 
 class SkillsPublisher:
-    def __init__(self, workspace: Path, output_dir: Path | None = None, require_integrity: bool = True):
+    def __init__(
+        self, workspace: Path, output_dir: Path | None = None, require_integrity: bool = True
+    ):
         self._workspace = Path(workspace).expanduser().resolve()
         self._output_dir = (output_dir or (self._workspace / "dist")).resolve()
         self._require_integrity = require_integrity
@@ -32,7 +34,9 @@ class SkillsPublisher:
     def publish(self, skill_name: str) -> PublishResult:
         skill_dir = self._workspace / "skills" / skill_name
         if not skill_dir.is_dir():
-            return PublishResult(ok=False, skill_name=skill_name, error=f"Skill directory not found: {skill_dir}")
+            return PublishResult(
+                ok=False, skill_name=skill_name, error=f"Skill directory not found: {skill_dir}"
+            )
         manifest_path = skill_dir / "manifest.json"
         try:
             manifest = self._load_manifest(manifest_path)
@@ -41,7 +45,9 @@ class SkillsPublisher:
         if self._require_integrity:
             ok, err = self._check_integrity(skill_dir)
             if not ok:
-                return PublishResult(ok=False, skill_name=skill_name, error=f"Integrity check failed: {err}.")
+                return PublishResult(
+                    ok=False, skill_name=skill_name, error=f"Integrity check failed: {err}."
+                )
         version = str(manifest.get("version", "0.0.0"))
         zip_name = f"{skill_name}-{version}.zip"
         self._output_dir.mkdir(parents=True, exist_ok=True)
@@ -49,7 +55,9 @@ class SkillsPublisher:
         try:
             self._build_zip(skill_dir, zip_path)
         except Exception as exc:
-            return PublishResult(ok=False, skill_name=skill_name, error=f"Failed to build zip: {exc}")
+            return PublishResult(
+                ok=False, skill_name=skill_name, error=f"Failed to build zip: {exc}"
+            )
         sha = self._sha256_file(zip_path)
         catalog = self._make_catalog_entry(manifest, zip_path.name, sha)
         catalog_path = self._output_dir / f"{skill_name}-{version}.catalog.json"
@@ -119,7 +127,9 @@ class SkillsPublisher:
         return h.hexdigest()
 
     @staticmethod
-    def _make_catalog_entry(manifest: dict[str, Any], zip_filename: str, sha256_hex: str) -> dict[str, Any]:
+    def _make_catalog_entry(
+        manifest: dict[str, Any], zip_filename: str, sha256_hex: str
+    ) -> dict[str, Any]:
         return {
             "name": str(manifest.get("name", "")),
             "version": str(manifest.get("version", "")),

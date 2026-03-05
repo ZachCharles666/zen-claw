@@ -45,7 +45,9 @@ class _FakeClient:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         return None
 
-    async def get(self, url: str, headers: dict | None = None, params: dict | None = None) -> _FakeResponse:
+    async def get(
+        self, url: str, headers: dict | None = None, params: dict | None = None
+    ) -> _FakeResponse:
         if self._exc:
             raise self._exc
         assert url
@@ -69,7 +71,9 @@ class _FakeClient:
 async def test_sessions_spawn_sidecar_success(monkeypatch) -> None:
     monkeypatch.setattr(
         "zen_claw.agent.tools.sessions.httpx.AsyncClient",
-        lambda timeout: _FakeClient(post_response=_FakeResponse(200, {"ok": True, "session_id": "s-1", "status": "running"})),
+        lambda timeout: _FakeClient(
+            post_response=_FakeResponse(200, {"ok": True, "session_id": "s-1", "status": "running"})
+        ),
     )
     tool = SessionsSpawnTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
     result = await tool.execute(command="echo hi")
@@ -263,7 +267,9 @@ async def test_sessions_tools_pass_trace_id_header(monkeypatch) -> None:
     observed: dict[str, str] = {}
 
     class _HeaderClient(_FakeClient):
-        async def get(self, url: str, headers: dict | None = None, params: dict | None = None) -> _FakeResponse:
+        async def get(
+            self, url: str, headers: dict | None = None, params: dict | None = None
+        ) -> _FakeResponse:
             observed["trace"] = (headers or {}).get("X-Trace-Id", "")
             return _FakeResponse(200, {"ok": True, "sessions": []})
 
@@ -299,7 +305,9 @@ async def test_sessions_list_hmac_adds_signature_headers(monkeypatch) -> None:
     observed: dict[str, str] = {}
 
     class _HeaderClient(_FakeClient):
-        async def get(self, url: str, headers: dict | None = None, params: dict | None = None) -> _FakeResponse:
+        async def get(
+            self, url: str, headers: dict | None = None, params: dict | None = None
+        ) -> _FakeResponse:
             h = headers or {}
             observed["sig"] = h.get("X-Approval-Signature", "")
             observed["ts"] = h.get("X-Approval-Timestamp", "")
@@ -327,7 +335,9 @@ async def test_sessions_read_hmac_adds_signature_headers(monkeypatch) -> None:
     observed: dict[str, str] = {}
 
     class _HeaderClient(_FakeClient):
-        async def get(self, url: str, headers: dict | None = None, params: dict | None = None) -> _FakeResponse:
+        async def get(
+            self, url: str, headers: dict | None = None, params: dict | None = None
+        ) -> _FakeResponse:
             h = headers or {}
             observed["sig"] = h.get("X-Approval-Signature", "")
             observed["ts"] = h.get("X-Approval-Timestamp", "")
@@ -379,7 +389,9 @@ async def test_sessions_write_hmac_adds_signature_headers(monkeypatch) -> None:
             observed["trace"] = h.get("X-Trace-Id", "")
             observed["url"] = url
             assert "X-Approval-Token" not in h
-            return _FakeResponse(200, {"ok": True, "session_id": "s-1", "status": "running", "written_bytes": 6})
+            return _FakeResponse(
+                200, {"ok": True, "session_id": "s-1", "status": "running", "written_bytes": 6}
+            )
 
     monkeypatch.setattr(
         "zen_claw.agent.tools.sessions.httpx.AsyncClient",
@@ -415,7 +427,16 @@ async def test_sessions_signal_hmac_adds_signature_headers(monkeypatch) -> None:
             observed["trace"] = h.get("X-Trace-Id", "")
             observed["url"] = url
             assert "X-Approval-Token" not in h
-            return _FakeResponse(200, {"ok": True, "session_id": "s-1", "status": "running", "signal": "interrupt", "delivered": True})
+            return _FakeResponse(
+                200,
+                {
+                    "ok": True,
+                    "session_id": "s-1",
+                    "status": "running",
+                    "signal": "interrupt",
+                    "delivered": True,
+                },
+            )
 
     monkeypatch.setattr(
         "zen_claw.agent.tools.sessions.httpx.AsyncClient",
@@ -496,8 +517,12 @@ def test_agent_loop_sidecar_sessions_spawn_write_read_workflow(tmp_path, monkeyp
             if url.endswith("/v1/sessions/start"):
                 return _FakeResponse(200, {"ok": True, "session_id": "s-42", "status": "running"})
             if url.endswith("/v1/sessions/s-42/write"):
-                return _FakeResponse(200, {"ok": True, "session_id": "s-42", "status": "running", "written_bytes": 6})
-            return _FakeResponse(404, {"ok": False, "error_code": "route_not_found", "error_message": "missing"})
+                return _FakeResponse(
+                    200, {"ok": True, "session_id": "s-42", "status": "running", "written_bytes": 6}
+                )
+            return _FakeResponse(
+                404, {"ok": False, "error_code": "route_not_found", "error_message": "missing"}
+            )
 
         async def get(self, url, headers=None, params=None):
             requests_seen.append(("GET", url, params or {}))
@@ -513,27 +538,47 @@ def test_agent_loop_sidecar_sessions_spawn_write_read_workflow(tmp_path, monkeyp
                         "truncated": False,
                     },
                 )
-            return _FakeResponse(404, {"ok": False, "error_code": "session_not_found", "error_message": "missing"})
+            return _FakeResponse(
+                404, {"ok": False, "error_code": "session_not_found", "error_message": "missing"}
+            )
 
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _NoopSessionManager)
-    monkeypatch.setattr("zen_claw.agent.tools.sessions.httpx.AsyncClient", lambda timeout: _WorkflowClient())
+    monkeypatch.setattr(
+        "zen_claw.agent.tools.sessions.httpx.AsyncClient", lambda timeout: _WorkflowClient()
+    )
     monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.get_always_skills", lambda self: [])
     monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.build_skills_summary", lambda self: "")
-    monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.load_skills_for_context", lambda self, names: "")
+    monkeypatch.setattr(
+        "zen_claw.agent.skills.SkillsLoader.load_skills_for_context", lambda self, names: ""
+    )
 
     provider = _QueueProvider(
         [
             LLMResponse(
                 content="start session",
-                tool_calls=[ToolCallRequest(id="t1", name="sessions_spawn", arguments={"command": "cat", "pty": True})],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="t1", name="sessions_spawn", arguments={"command": "cat", "pty": True}
+                    )
+                ],
             ),
             LLMResponse(
                 content="write input",
-                tool_calls=[ToolCallRequest(id="t2", name="sessions_write", arguments={"session_id": "s-42", "input": "status"})],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="t2",
+                        name="sessions_write",
+                        arguments={"session_id": "s-42", "input": "status"},
+                    )
+                ],
             ),
             LLMResponse(
                 content="read output",
-                tool_calls=[ToolCallRequest(id="t3", name="sessions_read", arguments={"session_id": "s-42", "cursor": 0})],
+                tool_calls=[
+                    ToolCallRequest(
+                        id="t3", name="sessions_read", arguments={"session_id": "s-42", "cursor": 0}
+                    )
+                ],
             ),
             LLMResponse(content="workflow done"),
         ]
@@ -549,7 +594,9 @@ def test_agent_loop_sidecar_sessions_spawn_write_read_workflow(tmp_path, monkeyp
     )
     loop.memory_extractor.should_extract = lambda user_text, assistant_text: False  # type: ignore[assignment]
 
-    out = asyncio.run(loop.process_direct("run interactive workflow", channel="cli", chat_id="direct"))
+    out = asyncio.run(
+        loop.process_direct("run interactive workflow", channel="cli", chat_id="direct")
+    )
     assert out == "workflow done"
     assert provider.calls == 4
     assert len(requests_seen) == 3
@@ -588,5 +635,3 @@ def test_agent_loop_registers_sessions_tools_only_in_sidecar_mode(tmp_path, monk
         exec_config=local_cfg,
     )
     assert not loop_local.tools.has("sessions_spawn")
-
-

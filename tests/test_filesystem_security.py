@@ -18,5 +18,3 @@ async def test_read_file_blocks_prefix_bypass_outside_allowed_dir(tmp_path: Path
     assert result.error is not None
     assert result.error.code == "path_outside_workspace"
     assert "outside allowed directory" in result.error.message
-
-

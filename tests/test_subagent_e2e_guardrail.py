@@ -50,5 +50,3 @@ async def test_subagent_guardrail_blocks_spawn_end_to_end() -> None:
     assert result.error.kind == ToolErrorKind.PERMISSION
     assert result.error.code == "tool_policy_denied"
     assert fake.calls == 0
-
-

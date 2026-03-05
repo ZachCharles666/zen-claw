@@ -27,14 +27,17 @@ def test_node_service_register_heartbeat_and_task_flow(tmp_path: Path) -> None:
     assert pulled["status"] == "leased"
 
     assert svc.ack_task(node_id=node_id, token=token, task_id=task_id) is True
-    assert svc.complete_task(
-        node_id=node_id,
-        token=token,
-        task_id=task_id,
-        ok=True,
-        result={"done": True},
-        error="",
-    ) is True
+    assert (
+        svc.complete_task(
+            node_id=node_id,
+            token=token,
+            task_id=task_id,
+            ok=True,
+            result={"done": True},
+            error="",
+        )
+        is True
+    )
 
     all_tasks = svc.list_tasks(node_id=node_id)
     assert len(all_tasks) == 1
@@ -188,7 +191,10 @@ def test_node_service_dsl_static_checks_block_risky_payloads(tmp_path: Path) -> 
     assert override_denied is not None
     assert override_denied.get("ok") is False
     assert override_denied.get("error_code") == "node_dsl_static_denied"
-    assert any("forbidden_payload_key:kill_switch_enabled" == str(v) for v in override_denied.get("violations", []))
+    assert any(
+        "forbidden_payload_key:kill_switch_enabled" == str(v)
+        for v in override_denied.get("violations", [])
+    )
 
     reserved_channel_denied = svc.add_task(
         node_id=node_id,
@@ -395,8 +401,8 @@ def test_node_service_scan_token_rotation_candidates_and_rotate(tmp_path: Path) 
     data = svc._load()
     now_ms = int(data["nodes"][a["node_id"]]["updated_at_ms"] or 0)
     data["nodes"][a["node_id"]]["token_expires_at_ms"] = now_ms + 30_000  # expiring in 30s
-    data["nodes"][b["node_id"]]["token_expires_at_ms"] = now_ms - 1       # expired
-    data["nodes"][c["node_id"]]["token_revoked"] = True                    # revoked
+    data["nodes"][b["node_id"]]["token_expires_at_ms"] = now_ms - 1  # expired
+    data["nodes"][c["node_id"]]["token_revoked"] = True  # revoked
     svc._save()
 
     scan = svc.scan_token_rotation(within_sec=60, rotate=False)
@@ -465,5 +471,9 @@ def test_node_service_remote_immutable_sink_failure_writes_alert(tmp_path: Path)
     ok = svc._write_remote_immutable_event(event)
     assert ok is False
     assert svc.alert_log_path.exists() is True
-    rows = [json.loads(x) for x in svc.alert_log_path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    rows = [
+        json.loads(x)
+        for x in svc.alert_log_path.read_text(encoding="utf-8").splitlines()
+        if x.strip()
+    ]
     assert any(r.get("code") == "remote_immutable_write_failed" for r in rows)

@@ -100,6 +100,8 @@ class ContextCompressor:
             elif isinstance(c, list):
                 for block in c:
                     if isinstance(block, dict):
-                        chars += len(str(block.get("text") or "")) + len(str(block.get("type") or ""))
+                        chars += len(str(block.get("text") or "")) + len(
+                            str(block.get("type") or "")
+                        )
             chars += len(str(m.get("role") or "")) + 4
         return max(1, chars // 4)

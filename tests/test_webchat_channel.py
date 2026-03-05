@@ -31,4 +31,3 @@ def test_webchat_channel_ingest_and_outbound_queue() -> None:
         await channel.stop()
 
     asyncio.run(_run())
-

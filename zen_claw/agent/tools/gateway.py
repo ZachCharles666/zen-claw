@@ -27,7 +27,10 @@ class GatewayToolLocalStub(Tool):
         return {
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "The command to execute in the sandbox."},
+                "command": {
+                    "type": "string",
+                    "description": "The command to execute in the sandbox.",
+                },
                 "working_dir": {"type": "string", "description": "Optional working directory."},
             },
             "required": ["command"],
@@ -44,13 +47,18 @@ class GatewayToolLocalStub(Tool):
 class GatewayTool(Tool):
     """
     Acts as an isolation boundary for untrusted skills.
-    
+
     Instead of executing tools locally (which might allow an untrusted skill
     to bypass restrictions if not carefully bounded), this gateway spawns
     a fresh sub-process or routes to the sidecar (sec-execd) depending on config.
     """
 
-    def __init__(self, backend_tool: ExecTool, allowed_commands: list[str] | None = None, workspace: str | None = None):
+    def __init__(
+        self,
+        backend_tool: ExecTool,
+        allowed_commands: list[str] | None = None,
+        workspace: str | None = None,
+    ):
         """
         Initialize the gateway.
 
@@ -63,7 +71,9 @@ class GatewayTool(Tool):
         self.allowed_commands = allowed_commands or []
         self.workspace = workspace
         self._name = "gateway"
-        self._description = "Execute an isolated command in a secure sandbox. Used for untrusted skill execution."
+        self._description = (
+            "Execute an isolated command in a secure sandbox. Used for untrusted skill execution."
+        )
 
     @property
     def name(self) -> str:
@@ -78,7 +88,10 @@ class GatewayTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "command": {"type": "string", "description": "The command to execute in the sandbox."},
+                "command": {
+                    "type": "string",
+                    "description": "The command to execute in the sandbox.",
+                },
                 "working_dir": {"type": "string", "description": "Optional working directory."},
             },
             "required": ["command"],
@@ -93,7 +106,9 @@ class GatewayTool(Tool):
         """Execute a command securely through the backend proxy."""
         base_cmd = command.strip().split()[0] if command.strip() else ""
         if self.allowed_commands and base_cmd not in self.allowed_commands:
-            logger.warning(f"Gateway rejected command: {base_cmd} not in allowlist {self.allowed_commands}")
+            logger.warning(
+                f"Gateway rejected command: {base_cmd} not in allowlist {self.allowed_commands}"
+            )
             return ToolResult.failure(
                 ToolErrorKind.PERMISSION,
                 f"Command '{base_cmd}' is not allowed in this sandbox.",
@@ -103,7 +118,11 @@ class GatewayTool(Tool):
         logger.info(f"Gateway routing isolated command: {command}")
 
         # Directory isolation
-        sandbox_dir = (Path(self.workspace) / ".sandbox").resolve() if self.workspace else Path(os.getcwd()) / ".sandbox"
+        sandbox_dir = (
+            (Path(self.workspace) / ".sandbox").resolve()
+            if self.workspace
+            else Path(os.getcwd()) / ".sandbox"
+        )
         sandbox_dir.mkdir(parents=True, exist_ok=True)
 
         target_dir = Path(working_dir).resolve() if working_dir else sandbox_dir

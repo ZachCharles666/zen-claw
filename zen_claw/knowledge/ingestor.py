@@ -16,7 +16,12 @@ class Document:
 
 
 class Ingestor:
-    def __init__(self, max_url_chars: int = 200_000, user_agent: str = "zen-claw-rag/0.1", http_timeout: float = 20.0):
+    def __init__(
+        self,
+        max_url_chars: int = 200_000,
+        user_agent: str = "zen-claw-rag/0.1",
+        http_timeout: float = 20.0,
+    ):
         self.max_url_chars = max_url_chars
         self.user_agent = user_agent
         self.http_timeout = http_timeout
@@ -47,7 +52,14 @@ class Ingestor:
             for i in range(len(pdf)):
                 text = (pdf[i].get_text("text") or "").strip()
                 if text:
-                    docs.append(Document(content=text, source=str(path), page=i + 1, metadata={"total_pages": len(pdf)}))
+                    docs.append(
+                        Document(
+                            content=text,
+                            source=str(path),
+                            page=i + 1,
+                            metadata={"total_pages": len(pdf)},
+                        )
+                    )
         finally:
             pdf.close()
         return docs
@@ -67,7 +79,14 @@ class Ingestor:
         section = 1
         for para in paragraphs:
             if cur and cur_len + len(para) > 1000:
-                docs.append(Document(content="\n\n".join(cur), source=str(path), page=section, metadata={"section": section}))
+                docs.append(
+                    Document(
+                        content="\n\n".join(cur),
+                        source=str(path),
+                        page=section,
+                        metadata={"section": section},
+                    )
+                )
                 section += 1
                 cur = [para]
                 cur_len = len(para)
@@ -75,7 +94,14 @@ class Ingestor:
                 cur.append(para)
                 cur_len += len(para)
         if cur:
-            docs.append(Document(content="\n\n".join(cur), source=str(path), page=section, metadata={"section": section}))
+            docs.append(
+                Document(
+                    content="\n\n".join(cur),
+                    source=str(path),
+                    page=section,
+                    metadata={"section": section},
+                )
+            )
         return docs
 
     def _ingest_text(self, path: Path) -> list[Document]:
@@ -86,6 +112,7 @@ class Ingestor:
         raw = path.read_text(encoding="utf-8", errors="replace")
         try:
             import trafilatura
+
             extracted = trafilatura.extract(raw, include_comments=False) or raw
         except ImportError:
             extracted = raw
@@ -93,12 +120,18 @@ class Ingestor:
 
     async def _ingest_url(self, url: str) -> list[Document]:
         import httpx
-        async with httpx.AsyncClient(timeout=self.http_timeout, follow_redirects=True, headers={"User-Agent": self.user_agent}) as client:
+
+        async with httpx.AsyncClient(
+            timeout=self.http_timeout,
+            follow_redirects=True,
+            headers={"User-Agent": self.user_agent},
+        ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             body = resp.text[: self.max_url_chars]
         try:
             import trafilatura
+
             extracted = trafilatura.extract(body, include_comments=False) or body
         except ImportError:
             extracted = body

@@ -11,12 +11,12 @@ def test_perf_report_script_renders_markdown(tmp_path: Path) -> None:
     inp.write_text(
         (
             "{"
-            "\"generated_at\":\"2026-02-17T00:00:00Z\","
-            "\"repo_root\":\"E:/zen-claw\","
-            "\"metrics_ms\":{"
-            "\"startup_import\":12.3,"
-            "\"tool_list_dir\":45.6,"
-            "\"pytest_smoke\":78.9"
+            '"generated_at":"2026-02-17T00:00:00Z",'
+            '"repo_root":"E:/zen-claw",'
+            '"metrics_ms":{'
+            '"startup_import":12.3,'
+            '"tool_list_dir":45.6,'
+            '"pytest_smoke":78.9'
             "}"
             "}"
         ),

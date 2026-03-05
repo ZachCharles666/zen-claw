@@ -55,7 +55,10 @@ def test_load_config_tools_network_browser_mode(tmp_path: Path) -> None:
             {
                 "tools": {
                     "network": {
-                        "browser": {"mode": "sidecar", "sidecarUrl": "http://127.0.0.1:4500/v1/browser"}
+                        "browser": {
+                            "mode": "sidecar",
+                            "sidecarUrl": "http://127.0.0.1:4500/v1/browser",
+                        }
                     }
                 }
             }

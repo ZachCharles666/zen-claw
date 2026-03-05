@@ -95,7 +95,9 @@ class ApprovalGate:
     ):
         self._store_path = Path(data_dir) / "approvals" / "pending.json"
         self._store_path.parent.mkdir(parents=True, exist_ok=True)
-        self._sensitive_tools = sensitive_tools if sensitive_tools is not None else self._SENSITIVE_TOOLS
+        self._sensitive_tools = (
+            sensitive_tools if sensitive_tools is not None else self._SENSITIVE_TOOLS
+        )
         self._ttl = ttl_seconds
         self._pending: dict[str, PendingApproval] = {}
         self._load()
@@ -132,16 +134,20 @@ class ApprovalGate:
         if bus:
             try:
                 from zen_claw.bus.events import OutboundMessage
-                await bus.publish_outbound(OutboundMessage(
-                    channel=channel,
-                    chat_id=chat_id,
-                    content=rec.format_request_message()
-                ))
+
+                await bus.publish_outbound(
+                    OutboundMessage(
+                        channel=channel, chat_id=chat_id, content=rec.format_request_message()
+                    )
+                )
             except Exception as exc:
                 logger.error(
                     "ApprovalGate: failed to send approval notification "
                     "(approval_id={}, channel={}, chat_id={}): {}",
-                    approval_id, channel, chat_id, exc,
+                    approval_id,
+                    channel,
+                    chat_id,
+                    exc,
                 )
 
         return rec

@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class WhatsAppConfig(BaseModel):
     """WhatsApp channel configuration."""
+
     enabled: bool = False
     bridge_url: str = "ws://localhost:3001"
     allow_from: list[str] = Field(default_factory=list)  # Legacy allow list
@@ -19,17 +20,21 @@ class WhatsAppConfig(BaseModel):
 
 class TelegramConfig(BaseModel):
     """Telegram channel configuration."""
+
     enabled: bool = False
     token: str = ""  # Bot token from @BotFather
     allow_from: list[str] = Field(default_factory=list)  # Legacy allow list
     admins: list[str] = Field(default_factory=list)  # RBAC admins
     users: list[str] = Field(default_factory=list)  # RBAC users
     agent_profile: str = "default"
-    proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
+    proxy: str | None = (
+        None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
+    )
 
 
 class FeishuConfig(BaseModel):
     """Feishu/Lark channel configuration using WebSocket long connection."""
+
     enabled: bool = False
     app_id: str = ""  # App ID from Feishu Open Platform
     app_secret: str = ""  # App Secret from Feishu Open Platform
@@ -86,6 +91,7 @@ class DingTalkConfig(BaseModel):
 
 class DiscordConfig(BaseModel):
     """Discord channel configuration."""
+
     enabled: bool = False
     token: str = ""  # Bot token from Discord Developer Portal
     allow_from: list[str] = Field(default_factory=list)  # Legacy allow list
@@ -98,6 +104,7 @@ class DiscordConfig(BaseModel):
 
 class WebChatConfig(BaseModel):
     """Web chat channel configuration."""
+
     enabled: bool = False
     token: str = ""
     allow_from: list[str] = Field(default_factory=list)
@@ -108,6 +115,7 @@ class WebChatConfig(BaseModel):
 
 class WebhookTriggerConfig(BaseModel):
     """Generic webhook trigger channel configuration."""
+
     enabled: bool = False
     secret: str = ""
     api_key: str = ""
@@ -122,6 +130,7 @@ class WebhookTriggerConfig(BaseModel):
 
 class SlackConfig(BaseModel):
     """Slack channel configuration."""
+
     enabled: bool = False
     bot_token: str = ""
     app_token: str = ""
@@ -135,6 +144,7 @@ class SlackConfig(BaseModel):
 
 class SignalConfig(BaseModel):
     """Signal channel configuration."""
+
     enabled: bool = False
     mode: Literal["signald", "signal_cli"] = "signald"
     signald_url: str = "http://127.0.0.1:8080"
@@ -150,6 +160,7 @@ class SignalConfig(BaseModel):
 
 class MatrixConfig(BaseModel):
     """Matrix channel configuration."""
+
     enabled: bool = False
     homeserver: str = "https://matrix.org"
     username: str = ""
@@ -171,6 +182,7 @@ class MatrixConfig(BaseModel):
 
 class ChannelRateLimitConfig(BaseModel):
     """Per-channel outbound rate-limit override."""
+
     per_sec: float | None = None
     burst: int | None = None
     mode: Literal["delay", "drop"] | None = None
@@ -178,6 +190,7 @@ class ChannelRateLimitConfig(BaseModel):
 
 class ChannelsConfig(BaseModel):
     """Configuration for chat channels."""
+
     allow_from: list[str] = Field(default_factory=list)  # Global allow list (all channels)
     deny_from: list[str] = Field(default_factory=list)  # Global deny list (all channels)
     outbound_rate_limit_per_sec: float = 2.0
@@ -214,6 +227,7 @@ class ChannelsConfig(BaseModel):
 
 class AgentDefaults(BaseModel):
     """Default agent configuration."""
+
     workspace: str = "~/.zen-claw/workspace"
     model: str = "anthropic/claude-opus-4-5"
     vision_model: str = ""
@@ -253,6 +267,7 @@ class AgentIdentityConfig(BaseModel):
 
 class AgentsConfig(BaseModel):
     """Agent configuration."""
+
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
     social: SocialAgentConfig = Field(default_factory=SocialAgentConfig)
     identity: AgentIdentityConfig = Field(default_factory=AgentIdentityConfig)
@@ -260,14 +275,18 @@ class AgentsConfig(BaseModel):
 
 class ProviderConfig(BaseModel):
     """LLM provider configuration."""
+
     api_key: str = ""
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
-    rate_limit_delay_sec: float = 0.0  # Optional delay before each request (e.g. for free tier API limits)
+    rate_limit_delay_sec: float = (
+        0.0  # Optional delay before each request (e.g. for free tier API limits)
+    )
 
 
 class ProvidersConfig(BaseModel):
     """Configuration for LLM providers."""
+
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
     openai: ProviderConfig = Field(default_factory=ProviderConfig)
     openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
@@ -296,6 +315,7 @@ class KnowledgeConfig(BaseModel):
 
 class GatewayConfig(BaseModel):
     """Gateway/server configuration."""
+
     host: str = "0.0.0.0"
     port: int = 18790
 
@@ -318,7 +338,9 @@ class MultiTenantConfig(BaseModel):
     session_cookie_name: str = "nc_session"
     session_cookie_secure: bool = True
     login_path: str = "/login"
-    public_paths: list[str] = Field(default_factory=lambda: ["/login", "/api/v1/health", "/static/"])
+    public_paths: list[str] = Field(
+        default_factory=lambda: ["/login", "/api/v1/health", "/static/"]
+    )
 
 
 class SkillsMarketConfig(BaseModel):
@@ -334,6 +356,7 @@ class SkillsMarketConfig(BaseModel):
 
 class WebSearchConfig(BaseModel):
     """Web search tool configuration."""
+
     api_key: str = ""  # Brave Search API key
     max_results: int = 5
     mode: Literal["local", "proxy"] = "local"
@@ -344,6 +367,7 @@ class WebSearchConfig(BaseModel):
 
 class WebFetchConfig(BaseModel):
     """Web fetch tool configuration."""
+
     mode: Literal["local", "proxy"] = "local"
     proxy_url: str = "http://127.0.0.1:4499/v1/fetch"
     proxy_healthcheck: bool = False
@@ -352,12 +376,14 @@ class WebFetchConfig(BaseModel):
 
 class WebToolsConfig(BaseModel):
     """Web tools configuration."""
+
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
 
 
 class BrowserToolConfig(BaseModel):
     """Browser automation configuration."""
+
     mode: Literal["off", "sidecar"] = "off"
     sidecar_url: str = "http://127.0.0.1:4500/v1/browser"
     sidecar_approval_token: SecretStr = SecretStr("")
@@ -371,6 +397,7 @@ class BrowserToolConfig(BaseModel):
 
 class ExecToolConfig(BaseModel):
     """Shell exec tool configuration."""
+
     timeout: int = 60
     mode: Literal["local", "sidecar"] = "local"
     sidecar_url: str = "http://127.0.0.1:4488/v1/exec"
@@ -382,6 +409,7 @@ class ExecToolConfig(BaseModel):
 
 class ToolPolicyLayerConfig(BaseModel):
     """Per-scope tool policy layer."""
+
     allow: list[str] | None = None
     deny: list[str] | None = None
 
@@ -410,6 +438,7 @@ class ToolPolicyLayerConfig(BaseModel):
 
 class ToolPolicyConfig(BaseModel):
     """Tool policy configuration."""
+
     default_deny_tools: list[str] = Field(default_factory=lambda: ["exec", "spawn"])
     kill_switch_enabled: bool = False
     kill_switch_reason: str = ""
@@ -421,9 +450,7 @@ class ToolPolicyConfig(BaseModel):
     cron_require_remove_confirmation: bool = False
     channel_policies: dict[str, ToolPolicyLayerConfig] = Field(default_factory=dict)
     production_hardening: bool = False
-    agent: ToolPolicyLayerConfig = Field(
-        default_factory=lambda: ToolPolicyLayerConfig(allow=["*"])
-    )
+    agent: ToolPolicyLayerConfig = Field(default_factory=lambda: ToolPolicyLayerConfig(allow=["*"]))
     subagent: ToolPolicyLayerConfig = Field(
         default_factory=lambda: ToolPolicyLayerConfig(
             allow=["read_file", "write_file", "list_dir", "exec", "web_search", "web_fetch"],
@@ -440,11 +467,13 @@ class ToolPolicyConfig(BaseModel):
                 "sessions_resize",
             ],
         )
-        )
+    )
 
     @model_validator(mode="after")
     def _normalize_policy_fields(self) -> "ToolPolicyConfig":
-        self.default_deny_tools = ToolPolicyLayerConfig._normalize_tool_list(self.default_deny_tools) or []
+        self.default_deny_tools = (
+            ToolPolicyLayerConfig._normalize_tool_list(self.default_deny_tools) or []
+        )
         self.kill_switch_reason = (self.kill_switch_reason or "").strip()
         self.cron_allowed_channels = self._normalize_channel_list(self.cron_allowed_channels)
         normalized_actions: dict[str, list[str]] = {}
@@ -509,6 +538,7 @@ class ToolPolicyConfig(BaseModel):
 
 class NetworkToolsConfig(BaseModel):
     """Unified network/sidecar configuration surface."""
+
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
@@ -517,6 +547,7 @@ class NetworkToolsConfig(BaseModel):
 
 class ToolsConfig(BaseModel):
     """Tools configuration."""
+
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     network: NetworkToolsConfig = Field(default_factory=NetworkToolsConfig)
@@ -567,9 +598,7 @@ class ToolsConfig(BaseModel):
 
         # Prevent disabling subagent hard guardrail.
         if self.policy.allow_subagent_sensitive_tools:
-            raise ValueError(
-                "production_hardening forbids allowSubagentSensitiveTools=true"
-            )
+            raise ValueError("production_hardening forbids allowSubagentSensitiveTools=true")
 
         # Disable all local fallback paths in strict mode.
         self.network.exec.sidecar_fallback_to_local = False
@@ -597,6 +626,7 @@ class ToolsConfig(BaseModel):
 
 class Config(BaseSettings):
     """Root configuration for zen_claw."""
+
     model_config = SettingsConfigDict(
         env_prefix="ZEN_CLAW_",
         env_nested_delimiter="__",
@@ -618,7 +648,10 @@ class Config(BaseSettings):
         return Path(self.agents.defaults.workspace).expanduser()
 
     # Default base URLs for API gateways
-    _GATEWAY_DEFAULTS = {"openrouter": "https://openrouter.ai/api/v1", "aihubmix": "https://aihubmix.com/v1"}
+    _GATEWAY_DEFAULTS = {
+        "openrouter": "https://openrouter.ai/api/v1",
+        "aihubmix": "https://aihubmix.com/v1",
+    }
 
     def get_provider(self, model: str | None = None) -> ProviderConfig | None:
         """Get matched provider config (api_key, api_base, extra_headers). Falls back to first available."""
@@ -626,19 +659,41 @@ class Config(BaseSettings):
         p = self.providers
         # Keyword �?provider mapping (order matters: gateways first)
         keyword_map = {
-            "aihubmix": p.aihubmix, "openrouter": p.openrouter,
-            "deepseek": p.deepseek, "anthropic": p.anthropic, "claude": p.anthropic,
-            "openai": p.openai, "gpt": p.openai, "gemini": p.gemini,
-            "zhipu": p.zhipu, "glm": p.zhipu, "zai": p.zhipu,
-            "dashscope": p.dashscope, "qwen": p.dashscope,
-            "groq": p.groq, "moonshot": p.moonshot, "kimi": p.moonshot, "vllm": p.vllm,
+            "aihubmix": p.aihubmix,
+            "openrouter": p.openrouter,
+            "deepseek": p.deepseek,
+            "anthropic": p.anthropic,
+            "claude": p.anthropic,
+            "openai": p.openai,
+            "gpt": p.openai,
+            "gemini": p.gemini,
+            "zhipu": p.zhipu,
+            "glm": p.zhipu,
+            "zai": p.zhipu,
+            "dashscope": p.dashscope,
+            "qwen": p.dashscope,
+            "groq": p.groq,
+            "moonshot": p.moonshot,
+            "kimi": p.moonshot,
+            "vllm": p.vllm,
         }
         for kw, provider in keyword_map.items():
             if kw in model and provider.api_key:
                 return provider
         # Fallback: gateways first (can serve any model), then specific providers
-        all_providers = [p.openrouter, p.aihubmix, p.anthropic, p.openai, p.deepseek,
-                         p.gemini, p.zhipu, p.dashscope, p.moonshot, p.vllm, p.groq]
+        all_providers = [
+            p.openrouter,
+            p.aihubmix,
+            p.anthropic,
+            p.openai,
+            p.deepseek,
+            p.gemini,
+            p.zhipu,
+            p.dashscope,
+            p.moonshot,
+            p.vllm,
+            p.groq,
+        ]
         return next((pr for pr in all_providers if pr.api_key), None)
 
     def get_api_key(self, model: str | None = None) -> str | None:
@@ -656,7 +711,3 @@ class Config(BaseSettings):
             if p == getattr(self.providers, name):
                 return url
         return None
-
-
-
-

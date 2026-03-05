@@ -131,8 +131,7 @@ def test_build_user_content_includes_external_media_refs(tmp_path: Path) -> None
     )
     assert isinstance(out, list)
     assert any(
-        p.get("type") == "text" and "Attached media references" in str(p.get("text"))
-        for p in out
+        p.get("type") == "text" and "Attached media references" in str(p.get("text")) for p in out
     )
 
 
@@ -153,14 +152,20 @@ def test_build_user_content_accepts_whitelisted_media_ref_schemes(tmp_path: Path
     ]
     out = ctx._build_user_content("handle attachments", media=refs)
     assert isinstance(out, list)
-    ref_block = [p for p in out if p.get("type") == "text" and "Attached media references" in str(p.get("text"))]
+    ref_block = [
+        p
+        for p in out
+        if p.get("type") == "text" and "Attached media references" in str(p.get("text"))
+    ]
     assert len(ref_block) == 1
     text = str(ref_block[0]["text"])
     for r in refs[:4]:
         assert r in text
 
 
-def test_build_user_content_mixed_media_refs_respects_item_cap_and_filters_invalid(tmp_path: Path) -> None:
+def test_build_user_content_mixed_media_refs_respects_item_cap_and_filters_invalid(
+    tmp_path: Path,
+) -> None:
     ctx = ContextBuilder(tmp_path)
     img1 = tmp_path / "img1.png"
     img2 = tmp_path / "img2.png"
@@ -183,11 +188,16 @@ def test_build_user_content_mixed_media_refs_respects_item_cap_and_filters_inval
     assert isinstance(out, list)
     # Only first 4 entries are considered by max_media_items default.
     assert any(p.get("type") == "image_url" for p in out)
-    assert any("Attached media references" in str(p.get("text")) and "feishu://image/img_1" in str(p.get("text")) for p in out)
-    assert any("Attached media files" in str(p.get("text")) and "clip.mp3" in str(p.get("text")) for p in out)
+    assert any(
+        "Attached media references" in str(p.get("text"))
+        and "feishu://image/img_1" in str(p.get("text"))
+        for p in out
+    )
+    assert any(
+        "Attached media files" in str(p.get("text")) and "clip.mp3" in str(p.get("text"))
+        for p in out
+    )
     serialized = str(out)
     assert "https://example.com/blocked.mp4" not in serialized
     assert "whatsapp://audio/aud_2" not in serialized
     assert "img2.png" not in serialized
-
-

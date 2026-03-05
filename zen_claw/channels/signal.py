@@ -86,7 +86,9 @@ class SignalChannel(BaseChannel):
         )
         _stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            raise RuntimeError(f"signal-cli exited {proc.returncode}: {stderr.decode(errors='replace')[:200]}")
+            raise RuntimeError(
+                f"signal-cli exited {proc.returncode}: {stderr.decode(errors='replace')[:200]}"
+            )
 
     async def _signald_poll_loop(self) -> None:
         if not self.config.account:

@@ -11,6 +11,7 @@ app = FastAPI(title="zen-claw Skills Registry", version="0.1.0")
 db = RegistryDB(data_dir=".registry_data")
 audit = AuditLogger(data_dir=".registry_data")
 
+
 # --- Dependencies ---
 def get_current_user(x_api_token: str = Header(...)):
     user = db.get_user_by_token(x_api_token)
@@ -18,12 +19,15 @@ def get_current_user(x_api_token: str = Header(...)):
         raise HTTPException(status_code=401, detail="Invalid API Token")
     return user
 
+
 def require_role(allowed_check_func):
     def role_checker(user: dict = Depends(get_current_user)):
         if not allowed_check_func(user.get("role", "viewer")):
             raise HTTPException(status_code=403, detail="Insufficient RBAC permissions")
         return user
+
     return role_checker
+
 
 # --- Models ---
 class SkillManifest(BaseModel):
@@ -33,20 +37,20 @@ class SkillManifest(BaseModel):
     author: str
     capabilities: List[str]
 
+
 class PublishRequest(BaseModel):
     manifest: SkillManifest
     payload_sha256: str
+
 
 class ReviewRequest(BaseModel):
     approved: bool
     notes: str
 
+
 # --- API Endpoints ---
 @app.post("/v1/skills/publish", summary="Upload a new skill for review")
-async def publish_skill(
-    req: PublishRequest,
-    user: dict = Depends(require_role(RBAC.can_publish))
-):
+async def publish_skill(req: PublishRequest, user: dict = Depends(require_role(RBAC.can_publish))):
     """Publisher uploads a skill, which enters PENIDNG_REVIEW state."""
     tenant_id = user["tenant_id"]
     skill_id = f"{req.manifest.name}@{req.manifest.version}"
@@ -63,7 +67,7 @@ async def publish_skill(
         "status": "PENDING_REVIEW",
         "publisher_id": user["uid"],
         "created_at": time.time(),
-        "history": []
+        "history": [],
     }
 
     db.save(db.skills_file, skills)
@@ -73,17 +77,18 @@ async def publish_skill(
         actor_id=user["uid"],
         action="PUBLISH_SUBMIT",
         resource=skill_id,
-        details={"sha256": req.payload_sha256}
+        details={"sha256": req.payload_sha256},
     )
 
     return {"status": "success", "skill_id": skill_id, "state": "PENDING_REVIEW"}
+
 
 @app.post("/v1/skills/{skill_name}/{version}/review", summary="4-Eyes check review")
 async def review_skill(
     skill_name: str,
     version: str,
     req: ReviewRequest,
-    user: dict = Depends(require_role(RBAC.can_review))
+    user: dict = Depends(require_role(RBAC.can_review)),
 ):
     """Reviewers approve or reject. Signer TTL starts if approved."""
     skill_id = f"{skill_name}@{version}"
@@ -101,10 +106,14 @@ async def review_skill(
 
     # 4-eyes principle enforcement
     if skill["publisher_id"] == user["uid"]:
-        raise HTTPException(status_code=403, detail="4-Eyes Violation: Publisher cannot review their own package")
+        raise HTTPException(
+            status_code=403, detail="4-Eyes Violation: Publisher cannot review their own package"
+        )
 
     if skill["status"] != "PENDING_REVIEW":
-        raise HTTPException(status_code=400, detail=f"Skill is currently in {skill['status']} state")
+        raise HTTPException(
+            status_code=400, detail=f"Skill is currently in {skill['status']} state"
+        )
 
     skill["status"] = "REVIEWED" if req.approved else "REJECTED"
     skill["reviewer_id"] = user["uid"]
@@ -118,17 +127,16 @@ async def review_skill(
         actor_id=user["uid"],
         action="REVIEW_DECISION",
         resource=skill_id,
-        details={"approved": req.approved, "notes": req.notes}
+        details={"approved": req.approved, "notes": req.notes},
     )
 
     return {"status": "success", "skill_id": skill_id, "new_state": skill["status"]}
 
+
 # --- Takedown API ---
 @app.post("/v1/skills/{skill_name}/takedown", summary="DMCA / Security Takedown")
 async def takedown_skill(
-    skill_name: str,
-    reason: str,
-    user: dict = Depends(require_role(RBAC.can_sign))
+    skill_name: str, reason: str, user: dict = Depends(require_role(RBAC.can_sign))
 ):
     """Instantly yanks all versions of a skill for compliance reasons."""
     skills = db.load(db.skills_file)
@@ -153,7 +161,7 @@ async def takedown_skill(
         actor_id=user["uid"],
         action="TAKEDOWN_EXECUTED",
         resource=skill_name,
-        details={"reason": reason, "versions_yanked": yanked_count}
+        details={"reason": reason, "versions_yanked": yanked_count},
     )
 
     return {"status": "success", "versions_yanked": yanked_count}

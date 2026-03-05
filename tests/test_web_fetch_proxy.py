@@ -81,5 +81,3 @@ async def test_web_fetch_proxy_passes_trace_header(monkeypatch) -> None:
     result = await tool.execute("https://example.com", trace_id="trace-web-1")
     assert result.ok is True
     assert fake.last_headers.get("X-Trace-Id") == "trace-web-1"
-
-

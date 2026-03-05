@@ -81,7 +81,9 @@ def test_telegram_on_message_downloads_photo_to_media_root(tmp_path: Path) -> No
     assert str(saved).startswith(str((tmp_path / "media").resolve()))
 
 
-def test_telegram_on_message_transcribes_voice_when_key_present(monkeypatch, tmp_path: Path) -> None:
+def test_telegram_on_message_transcribes_voice_when_key_present(
+    monkeypatch, tmp_path: Path
+) -> None:
     class _FakeTranscriber:
         def __init__(self, api_key: str = ""):
             self.api_key = api_key
@@ -89,7 +91,9 @@ def test_telegram_on_message_transcribes_voice_when_key_present(monkeypatch, tmp
         async def transcribe(self, file_path):
             return "voice text"
 
-    monkeypatch.setattr("zen_claw.providers.transcription.GroqTranscriptionProvider", _FakeTranscriber)
+    monkeypatch.setattr(
+        "zen_claw.providers.transcription.GroqTranscriptionProvider", _FakeTranscriber
+    )
 
     ch = TelegramChannel(
         TelegramConfig(),
@@ -130,5 +134,3 @@ def test_telegram_on_message_transcribes_voice_when_key_present(monkeypatch, tmp
     assert "[transcription: voice text]" in captured["content"]
     assert len(captured["media"]) == 1
     assert captured["metadata"]["media_refs"] == ["media://telegram/voice/voice_file_id_1234567890"]
-
-

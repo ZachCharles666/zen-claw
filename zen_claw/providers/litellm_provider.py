@@ -38,7 +38,7 @@ def _log_retry_attempt(retry_state: Any) -> None:
 class LiteLLMProvider(LLMProvider):
     """
     LLM provider using LiteLLM for multi-provider support.
-    
+
     Supports OpenRouter, Anthropic, OpenAI, Gemini, and many other providers through
     a unified interface.
     """
@@ -63,9 +63,8 @@ class LiteLLMProvider(LLMProvider):
         self._retry_wait = _retry_wait
 
         # Detect OpenRouter by api_key prefix or explicit api_base
-        self.is_openrouter = (
-            (api_key and api_key.startswith("sk-or-")) or
-            (api_base and "openrouter" in api_base)
+        self.is_openrouter = (api_key and api_key.startswith("sk-or-")) or (
+            api_base and "openrouter" in api_base
         )
 
         # Detect AiHubMix by api_base
@@ -120,14 +119,14 @@ class LiteLLMProvider(LLMProvider):
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
-        
+
         Args:
             messages: List of message dicts with 'role' and 'content'.
             tools: Optional list of tool definitions in OpenAI format.
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
-        
+
         Returns:
             LLMResponse with content and/or tool calls.
         """
@@ -143,7 +142,9 @@ class LiteLLMProvider(LLMProvider):
         ]
         model_lower = model.lower()
         for keywords, prefix, skip in _prefix_rules:
-            if any(kw in model_lower for kw in keywords) and not any(model.startswith(s) for s in skip):
+            if any(kw in model_lower for kw in keywords) and not any(
+                model.startswith(s) for s in skip
+            ):
                 model = f"{prefix}/{model}"
                 break
 
@@ -180,6 +181,7 @@ class LiteLLMProvider(LLMProvider):
 
         if self.rate_limit_delay_sec > 0:
             import asyncio
+
             await asyncio.sleep(self.rate_limit_delay_sec)
 
         _wait = (
@@ -227,16 +229,19 @@ class LiteLLMProvider(LLMProvider):
                 args = tc.function.arguments
                 if isinstance(args, str):
                     import json
+
                     try:
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {"raw": args}
 
-                tool_calls.append(ToolCallRequest(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=args,
-                ))
+                tool_calls.append(
+                    ToolCallRequest(
+                        id=tc.id,
+                        name=tc.function.name,
+                        arguments=args,
+                    )
+                )
 
         usage = {}
         if hasattr(response, "usage") and response.usage:
@@ -256,5 +261,3 @@ class LiteLLMProvider(LLMProvider):
     def get_default_model(self) -> str:
         """Get the default model."""
         return self.default_model
-
-

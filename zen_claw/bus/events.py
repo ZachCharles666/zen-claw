@@ -48,7 +48,3 @@ class OutboundMessage:
     def trace_id(self) -> str | None:
         """Trace ID for request correlation."""
         return TraceContext.get_trace_id(self.metadata)
-
-
-
-

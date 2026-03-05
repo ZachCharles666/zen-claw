@@ -26,9 +26,15 @@ def test_extract_media_refs_for_image() -> None:
 
 def test_extract_media_refs_for_audio_video_file() -> None:
     ch = FeishuChannel(FeishuConfig(), MessageBus())
-    assert ch._extract_media_refs("audio", '{"file_key":"aud_1"}') == [{"key": "aud_1", "uri": "media://feishu/audio/aud_1"}]
-    assert ch._extract_media_refs("video", '{"file_key":"vid_1"}') == [{"key": "vid_1", "uri": "media://feishu/video/vid_1"}]
-    assert ch._extract_media_refs("file", '{"file_key":"f_1"}') == [{"key": "f_1", "uri": "media://feishu/file/f_1"}]
+    assert ch._extract_media_refs("audio", '{"file_key":"aud_1"}') == [
+        {"key": "aud_1", "uri": "media://feishu/audio/aud_1"}
+    ]
+    assert ch._extract_media_refs("video", '{"file_key":"vid_1"}') == [
+        {"key": "vid_1", "uri": "media://feishu/video/vid_1"}
+    ]
+    assert ch._extract_media_refs("file", '{"file_key":"f_1"}') == [
+        {"key": "f_1", "uri": "media://feishu/file/f_1"}
+    ]
 
 
 def test_on_message_for_image_passes_media_refs() -> None:
@@ -59,5 +65,3 @@ def test_on_message_for_image_passes_media_refs() -> None:
     assert captured["content"] == "[image]\n[media_ref: media://local/feishu/feishu_m2_img_123.png]"
     assert captured["media"] == ["media://local/feishu/feishu_m2_img_123.png"]
     assert captured["metadata"]["msg_type"] == "image"
-
-

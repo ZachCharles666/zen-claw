@@ -35,4 +35,3 @@ def test_trigger_cron_job_with_audit_not_found(tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     result = trigger_cron_job_with_audit("missing-id", data_dir=data_dir)
     assert result["ok"] is False
-

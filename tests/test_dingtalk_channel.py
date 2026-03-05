@@ -34,7 +34,7 @@ async def test_dingtalk_stream_message(config, bus):
     async def mock_handle_message(**kwargs):
         published_msgs.append(kwargs)
 
-    channel._handle_message = mock_handle_message # type: ignore
+    channel._handle_message = mock_handle_message  # type: ignore
     channel._loop = asyncio.get_running_loop()
 
     # Create mock callback message
@@ -65,16 +65,20 @@ async def test_dingtalk_webhook_media_parsing(config, bus):
 
     # Replace the actual publish method
     published_msgs = []
+
     async def mock_handle_message(**kwargs):
         published_msgs.append(kwargs)
-    channel._handle_message = mock_handle_message # type: ignore
+
+    channel._handle_message = mock_handle_message  # type: ignore
 
     # Test text
-    await channel.handle_webhook({
-        "msgtype": "picture",
-        "senderStaffId": "staff_2",
-        "content": {"downloadCode": "img_dl_code"}
-    })
+    await channel.handle_webhook(
+        {
+            "msgtype": "picture",
+            "senderStaffId": "staff_2",
+            "content": {"downloadCode": "img_dl_code"},
+        }
+    )
 
     assert len(published_msgs) == 1
     assert published_msgs[0]["content"] == "[image]\n[media_ref: img_dl_code]"
@@ -93,7 +97,7 @@ async def test_dingtalk_send_with_media_text(config, bus):
             chat_id="chat_1",
             channel="dingtalk",
             content="Look at this",
-            media=["media://local/img_name.jpg"]
+            media=["media://local/img_name.jpg"],
         )
 
         await channel.send(msg)
@@ -103,7 +107,10 @@ async def test_dingtalk_send_with_media_text(config, bus):
 
         assert call_kwargs["json"]["msgtype"] == "markdown"
         assert "Look at this" in call_kwargs["json"]["markdown"]["text"]
-        assert "[Media attached: media://local/img_name.jpg]" in call_kwargs["json"]["markdown"]["text"]
+        assert (
+            "[Media attached: media://local/img_name.jpg]"
+            in call_kwargs["json"]["markdown"]["text"]
+        )
 
 
 # ── tests: MEDIUM-010 — run_in_executor Future stored and callback registered ─

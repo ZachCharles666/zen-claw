@@ -32,7 +32,9 @@ class _FakeClient:
 
 
 def test_browser_save_session_sends_expected_request(monkeypatch) -> None:
-    fake = _FakeClient(_FakeResponse(200, {"ok": True, "action": "save_session", "path": "/tmp/s1.json"}))
+    fake = _FakeClient(
+        _FakeResponse(200, {"ok": True, "action": "save_session", "path": "/tmp/s1.json"})
+    )
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
     tool = BrowserSaveSessionTool(mode="sidecar")
     result = asyncio.run(tool.execute(sessionId="abc123"))
@@ -42,7 +44,9 @@ def test_browser_save_session_sends_expected_request(monkeypatch) -> None:
 
 
 def test_browser_save_session_parses_response(monkeypatch) -> None:
-    fake = _FakeClient(_FakeResponse(200, {"ok": True, "action": "save_session", "path": "/tmp/s1.json"}))
+    fake = _FakeClient(
+        _FakeResponse(200, {"ok": True, "action": "save_session", "path": "/tmp/s1.json"})
+    )
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
     tool = BrowserSaveSessionTool(mode="sidecar")
     result = asyncio.run(tool.execute(sessionId="abc123"))
@@ -52,7 +56,15 @@ def test_browser_save_session_parses_response(monkeypatch) -> None:
 
 def test_browser_load_session_sends_expected_request(monkeypatch) -> None:
     fake = _FakeClient(
-        _FakeResponse(200, {"ok": True, "action": "load_session", "session_id": "new-s", "state_file": "/tmp/s1.json"})
+        _FakeResponse(
+            200,
+            {
+                "ok": True,
+                "action": "load_session",
+                "session_id": "new-s",
+                "state_file": "/tmp/s1.json",
+            },
+        )
     )
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
     tool = BrowserLoadSessionTool(mode="sidecar")
@@ -64,7 +76,15 @@ def test_browser_load_session_sends_expected_request(monkeypatch) -> None:
 
 def test_browser_load_session_prefers_state_file_when_both_provided(monkeypatch) -> None:
     fake = _FakeClient(
-        _FakeResponse(200, {"ok": True, "action": "load_session", "session_id": "new-s", "state_file": "/tmp/s1.json"})
+        _FakeResponse(
+            200,
+            {
+                "ok": True,
+                "action": "load_session",
+                "session_id": "new-s",
+                "state_file": "/tmp/s1.json",
+            },
+        )
     )
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
     tool = BrowserLoadSessionTool(mode="sidecar")
@@ -95,7 +115,12 @@ def test_browser_load_session_result_contains_new_session_id(monkeypatch) -> Non
     fake = _FakeClient(
         _FakeResponse(
             200,
-            {"ok": True, "action": "load_session", "session_id": "brand-new", "state_file": "/tmp/old.json"},
+            {
+                "ok": True,
+                "action": "load_session",
+                "session_id": "brand-new",
+                "state_file": "/tmp/old.json",
+            },
         )
     )
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)

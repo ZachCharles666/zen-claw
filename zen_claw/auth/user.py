@@ -96,7 +96,9 @@ class UserStore:
         self._write(user)
         return user
 
-    def authenticate(self, username: str, password: str, tenant_id: str | None = None) -> Optional[User]:
+    def authenticate(
+        self, username: str, password: str, tenant_id: str | None = None
+    ) -> Optional[User]:
         tenants = [tenant_id] if tenant_id else self._all_tenant_ids()
         for tid in tenants:
             if not tid:

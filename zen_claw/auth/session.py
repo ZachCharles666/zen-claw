@@ -22,7 +22,14 @@ class SessionManager:
         except ImportError as exc:
             raise RuntimeError("PyJWT is not installed") from exc
         now = int(time.time())
-        payload = {"sub": user_id, "tid": tenant_id, "username": username, "role": role, "iat": now, "exp": now + self.expire_seconds}
+        payload = {
+            "sub": user_id,
+            "tid": tenant_id,
+            "username": username,
+            "role": role,
+            "iat": now,
+            "exp": now + self.expire_seconds,
+        }
         return jwt.encode(payload, self.secret, algorithm=self.algorithm)
 
     def validate_session(self, token: str) -> Optional[dict]:

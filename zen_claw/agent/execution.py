@@ -72,7 +72,7 @@ class ExecutionController:
         if not content.startswith(prefix):
             return None
         try:
-            payload = json.loads(content[len(prefix):])
+            payload = json.loads(content[len(prefix) :])
             err = payload.get("error", {})
             kind = str(err.get("kind", ToolErrorKind.RUNTIME.value))
             message = str(err.get("message", ""))
@@ -80,6 +80,3 @@ class ExecutionController:
             return ReflectionHint(kind=kind, message=message, retryable=retryable)
         except Exception:
             return None
-
-
-

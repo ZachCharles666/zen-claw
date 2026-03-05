@@ -97,5 +97,3 @@ async def test_subagent_sensitive_override_without_env_still_denies_spawn(monkey
     assert result.ok is False
     assert result.error is not None
     assert result.error.code == "tool_policy_denied"
-
-

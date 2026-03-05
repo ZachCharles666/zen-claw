@@ -69,7 +69,9 @@ class SocialAgentLoop:
         self._pc = platform_config
         self._provider = provider
         self._workspace = Path(workspace)
-        self._model = model or str(getattr(config.agents.defaults, "model", "") or provider.get_default_model())
+        self._model = model or str(
+            getattr(config.agents.defaults, "model", "") or provider.get_default_model()
+        )
         self._memory = MemoryStore(self._workspace)
         self._get_tool = SocialPlatformGetTool(proxy_url=platform_config.proxy_url)
         self._post_tool = SocialPlatformPostTool(proxy_url=platform_config.proxy_url)
@@ -97,6 +99,7 @@ class SocialAgentLoop:
                 # Auto-sign social posts
                 try:
                     from zen_claw.auth.identity import AgentIdentity
+
                     identity = AgentIdentity(self._workspace / ".agent_keys")
                     identity.get_or_create_keypair()
                     sig = identity.sign(text.encode("utf-8"))
@@ -255,4 +258,3 @@ class SocialAgentLoop:
             f"- Response:\n\n> {content[:500]}\n"
         )
         self._memory.append_today(entry)
-

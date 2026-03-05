@@ -107,5 +107,3 @@ def test_cron_policy_fields_serialize_to_camel_case() -> None:
     assert policy["cronAllowedChannels"] == ["telegram"]
     assert policy["cronAllowedActionsByChannel"] == {"telegram": ["add", "list"]}
     assert policy["cronRequireRemoveConfirmation"] is True
-
-

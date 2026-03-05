@@ -15,7 +15,7 @@ class MessageTool(Tool):
         self,
         send_callback: Callable[[OutboundMessage], Awaitable[None]] | None = None,
         default_channel: str = "",
-        default_chat_id: str = ""
+        default_chat_id: str = "",
     ):
         self._send_callback = send_callback
         self._default_channel = default_channel
@@ -45,28 +45,18 @@ class MessageTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "The message content to send"
-                },
+                "content": {"type": "string", "description": "The message content to send"},
                 "channel": {
                     "type": "string",
-                    "description": "Optional: target channel (telegram, discord, etc.)"
+                    "description": "Optional: target channel (telegram, discord, etc.)",
                 },
-                "chat_id": {
-                    "type": "string",
-                    "description": "Optional: target chat/user ID"
-                }
+                "chat_id": {"type": "string", "description": "Optional: target chat/user ID"},
             },
-            "required": ["content"]
+            "required": ["content"],
         }
 
     async def execute(
-        self,
-        content: str,
-        channel: str | None = None,
-        chat_id: str | None = None,
-        **kwargs: Any
+        self, content: str, channel: str | None = None, chat_id: str | None = None, **kwargs: Any
     ) -> ToolResult:
         channel = channel or self._default_channel
         chat_id = chat_id or self._default_chat_id
@@ -101,5 +91,3 @@ class MessageTool(Tool):
                 f"Error sending message: {str(e)}",
                 code="message_send_failed",
             )
-
-

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 class SpawnTool(Tool):
     """
     Tool to spawn a subagent for background task execution.
-    
+
     The subagent runs asynchronously and announces its result back
     to the main agent when complete.
     """
@@ -22,12 +22,20 @@ class SpawnTool(Tool):
         self._origin_channel = "cli"
         self._origin_chat_id = "direct"
         self._trace_id: str | None = None
+        self._skill_pins: dict[str, str] | None = None
 
-    def set_context(self, channel: str, chat_id: str, trace_id: str | None = None) -> None:
-        """Set the origin context for subagent announcements."""
+    def set_context(
+        self,
+        channel: str,
+        chat_id: str,
+        trace_id: str | None = None,
+        skill_pins: dict[str, str] | None = None,
+    ) -> None:
+        """Set the origin context and skill version pins for subagent announcements."""
         self._origin_channel = channel
         self._origin_chat_id = chat_id
         self._trace_id = trace_id
+        self._skill_pins = skill_pins
 
     @property
     def name(self) -> str:
@@ -67,6 +75,7 @@ class SpawnTool(Tool):
                 origin_channel=self._origin_channel,
                 origin_chat_id=self._origin_chat_id,
                 parent_trace_id=self._trace_id or kwargs.get("trace_id"),
+                skill_pins=self._skill_pins,
             )
             return ToolResult.success(msg)
         except Exception as e:
@@ -75,5 +84,3 @@ class SpawnTool(Tool):
                 f"Failed to spawn subagent: {str(e)}",
                 code="spawn_failed",
             )
-
-

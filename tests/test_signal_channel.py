@@ -72,7 +72,9 @@ def test_signal_channel_process_signald_payload_to_bus() -> None:
                     "source": "+19990001",
                     "dataMessage": {
                         "message": "from signal",
-                        "attachments": [{"id": "att1", "contentType": "image/jpeg", "path": "C:/tmp/pic.jpg"}],
+                        "attachments": [
+                            {"id": "att1", "contentType": "image/jpeg", "path": "C:/tmp/pic.jpg"}
+                        ],
                     },
                 }
             }
@@ -109,7 +111,10 @@ def test_signal_channel_send_falls_back_to_jsonrpc() -> None:
         ch._signald_post = _fake_post  # type: ignore[method-assign]
         ch._signald_rpc_multi = _fake_rpc  # type: ignore[method-assign]
         await ch.send(OutboundMessage(channel="signal", chat_id="+17770002", content="hi"))
-        assert calls == [("post", "/v1/send"), ("rpc_multi", ("send", "sendMessage", "send_message"))]
+        assert calls == [
+            ("post", "/v1/send"),
+            ("rpc_multi", ("send", "sendMessage", "send_message")),
+        ]
 
     asyncio.run(_run())
 
@@ -169,7 +174,9 @@ def test_signal_channel_attachment_rpc_fallback(tmp_path) -> None:
 
         ch._http = _Http()  # type: ignore[assignment]
         ch._signald_rpc_multi = _fake_rpc_multi  # type: ignore[method-assign]
-        result = await ch._download_signal_attachment({"id": "aid-rpc", "contentType": "image/jpeg"}, 0)
+        result = await ch._download_signal_attachment(
+            {"id": "aid-rpc", "contentType": "image/jpeg"}, 0
+        )
         assert result is not None
         assert Path(result).exists()
         Path(result).unlink(missing_ok=True)

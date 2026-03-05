@@ -27,5 +27,3 @@ async def test_registry_passes_trace_id_to_tool_execute() -> None:
     result = await reg.execute("trace_echo", {}, trace_id="trace-123")
     assert result.ok is True
     assert result.content == "trace-123"
-
-

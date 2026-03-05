@@ -63,9 +63,7 @@ def test_empty_config_blocks_handle_message():
     """_handle_message must NOT publish when sender is denied by default-deny."""
     bus = MessageBus()
     ch = _chan(SimpleNamespace(admins=[], users=[], allow_from=[]))
-    asyncio.run(
-        ch._handle_message(sender_id="stranger", chat_id="c1", content="hello")
-    )
+    asyncio.run(ch._handle_message(sender_id="stranger", chat_id="c1", content="hello"))
     # Queue should be empty — message was blocked
     with pytest.raises(Exception):
         asyncio.run(asyncio.wait_for(bus.consume_inbound(), timeout=0.05))

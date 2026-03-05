@@ -26,14 +26,19 @@ class TestEdgeTTSProvider:
         assert EdgeTTSProvider().default_voice == "zh-CN-XiaoxiaoNeural"
 
     def test_custom_voice(self):
-        assert EdgeTTSProvider(default_voice="zh-CN-YunxiNeural").default_voice == "zh-CN-YunxiNeural"
+        assert (
+            EdgeTTSProvider(default_voice="zh-CN-YunxiNeural").default_voice == "zh-CN-YunxiNeural"
+        )
 
     @pytest.mark.asyncio
     async def test_synthesize_with_mock(self):
         provider = EdgeTTSProvider()
         fake = b"ID3" + b"\x00" * 100
         fake_edge = types.SimpleNamespace(Communicate=object)
-        with patch.dict("sys.modules", {"edge_tts": fake_edge}), patch.object(provider, "_synthesize_chunk", return_value=fake):
+        with (
+            patch.dict("sys.modules", {"edge_tts": fake_edge}),
+            patch.object(provider, "_synthesize_chunk", return_value=fake),
+        ):
             result = await provider.synthesize("测试文本")
         assert result == fake
 
@@ -106,7 +111,9 @@ class TestTextToSpeechTool:
         mock_provider.synthesize_to_file = _fake_synthesize_to_file
         tool._tts_provider = mock_provider
 
-        result = await tool.execute(text="你好世界", voice="zh-CN-XiaoxiaoNeural", output_filename="test_output.mp3")
+        result = await tool.execute(
+            text="你好世界", voice="zh-CN-XiaoxiaoNeural", output_filename="test_output.mp3"
+        )
         assert result.ok is True
         out = Path(result.meta["output_path"])
         assert out.exists()
@@ -125,5 +132,7 @@ class TestTextToSpeechTool:
         mock_provider = AsyncMock()
         mock_provider.synthesize_to_file = _capture
         tool._tts_provider = mock_provider
-        await tool.execute(text="测试语音", voice="zh-CN-YunxiNeural", output_filename="voice_test.mp3")
+        await tool.execute(
+            text="测试语音", voice="zh-CN-YunxiNeural", output_filename="voice_test.mp3"
+        )
         assert calls[0]["voice"] == "zh-CN-YunxiNeural"

@@ -39,22 +39,40 @@ class NodeService:
             store_path.stem + "_approval_events.jsonl"
         )
         imm_dir_env = str(os.environ.get("zen_claw_NODE_AUDIT_IMMUTABLE_DIR", "")).strip()
-        self.immutable_events_dir = immutable_events_dir or (Path(imm_dir_env) if imm_dir_env else None)
-        self.alert_log_path = store_path.with_name(store_path.stem + "_audit_alerts.jsonl")
-        self._remote_s3_bucket = str(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_BUCKET", "")).strip()
-        self._remote_s3_prefix = str(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_PREFIX", "zen-claw/audit")).strip(
-            "/"
+        self.immutable_events_dir = immutable_events_dir or (
+            Path(imm_dir_env) if imm_dir_env else None
         )
-        self._remote_s3_region = str(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_REGION", "")).strip()
-        self._remote_s3_endpoint = str(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_ENDPOINT", "")).strip()
-        self._remote_s3_access_key = str(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_ACCESS_KEY", "")).strip()
-        self._remote_s3_secret_key = str(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_SECRET_KEY", "")).strip()
-        self._remote_s3_session_token = str(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_SESSION_TOKEN", "")).strip()
-        self._remote_retry_max = max(1, int(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_RETRY_MAX", "3") or 3))
+        self.alert_log_path = store_path.with_name(store_path.stem + "_audit_alerts.jsonl")
+        self._remote_s3_bucket = str(
+            os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_BUCKET", "")
+        ).strip()
+        self._remote_s3_prefix = str(
+            os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_PREFIX", "zen-claw/audit")
+        ).strip("/")
+        self._remote_s3_region = str(
+            os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_REGION", "")
+        ).strip()
+        self._remote_s3_endpoint = str(
+            os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_ENDPOINT", "")
+        ).strip()
+        self._remote_s3_access_key = str(
+            os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_ACCESS_KEY", "")
+        ).strip()
+        self._remote_s3_secret_key = str(
+            os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_SECRET_KEY", "")
+        ).strip()
+        self._remote_s3_session_token = str(
+            os.environ.get("zen_claw_NODE_AUDIT_REMOTE_S3_SESSION_TOKEN", "")
+        ).strip()
+        self._remote_retry_max = max(
+            1, int(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_RETRY_MAX", "3") or 3)
+        )
         self._remote_retry_backoff_ms = max(
             0, int(os.environ.get("zen_claw_NODE_AUDIT_REMOTE_RETRY_BACKOFF_MS", "300") or 300)
         )
-        self._default_token_ttl_sec = max(0, int(os.environ.get("zen_claw_NODE_TOKEN_TTL_SEC", "86400") or 86400))
+        self._default_token_ttl_sec = max(
+            0, int(os.environ.get("zen_claw_NODE_TOKEN_TTL_SEC", "86400") or 86400)
+        )
         self._idempotency_window_sec = max(
             0, int(os.environ.get("zen_claw_NODE_IDEMPOTENCY_WINDOW_SEC", "86400") or 86400)
         )
@@ -258,7 +276,10 @@ class NodeService:
         nodes = self._load().get("nodes", {})
         if not isinstance(nodes, dict):
             return []
-        return sorted((dict(v) for v in nodes.values() if isinstance(v, dict)), key=lambda x: x.get("created_at_ms", 0))
+        return sorted(
+            (dict(v) for v in nodes.values() if isinstance(v, dict)),
+            key=lambda x: x.get("created_at_ms", 0),
+        )
 
     def _required_capability_for_task(self, task_type: str) -> str:
         t = str(task_type or "").strip().lower()
@@ -352,7 +373,9 @@ class NodeService:
         if max_running_tasks is not None:
             current["max_running_tasks"] = max(1, int(max_running_tasks))
         if require_approval_task_types is not None:
-            cleaned = [str(x).strip().lower() for x in require_approval_task_types if str(x).strip()]
+            cleaned = [
+                str(x).strip().lower() for x in require_approval_task_types if str(x).strip()
+            ]
             current["require_approval_task_types"] = cleaned
         if approval_timeout_sec is not None:
             current["approval_timeout_sec"] = max(0, int(approval_timeout_sec))
@@ -391,7 +414,9 @@ class NodeService:
             "at_ms": _now_ms(),
             "prev_hash": prev_hash,
         }
-        canonical = json.dumps(base_event, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        canonical = json.dumps(
+            base_event, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
         event_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         if self.audit_secret:
             signature = hmac.new(
@@ -524,7 +549,11 @@ class NodeService:
         client = self._get_remote_s3_client()
         if client is None:
             return False
-        key = f"{self._remote_s3_prefix}/{ev_hash}.json" if self._remote_s3_prefix else f"{ev_hash}.json"
+        key = (
+            f"{self._remote_s3_prefix}/{ev_hash}.json"
+            if self._remote_s3_prefix
+            else f"{ev_hash}.json"
+        )
         payload = dict(event)
         payload["immutable_remote_written_at_ms"] = _now_ms()
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
@@ -623,12 +652,11 @@ class NodeService:
             "死循环",
         ]
         if t == "agent.prompt":
-            prompt = str(
-                payload.get("prompt")
-                or payload.get("message")
-                or payload.get("content")
-                or ""
-            ).strip().lower()
+            prompt = (
+                str(payload.get("prompt") or payload.get("message") or payload.get("content") or "")
+                .strip()
+                .lower()
+            )
             if prompt:
                 for marker in loop_markers:
                     if marker in prompt:
@@ -680,7 +708,9 @@ class NodeService:
                 "task_type": normalized_type,
             }
         idem = str(idempotency_key or "").strip()
-        req_cap = str(required_capability or "").strip().lower() or self._required_capability_for_task(normalized_type)
+        req_cap = str(
+            required_capability or ""
+        ).strip().lower() or self._required_capability_for_task(normalized_type)
         if req_cap and not self._node_has_capability(node_id, req_cap):
             return {
                 "ok": False,
@@ -736,7 +766,11 @@ class NodeService:
         requires_approval = self._task_type_allowed(normalized_type, require_approval_patterns)
         approval_timeout_sec = int(policy.get("approval_timeout_sec", 0) or 0)
         approval_required_count = max(1, int(policy.get("approval_required_count", 1) or 1))
-        expires_at_ms = _now_ms() + (approval_timeout_sec * 1000) if requires_approval and approval_timeout_sec > 0 else None
+        expires_at_ms = (
+            _now_ms() + (approval_timeout_sec * 1000)
+            if requires_approval and approval_timeout_sec > 0
+            else None
+        )
         task = {
             "task_id": str(uuid.uuid4())[:12],
             "trace_id": str(uuid.uuid4())[:12],
@@ -986,7 +1020,9 @@ class NodeService:
             self._save()
         return expired
 
-    def list_approval_events(self, *, node_id: str | None = None, task_id: str | None = None) -> list[dict[str, Any]]:
+    def list_approval_events(
+        self, *, node_id: str | None = None, task_id: str | None = None
+    ) -> list[dict[str, Any]]:
         rows = self._load().get("approval_events", [])
         out: list[dict[str, Any]] = []
         for row in rows:
@@ -1021,7 +1057,9 @@ class NodeService:
                 "at_ms": int(row.get("at_ms") or 0),
                 "prev_hash": str(row.get("prev_hash") or ""),
             }
-            canonical = json.dumps(base_event, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+            canonical = json.dumps(
+                base_event, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+            )
             expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             if str(row.get("hash") or "") != expected_hash:
                 return {
@@ -1050,7 +1088,12 @@ class NodeService:
     def sync_approval_events_to_immutable(self) -> dict[str, Any]:
         """Backfill all in-store approval events into immutable sink directory."""
         if self.immutable_events_dir is None and not self._remote_s3_bucket:
-            return {"ok": False, "synced": 0, "skipped": 0, "error": "immutable sink not configured"}
+            return {
+                "ok": False,
+                "synced": 0,
+                "skipped": 0,
+                "error": "immutable sink not configured",
+            }
         synced = 0
         skipped = 0
         for row in self.list_approval_events():

@@ -39,7 +39,11 @@ def test_agent_loop_passes_memory_recall_mode_to_context(tmp_path: Path, monkeyp
             self.messages.append({"role": role, "content": content, **kwargs})
 
         def get_history(self, max_messages: int = 50) -> list[dict[str, Any]]:
-            recent = self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages
+            recent = (
+                self.messages[-max_messages:]
+                if len(self.messages) > max_messages
+                else self.messages
+            )
             return [{"role": m["role"], "content": m["content"]} for m in recent]
 
     class _InMemorySessionManager:
@@ -81,9 +85,9 @@ def test_agent_loop_passes_memory_recall_mode_to_context(tmp_path: Path, monkeyp
     )
     loop_recent.memory_extractor.should_extract = lambda user_text, assistant_text: False  # type: ignore[assignment]
     loop_recent.context.memory.append_today("- recent memory from loop test")
-    _ = asyncio.run(loop_recent.process_direct("check recent memory", channel="cli", chat_id="direct"))
+    _ = asyncio.run(
+        loop_recent.process_direct("check recent memory", channel="cli", chat_id="direct")
+    )
     system_prompt = str(provider.snapshots[-1][0]["content"])
     assert "## Recent Memory" in system_prompt
     assert "recent memory from loop test" in system_prompt
-
-

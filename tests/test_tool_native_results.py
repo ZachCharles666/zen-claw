@@ -82,5 +82,3 @@ async def test_message_tool_returns_structured_success_with_callback() -> None:
     result = await tool.execute("hello")
     assert result.ok is True
     assert sent and sent[0].content == "hello"
-
-

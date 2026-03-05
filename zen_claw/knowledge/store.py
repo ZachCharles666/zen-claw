@@ -26,7 +26,9 @@ class ChromaStore:
         except ImportError as exc:
             raise RuntimeError("chromadb is required for ChromaStore") from exc
         self._embedder = embedder or LocalEmbedder()
-        self._client = chromadb.PersistentClient(path=str((Path(data_dir) / "knowledge" / "chroma").resolve()))
+        self._client = chromadb.PersistentClient(
+            path=str((Path(data_dir) / "knowledge" / "chroma").resolve())
+        )
         self._collection = self._client.get_or_create_collection(name=collection_id)
 
     def add(self, chunks: list[dict[str, Any]]) -> list[str]:
@@ -34,10 +36,7 @@ class ChromaStore:
             return []
         ids = [str(uuid.uuid4()) for _ in chunks]
         texts = [str(c.get("content", "")) for c in chunks]
-        metas = [
-            _build_meta(c)
-            for c in chunks
-        ]
+        metas = [_build_meta(c) for c in chunks]
         vectors = self._embedder.embed(texts)
         self._collection.add(ids=ids, documents=texts, metadatas=metas, embeddings=vectors)
         return ids
