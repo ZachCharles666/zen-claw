@@ -9,6 +9,7 @@ from typing import Dict, Optional
 
 logger = logging.getLogger("zen_claw.tunnel")
 
+
 class TunnelManager:
     """
     Manages the lifecycle of the cloudflared tunneling subprocess.
@@ -20,17 +21,15 @@ class TunnelManager:
         self.process: Optional[subprocess.Popen] = None
         self._running = False
         self._monitor_thread: Optional[threading.Thread] = None
-        self.metrics = {
-            "restarts": 0,
-            "start_time": None,
-            "last_error": None
-        }
+        self.metrics = {"restarts": 0, "start_time": None, "last_error": None}
 
     def _get_cloudflared_path(self) -> str:
         """Finds the cloudflared executable in the system PATH."""
         path = shutil.which("cloudflared")
         if not path:
-            raise FileNotFoundError("cloudflared executable not found in PATH. Please install it first.")
+            raise FileNotFoundError(
+                "cloudflared executable not found in PATH. Please install it first."
+            )
         return path
 
     def _build_command(self) -> list:
@@ -59,11 +58,7 @@ class TunnelManager:
             # We explicitly do not capture stdout/stderr here yet, mostly leaving it to the console or capturing it for diagnostic parsing later.
             # In a production setup, we should redirect to a specific log file or ingest it.
             self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
             )
             self._running = True
             self.metrics["start_time"] = time.time()
@@ -84,10 +79,8 @@ class TunnelManager:
         if not self.process or not self.process.stdout:
             return
 
-        metrics_url = None
-
         # Read the subprocess output line by line
-        for line in iter(self.process.stdout.readline, ''):
+        for line in iter(self.process.stdout.readline, ""):
             line = line.strip()
             if not line:
                 continue
@@ -122,7 +115,7 @@ class TunnelManager:
             logger.info(f"Stopping tunnel PID: {self.process.pid}")
             self._running = False
 
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 # Windows doesn't easily support SIGTERM on subprocesses without sending it to the whole group,
                 # but terminate() usually acts as a hard kill or close.
                 self.process.terminate()
@@ -148,9 +141,12 @@ class TunnelManager:
             "running": self.is_running(),
             "pid": self.process.pid if self.is_running() else None,
             "restarts": self.metrics["restarts"],
-            "uptime_seconds": time.time() - self.metrics["start_time"] if self.metrics["start_time"] else 0,
-            "last_error": self.metrics["last_error"]
+            "uptime_seconds": time.time() - self.metrics["start_time"]
+            if self.metrics["start_time"]
+            else 0,
+            "last_error": self.metrics["last_error"],
         }
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -159,7 +155,7 @@ if __name__ == "__main__":
     tm = TunnelManager(port=8000)
     try:
         tm.start()
-        time.sleep(10) # Let it run for a bit
+        time.sleep(10)  # Let it run for a bit
     except KeyboardInterrupt:
         logger.info("Interrupted.")
     finally:

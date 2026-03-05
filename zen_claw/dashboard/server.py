@@ -45,9 +45,19 @@ def _verify_approval_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
     checked = 0
     for idx, row in enumerate(events):
         if not isinstance(row, dict):
-            return {"ok": False, "checked": checked, "error_index": idx, "error": "invalid event row"}
+            return {
+                "ok": False,
+                "checked": checked,
+                "error_index": idx,
+                "error": "invalid event row",
+            }
         if str(row.get("prev_hash") or "") != prev_hash:
-            return {"ok": False, "checked": checked, "error_index": idx, "error": "approval chain broken"}
+            return {
+                "ok": False,
+                "checked": checked,
+                "error_index": idx,
+                "error": "approval chain broken",
+            }
         base_event = {
             "event_id": str(row.get("event_id") or ""),
             "task_id": str(row.get("task_id") or ""),
@@ -58,10 +68,17 @@ def _verify_approval_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
             "at_ms": int(row.get("at_ms") or 0),
             "prev_hash": str(row.get("prev_hash") or ""),
         }
-        canonical = json.dumps(base_event, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        canonical = json.dumps(
+            base_event, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
         expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         if str(row.get("hash") or "") != expected_hash:
-            return {"ok": False, "checked": checked, "error_index": idx, "error": "approval hash mismatch"}
+            return {
+                "ok": False,
+                "checked": checked,
+                "error_index": idx,
+                "error": "approval hash mismatch",
+            }
         prev_hash = expected_hash
         checked += 1
     return {"ok": True, "checked": checked, "error_index": None, "error": ""}
@@ -83,7 +100,8 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         [
             j
             for j in cron_jobs
-            if isinstance(j.get("state"), dict) and str(j["state"].get("lastStatus") or "") == "error"
+            if isinstance(j.get("state"), dict)
+            and str(j["state"].get("lastStatus") or "") == "error"
         ]
     )
 
@@ -135,12 +153,16 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
                 "admins": len(admins),
                 "users": len(users),
             }
-            )
+        )
 
     node_data = _read_json(data_dir / "nodes" / "state.json")
     nodes = node_data.get("nodes", {}) if isinstance(node_data.get("nodes"), dict) else {}
     tasks = node_data.get("tasks", []) if isinstance(node_data.get("tasks"), list) else []
-    approval_events = node_data.get("approval_events", []) if isinstance(node_data.get("approval_events"), list) else []
+    approval_events = (
+        node_data.get("approval_events", [])
+        if isinstance(node_data.get("approval_events"), list)
+        else []
+    )
     approval_chain = _verify_approval_chain([e for e in approval_events if isinstance(e, dict)])
 
     pending_approval = 0
@@ -176,7 +198,11 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         if not node_id:
             continue
         cur = latest_task_by_node.get(node_id)
-        cur_ms = int(cur.get("updated_at_ms") or cur.get("created_at_ms") or 0) if isinstance(cur, dict) else -1
+        cur_ms = (
+            int(cur.get("updated_at_ms") or cur.get("created_at_ms") or 0)
+            if isinstance(cur, dict)
+            else -1
+        )
         row_ms = int(t.get("updated_at_ms") or t.get("created_at_ms") or 0)
         if row_ms >= cur_ms:
             latest_task_by_node[node_id] = t
@@ -196,7 +222,9 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
                 "last_seen_ms": node.get("last_seen_ms"),
                 "allow_gateway_tasks": bool(policy.get("allow_gateway_tasks", True)),
                 "max_running_tasks": max(1, int(policy.get("max_running_tasks", 1) or 1)),
-                "approval_required_count": max(1, int(policy.get("approval_required_count", 1) or 1)),
+                "approval_required_count": max(
+                    1, int(policy.get("approval_required_count", 1) or 1)
+                ),
                 "latest_task_type": str(latest_task.get("task_type") or ""),
                 "latest_task_status": str(latest_task.get("status") or ""),
                 "latest_task_updated_at_ms": latest_task.get("updated_at_ms"),
@@ -226,7 +254,9 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
     compression_events: list[dict[str, Any]] = []
     try:
         sessions_dir = Path.home() / ".zen-claw" / "sessions"
-        for sp in sorted(sessions_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]:
+        for sp in sorted(
+            sessions_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True
+        )[:20]:
             try:
                 first = sp.read_text(encoding="utf-8").splitlines()[0]
                 row = json.loads(first)
@@ -283,7 +313,9 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "planning_enabled": bool(config.agents.defaults.enable_planning),
             "max_reflections": int(config.agents.defaults.max_reflections),
             "compression_trigger_ratio": float(config.agents.defaults.compression_trigger_ratio),
-            "compression_hysteresis_ratio": float(config.agents.defaults.compression_hysteresis_ratio),
+            "compression_hysteresis_ratio": float(
+                config.agents.defaults.compression_hysteresis_ratio
+            ),
             "compression_cooldown_turns": int(config.agents.defaults.compression_cooldown_turns),
             "compression_events": compression_events,
         },
@@ -315,7 +347,8 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
                 [
                     n
                     for n in nodes.values()
-                    if isinstance(n, dict) and str(n.get("status") or "").strip().lower() == "active"
+                    if isinstance(n, dict)
+                    and str(n.get("status") or "").strip().lower() == "active"
                 ]
             ),
             "total_tasks": len([t for t in tasks if isinstance(t, dict)]),
@@ -438,7 +471,9 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             skill_permissions_mode=cfg.agents.defaults.skill_permissions_mode,
             allowed_models=cfg.agents.defaults.allowed_models,
         )
-        return await loop.process_direct(content=message, session_key=f"web:{session_id}", channel="web_chat", chat_id=session_id)
+        return await loop.process_direct(
+            content=message, session_key=f"web:{session_id}", channel="web_chat", chat_id=session_id
+        )
     except Exception:
         return f"[echo] {message}"
 
@@ -457,7 +492,9 @@ class _WebChatRuntime:
             raise RuntimeError("provider_not_configured")
         self.cfg = cfg
         self.bus = MessageBus()
-        self.channel = WebChatChannel(cfg.channels.webchat, self.bus, media_root=cfg.workspace_path / "media")
+        self.channel = WebChatChannel(
+            cfg.channels.webchat, self.bus, media_root=cfg.workspace_path / "media"
+        )
         self.channel.access_checker = lambda *_args, **_kwargs: True
         self.provider = LiteLLMProvider(
             api_key=provider_cfg.api_key,
@@ -542,16 +579,24 @@ if _HAS_FASTAPI:
     # ── Pydantic schemas ──────────────────────────────────────────────────────
 
     class InvokeRequest(BaseModel):
-        message: str = Field(..., description="The user message to send to the agent.", example="帮我查一下今天的天气")
-        session_id: str | None = Field(None, description="Optional session ID for conversation continuity. Auto-generated if omitted.", example="abc-123")
+        message: str = Field(
+            ...,
+            description="The user message to send to the agent.",
+            json_schema_extra={"example": "帮我查一下今天的天气"},
+        )
+        session_id: str | None = Field(
+            None,
+            description="Optional session ID for conversation continuity. Auto-generated if omitted.",
+            json_schema_extra={"example": "abc-123"},
+        )
 
     class InvokeResponse(BaseModel):
         response: str = Field(..., description="The agent's reply.")
         session_id: str = Field(..., description="Session ID used for this turn.")
 
     class HealthResponse(BaseModel):
-        status: str = Field(..., example="ok")
-        service: str = Field(..., example="zen-claw")
+        status: str = Field(..., json_schema_extra={"example": "ok"})
+        service: str = Field(..., json_schema_extra={"example": "zen-claw"})
 
     class InfoResponse(BaseModel):
         version: str
@@ -570,7 +615,13 @@ if _HAS_FASTAPI:
             if path.startswith("/api/v1/") and path not in self.EXEMPT:
                 api_key = str(request.headers.get("X-API-Key", ""))
                 if not api_key or not verify_api_key(api_key):
-                    return JSONResponse(status_code=401, content={"error": "invalid_api_key", "detail": "Provide a valid API key via the X-API-Key header."})
+                    return JSONResponse(
+                        status_code=401,
+                        content={
+                            "error": "invalid_api_key",
+                            "detail": "Provide a valid API key via the X-API-Key header.",
+                        },
+                    )
             return await call_next(request)
 
     # ── Middleware: Simple sliding-window rate limiter ────────────────────────
@@ -597,7 +648,10 @@ if _HAS_FASTAPI:
             if len(bucket) >= self._max:
                 return JSONResponse(
                     status_code=429,
-                    content={"error": "rate_limit_exceeded", "detail": f"Max {self._max} requests per {self._window}s."},
+                    content={
+                        "error": "rate_limit_exceeded",
+                        "detail": f"Max {self._max} requests per {self._window}s.",
+                    },
                     headers={"Retry-After": str(self._window)},
                 )
             bucket.append(now)
@@ -620,7 +674,7 @@ X-API-Key: nc-xxxxxxxxxxxxxxxx
 通过 CLI 生成密钥：`zen-claw api-key generate`
 
 ### 限流策略
-调用类端点（`/agent/invoke*`）：每 IP 每 60 秒最多 60 次请求。  
+调用类端点（`/agent/invoke*`）：每 IP 每 60 秒最多 60 次请求。
 超限返回 **HTTP 429**，`Retry-After` 头指示等待秒数。
 """
 
@@ -641,7 +695,9 @@ X-API-Key: nc-xxxxxxxxxxxxxxxx
     )
     api_app.add_middleware(RateLimitMiddleware, max_requests=60, window_sec=60)
     api_app.add_middleware(ApiKeyMiddleware)
-    api_app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    api_app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    )
     try:
         from zen_claw.auth.middleware import MultiTenantAuthMiddleware
         from zen_claw.auth.session import SessionManager
@@ -714,7 +770,12 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
         user_store = UserStore(get_data_dir())
         user = user_store.authenticate(username=username, password=password)
         if not user:
-            return HTMLResponse(_LOGIN_HTML.format(error_html='<div class="err">用户名或密码错误</div>', next_url=next_url), status_code=401)
+            return HTMLResponse(
+                _LOGIN_HTML.format(
+                    error_html='<div class="err">用户名或密码错误</div>', next_url=next_url
+                ),
+                status_code=401,
+            )
 
         session_mgr = SessionManager(
             secret=cfg.multitenant.jwt_secret.get_secret_value(),
@@ -722,7 +783,9 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             expire_seconds=cfg.multitenant.jwt_expire_seconds,
         )
         token = session_mgr.create_session(user.user_id, user.tenant_id, user.username, user.role)
-        response = RedirectResponse(url=next_url if next_url.startswith("/") else "/", status_code=302)
+        response = RedirectResponse(
+            url=next_url if next_url.startswith("/") else "/", status_code=302
+        )
         response.set_cookie(
             key=cfg.multitenant.session_cookie_name,
             value=token,
@@ -880,7 +943,10 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
         ),
         response_model=InvokeResponse,
         responses={
-            400: {"description": "消息内容为空", "content": {"application/json": {"example": {"error": "message_required"}}}},
+            400: {
+                "description": "消息内容为空",
+                "content": {"application/json": {"example": {"error": "message_required"}}},
+            },
             401: {"description": "API Key 无效或缺失"},
             429: {"description": "请求过于频繁，已触发限流"},
         },
@@ -898,7 +964,7 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
         summary="流式调用代理 (SSE)",
         description=(
             "向 AI 代理发送消息，以 **Server-Sent Events (SSE)** 格式实时流式返回 token。\n\n"
-            "每个事件格式为 `data: {\"token\": \"...\"}\\n\\n`，结束时发送 `data: [DONE]\\n\\n`。\n\n"
+            '每个事件格式为 `data: {"token": "..."}\\n\\n`，结束时发送 `data: [DONE]\\n\\n`。\n\n'
             "适用于需要实时打字机效果的前端场景。"
         ),
         responses={
@@ -1120,7 +1186,9 @@ def run_dashboard_server(
                 self.wfile.write(body)
                 return
             if self.path == "/api/status":
-                payload = json.dumps(build_dashboard_snapshot(config), ensure_ascii=False).encode("utf-8")
+                payload = json.dumps(build_dashboard_snapshot(config), ensure_ascii=False).encode(
+                    "utf-8"
+                )
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")
@@ -1129,7 +1197,9 @@ def run_dashboard_server(
                 self.wfile.write(payload)
                 return
             if self.path in {"/", "/index.html"}:
-                html = _render_html(build_dashboard_snapshot(config), refresh_sec=refresh_sec).encode("utf-8")
+                html = _render_html(
+                    build_dashboard_snapshot(config), refresh_sec=refresh_sec
+                ).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Cache-Control", "no-store")

@@ -7,6 +7,8 @@ from typing import Any
 
 from loguru import logger
 
+from zen_claw.agent.memory_recall import MemoryRecallStrategy
+
 
 class SqliteMemoryIndex:
     """SQLite-based index for memory, combining FTS5 keyword search and vector embeddings."""
@@ -22,32 +24,37 @@ class SqliteMemoryIndex:
             self._embedder_loaded = True
             try:
                 from zen_claw.knowledge.embedder import LocalEmbedder
+
                 self._embedder = LocalEmbedder()
                 logger.info("SqliteMemoryIndex: Loaded LocalEmbedder for vector search.")
             except ImportError:
-                logger.debug("SqliteMemoryIndex: LocalEmbedder dependencies not found. Falling back to FTS5 only.")
+                logger.debug(
+                    "SqliteMemoryIndex: LocalEmbedder dependencies not found. Falling back to FTS5 only."
+                )
         return self._embedder
 
     def _init_db(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.db_path))
-        conn.execute('''
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS memory_embeddings (
                 content TEXT PRIMARY KEY,
                 embedding TEXT
             )
-        ''')
+        """)
         # Create FTS5 virtual table for keyword search
-        conn.execute('''
+        conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
                 content,
                 tokenize='unicode61'
             )
-        ''')
+        """)
         conn.commit()
         conn.close()
 
-    def sync_and_search(self, query: str, candidates: list[str], top_k: int = 8) -> list[tuple[float, str]]:
+    def sync_and_search(
+        self, query: str, candidates: list[str], top_k: int = 8
+    ) -> list[tuple[float, str]]:
         """
         Synchronize memory candidates to DB, compute missing embeddings,
         and return top-k hybrid search results.
@@ -159,9 +166,6 @@ class SqliteMemoryIndex:
                 scored.append((score, c))
 
         return sorted(scored, key=lambda x: x[0], reverse=True)[:top_k]
-
-from zen_claw.agent.memory_recall import MemoryRecallStrategy
-
 
 class SqliteVectorRecallStrategy(MemoryRecallStrategy):
     """Memory recall strategy utilizing SQLite FTS5 and Vector Embeddings."""

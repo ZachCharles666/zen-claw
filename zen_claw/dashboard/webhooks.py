@@ -14,7 +14,11 @@ except Exception:
     APIRouter = object  # type: ignore[assignment]
     Request = object  # type: ignore[assignment]
     PlainTextResponse = None  # type: ignore[assignment]
-    Query = lambda x="": x  # type: ignore[assignment]
+
+    def _query_stub(x=""):
+        return x
+
+    Query = _query_stub  # type: ignore[assignment]
 
 _wechat_channel = None
 _wecom_channel = None
@@ -24,7 +28,12 @@ _slack_channel = None
 
 
 def register_channels(wechat=None, wecom=None, dingtalk=None, webhook_trigger=None, slack=None):
-    global _wechat_channel, _wecom_channel, _dingtalk_channel, _webhook_trigger_channel, _slack_channel
+    global \
+        _wechat_channel, \
+        _wecom_channel, \
+        _dingtalk_channel, \
+        _webhook_trigger_channel, \
+        _slack_channel
     _wechat_channel = wechat
     _wecom_channel = wecom
     _dingtalk_channel = dingtalk
@@ -42,7 +51,9 @@ if _HAS_FASTAPI:
         nonce: str = Query(""),
         echostr: str = Query(""),
     ):
-        if _wechat_channel and _wechat_channel.verify_signature(_wechat_channel.config.token, timestamp, nonce, signature):
+        if _wechat_channel and _wechat_channel.verify_signature(
+            _wechat_channel.config.token, timestamp, nonce, signature
+        ):
             return PlainTextResponse(echostr)
         return PlainTextResponse("fail", status_code=403)
 
@@ -74,7 +85,9 @@ if _HAS_FASTAPI:
         nonce: str = Query(""),
         echostr: str = Query(""),
     ):
-        if _wecom_channel and _wecom_channel.verify_signature(timestamp, nonce, msg_signature, echostr):
+        if _wecom_channel and _wecom_channel.verify_signature(
+            timestamp, nonce, msg_signature, echostr
+        ):
             plain = _wecom_channel.decrypt_message(echostr)
             return PlainTextResponse(plain or "fail")
         return PlainTextResponse("fail", status_code=403)
@@ -120,7 +133,10 @@ if _HAS_FASTAPI:
         if result.get("challenge"):
             return PlainTextResponse(str(result["challenge"]))
         if not result.get("ok", False):
-            return JSONResponse(status_code=403, content={"success": False, "reason": result.get("reason", "denied")})
+            return JSONResponse(
+                status_code=403,
+                content={"success": False, "reason": result.get("reason", "denied")},
+            )
         return JSONResponse(status_code=202, content={"success": True})
 
     @webhook_router.post("/trigger/{agent_id}")

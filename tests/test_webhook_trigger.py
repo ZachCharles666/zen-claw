@@ -52,7 +52,9 @@ def test_webhook_trigger_validate_and_replay(monkeypatch, tmp_path) -> None:
 def test_webhook_trigger_ingest_publishes_inbound(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("zen_claw.channels.webhook_trigger.get_data_dir", lambda: tmp_path)
     bus = MessageBus()
-    channel = WebhookTriggerChannel(WebhookTriggerConfig(enabled=True, ip_allowlist=["127.0.0.1"]), bus)
+    channel = WebhookTriggerChannel(
+        WebhookTriggerConfig(enabled=True, ip_allowlist=["127.0.0.1"]), bus
+    )
     channel.access_checker = lambda *_args, **_kwargs: True
 
     async def _run():
@@ -82,7 +84,7 @@ def test_webhook_trigger_route_accepts_signed_request(monkeypatch, tmp_path) -> 
     nonce = "n-2"
     resp = client.post(
         "/webhook/trigger/agent-z",
-        data=body,
+        content=body,
         headers={
             "content-type": "application/json",
             "x-signature": _sign("s1", body, ts, nonce),
@@ -93,4 +95,3 @@ def test_webhook_trigger_route_accepts_signed_request(monkeypatch, tmp_path) -> 
     assert resp.status_code == 202
     inbound = asyncio.run(bus.consume_inbound())
     assert inbound.content == "trigger now"
-

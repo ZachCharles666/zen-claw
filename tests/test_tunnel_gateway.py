@@ -23,10 +23,11 @@ def test_gateway_security_valid_request():
         "x-claw-signature": sig,
         "x-claw-timestamp": ts,
         "x-claw-nonce": nonce,
-        "x-claw-key-id": "key-1"
+        "x-claw-key-id": "key-1",
     }
 
-    assert gateway.verify_request_sync(body, headers, "127.0.0.1") == True
+    assert gateway.verify_request_sync(body, headers, "127.0.0.1")
+
 
 def test_gateway_security_invalid_signature():
     gateway = TunnelGatewaySecurity()
@@ -44,13 +45,14 @@ def test_gateway_security_invalid_signature():
         "x-claw-signature": sig,
         "x-claw-timestamp": ts,
         "x-claw-nonce": nonce,
-        "x-claw-key-id": "key-1"
+        "x-claw-key-id": "key-1",
     }
 
     with pytest.raises(HTTPException) as excinfo:
         gateway.verify_request_sync(body, headers, "127.0.0.1")
     assert excinfo.value.status_code == 401
     assert "Invalid Signature" in excinfo.value.detail
+
 
 def test_gateway_circuit_breaker():
     gateway = TunnelGatewaySecurity(circuit_breaker_threshold=5)
@@ -71,11 +73,12 @@ def test_gateway_circuit_breaker():
     assert excinfo.value.status_code == 429
     assert "Too Many Requests" in excinfo.value.detail
 
+
 def test_gateway_nonce_replay():
     gateway = TunnelGatewaySecurity()
     gateway.add_active_key("key-1", "my-secret")
 
-    body = b'{}'
+    body = b"{}"
     ts = str(int(time.time()))
     nonce = "replay-nonce"
 
@@ -86,11 +89,11 @@ def test_gateway_nonce_replay():
         "x-claw-signature": sig,
         "x-claw-timestamp": ts,
         "x-claw-nonce": nonce,
-        "x-claw-key-id": "key-1"
+        "x-claw-key-id": "key-1",
     }
 
     # First time works
-    assert gateway.verify_request_sync(body, headers, "127.0.0.1") == True
+    assert gateway.verify_request_sync(body, headers, "127.0.0.1")
 
     # Second time fails
     with pytest.raises(HTTPException) as excinfo:

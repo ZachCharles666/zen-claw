@@ -27,6 +27,7 @@ try:
         Emoji,
         P2ImMessageReceiveV1,
     )
+
     FEISHU_AVAILABLE = True
 except ImportError:
     FEISHU_AVAILABLE = False
@@ -46,9 +47,9 @@ MSG_TYPE_MAP = {
 class FeishuChannel(BaseChannel):
     """
     Feishu/Lark channel using WebSocket long connection.
-    
+
     Uses WebSocket to receive events - no public IP or webhook required.
-    
+
     Requires:
     - App ID and App Secret from Feishu Open Platform
     - Bot capability enabled
@@ -81,26 +82,30 @@ class FeishuChannel(BaseChannel):
         self._loop = asyncio.get_running_loop()
 
         # Create Lark client for sending messages
-        self._client = lark.Client.builder() \
-            .app_id(self.config.app_id) \
-            .app_secret(self.config.app_secret) \
-            .log_level(lark.LogLevel.INFO) \
+        self._client = (
+            lark.Client.builder()
+            .app_id(self.config.app_id)
+            .app_secret(self.config.app_secret)
+            .log_level(lark.LogLevel.INFO)
             .build()
+        )
 
         # Create event handler (only register message receive, ignore other events)
-        event_handler = lark.EventDispatcherHandler.builder(
-            self.config.encrypt_key or "",
-            self.config.verification_token or "",
-        ).register_p2_im_message_receive_v1(
-            self._on_message_sync
-        ).build()
+        event_handler = (
+            lark.EventDispatcherHandler.builder(
+                self.config.encrypt_key or "",
+                self.config.verification_token or "",
+            )
+            .register_p2_im_message_receive_v1(self._on_message_sync)
+            .build()
+        )
 
         # Create WebSocket client for long connection
         self._ws_client = lark.ws.Client(
             self.config.app_id,
             self.config.app_secret,
             event_handler=event_handler,
-            log_level=lark.LogLevel.INFO
+            log_level=lark.LogLevel.INFO,
         )
 
         # Start WebSocket client in a separate thread
@@ -133,13 +138,16 @@ class FeishuChannel(BaseChannel):
     def _add_reaction_sync(self, message_id: str, emoji_type: str) -> None:
         """Sync helper for adding reaction (runs in thread pool)."""
         try:
-            request = CreateMessageReactionRequest.builder() \
-                .message_id(message_id) \
+            request = (
+                CreateMessageReactionRequest.builder()
+                .message_id(message_id)
                 .request_body(
                     CreateMessageReactionRequestBody.builder()
                     .reaction_type(Emoji.builder().emoji_type(emoji_type).build())
                     .build()
-                ).build()
+                )
+                .build()
+            )
 
             response = self._client.im.v1.message_reaction.create(request)
 
@@ -153,7 +161,7 @@ class FeishuChannel(BaseChannel):
     async def _add_reaction(self, message_id: str, emoji_type: str = "THUMBSUP") -> None:
         """
         Add a reaction emoji to a message (non-blocking).
-        
+
         Common emoji types: THUMBSUP, OK, EYES, DONE, OnIt, HEART
         """
         if not self._client or not Emoji:
@@ -170,11 +178,13 @@ class FeishuChannel(BaseChannel):
             # The API asks for "image", "file", etc as type
             api_type = msg_type if msg_type in ("image", "file") else "file"
 
-            request = GetMessageResourceRequest.builder() \
-                .message_id(message_id) \
-                .file_key(file_key) \
-                .type(api_type) \
+            request = (
+                GetMessageResourceRequest.builder()
+                .message_id(message_id)
+                .file_key(file_key)
+                .type(api_type)
                 .build()
+            )
 
             response = self._client.im.v1.message_resource.get(request)
             if not response.success():
@@ -211,7 +221,9 @@ class FeishuChannel(BaseChannel):
             return None
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._download_media_sync, message_id, file_key, msg_type)
+        return await loop.run_in_executor(
+            None, self._download_media_sync, message_id, file_key, msg_type
+        )
 
     # Regex to match markdown tables (header + separator + data rows)
     _TABLE_RE = re.compile(
@@ -222,29 +234,38 @@ class FeishuChannel(BaseChannel):
     @staticmethod
     def _parse_md_table(table_text: str) -> dict | None:
         """Parse a markdown table into a Feishu table element."""
-        lines = [l.strip() for l in table_text.strip().split("\n") if l.strip()]
+        lines = [line.strip() for line in table_text.strip().split("\n") if line.strip()]
         if len(lines) < 3:
             return None
-        split = lambda l: [c.strip() for c in l.strip("|").split("|")]
-        headers = split(lines[0])
-        rows = [split(l) for l in lines[2:]]
-        columns = [{"tag": "column", "name": f"c{i}", "display_name": h, "width": "auto"}
-                   for i, h in enumerate(headers)]
+
+        def split_row(raw_line: str) -> list[str]:
+            return [cell.strip() for cell in raw_line.strip("|").split("|")]
+
+        headers = split_row(lines[0])
+        rows = [split_row(line) for line in lines[2:]]
+        columns = [
+            {"tag": "column", "name": f"c{i}", "display_name": h, "width": "auto"}
+            for i, h in enumerate(headers)
+        ]
         return {
             "tag": "table",
             "page_size": len(rows) + 1,
             "columns": columns,
-            "rows": [{f"c{i}": r[i] if i < len(r) else "" for i in range(len(headers))} for r in rows],
+            "rows": [
+                {f"c{i}": r[i] if i < len(r) else "" for i in range(len(headers))} for r in rows
+            ],
         }
 
     def _build_card_elements(self, content: str) -> list[dict]:
         """Split content into markdown + table elements for Feishu card."""
         elements, last_end = [], 0
         for m in self._TABLE_RE.finditer(content):
-            before = content[last_end:m.start()].strip()
+            before = content[last_end : m.start()].strip()
             if before:
                 elements.append({"tag": "markdown", "content": before})
-            elements.append(self._parse_md_table(m.group(1)) or {"tag": "markdown", "content": m.group(1)})
+            elements.append(
+                self._parse_md_table(m.group(1)) or {"tag": "markdown", "content": m.group(1)}
+            )
             last_end = m.end()
         remaining = content[last_end:].strip()
         if remaining:
@@ -282,20 +303,26 @@ class FeishuChannel(BaseChannel):
                                     CreateImageRequest,
                                     CreateImageRequestBody,
                                 )
+
                                 with local_path.open("rb") as f:
-                                    req = CreateImageRequest.builder() \
+                                    req = (
+                                        CreateImageRequest.builder()
                                         .request_body(
                                             CreateImageRequestBody.builder()
                                             .image_type("message")
                                             .image(f)
                                             .build()
-                                        ).build()
+                                        )
+                                        .build()
+                                    )
                                     resp = self._client.im.v1.image.create(req)
                                     if resp.success() and resp.data:
                                         img_key = resp.data.image_key
                                         content_str = f"![image]({img_key})\n" + content_str
                             except Exception as e:
-                                logger.warning(f"Failed to upload media {local_path} to Feishu: {e}")
+                                logger.warning(
+                                    f"Failed to upload media {local_path} to Feishu: {e}"
+                                )
 
             elements = self._build_card_elements(content_str)
             card = {
@@ -304,15 +331,18 @@ class FeishuChannel(BaseChannel):
             }
             content = json.dumps(card, ensure_ascii=False)
 
-            request = CreateMessageRequest.builder() \
-                .receive_id_type(receive_id_type) \
+            request = (
+                CreateMessageRequest.builder()
+                .receive_id_type(receive_id_type)
                 .request_body(
                     CreateMessageRequestBody.builder()
                     .receive_id(msg.chat_id)
                     .msg_type("interactive")
                     .content(content)
                     .build()
-                ).build()
+                )
+                .build()
+            )
 
             response = self._client.im.v1.message.create(request)
 
@@ -402,7 +432,7 @@ class FeishuChannel(BaseChannel):
                     "message_id": message_id,
                     "chat_type": chat_type,
                     "msg_type": msg_type,
-                }
+                },
             )
 
         except Exception as e:
@@ -429,7 +459,12 @@ class FeishuChannel(BaseChannel):
         key_val = payload.get(key_name)
         if not isinstance(key_val, str) or not key_val.strip():
             return []
-        return [{"key": key_val.strip(), "uri": self._build_media_uri("feishu", msg_type, key_val.strip())}]
+        return [
+            {
+                "key": key_val.strip(),
+                "uri": self._build_media_uri("feishu", msg_type, key_val.strip()),
+            }
+        ]
 
     async def send_voice_message(self, chat_id: str, audio_path: Path) -> None:
         """Send voice message to Feishu, best-effort helper for TTS integration."""
@@ -453,19 +488,28 @@ class FeishuChannel(BaseChannel):
                         "file_name": (None, audio_path.name),
                         "file": (audio_path.name, f, "audio/mpeg"),
                     }
-                    upload_resp = await client.post(upload_url, files=files, headers={"Authorization": f"Bearer {token}"})
+                    upload_resp = await client.post(
+                        upload_url, files=files, headers={"Authorization": f"Bearer {token}"}
+                    )
                     upload_data = upload_resp.json()
                 file_key = str(upload_data.get("data", {}).get("file_key", ""))
                 if not file_key:
                     logger.error(f"Feishu audio upload failed: {upload_data}")
                     return
                 send_url = "https://open.feishu.cn/open-apis/im/v1/messages"
-                payload = {"receive_id": chat_id, "msg_type": "audio", "content": json.dumps({"file_key": file_key})}
+                payload = {
+                    "receive_id": chat_id,
+                    "msg_type": "audio",
+                    "content": json.dumps({"file_key": file_key}),
+                }
                 await client.post(
                     send_url,
                     params={"receive_id_type": "chat_id"},
                     json=payload,
-                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
                 )
         except Exception as exc:
             logger.error(f"Feishu voice message error: {exc}")
@@ -489,5 +533,3 @@ class FeishuChannel(BaseChannel):
         name = media_uri.rsplit("/", 1)[-1]
         p = self.media_root / name
         return p if p.exists() else None
-
-

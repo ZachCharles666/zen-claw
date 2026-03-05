@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.table import Table
 
 from zen_claw import __logo__, __version__
+from zen_claw.utils.netguard import is_public_ip, resolve_safe_ip
 
 app = typer.Typer(
     name="zen-claw",
@@ -33,9 +34,7 @@ def version_callback(value: bool):
 
 @app.callback()
 def main(
-    version: bool = typer.Option(
-        None, "--version", "-v", callback=version_callback, is_eager=True
-    ),
+    version: bool = typer.Option(None, "--version", "-v", callback=version_callback, is_eager=True),
 ):
     """zen-claw - Personal AI Assistant."""
     pass
@@ -76,10 +75,10 @@ def onboard():
     console.print("\nNext steps:")
     console.print("  1. Add your API key to [cyan]~/.zen-claw/config.json[/cyan]")
     console.print("     Get one at: https://openrouter.ai/keys")
-    console.print("  2. Chat: [cyan]zen-claw agent -m \"Hello!\"[/cyan]")
-    console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/ZachCharles666/zen-claw/[/dim]")
-
-
+    console.print('  2. Chat: [cyan]zen-claw agent -m "Hello!"[/cyan]')
+    console.print(
+        "\n[dim]Want Telegram/WhatsApp? See: https://github.com/ZachCharles666/zen-claw/[/dim]"
+    )
 
 
 def _create_workspace_templates(workspace: Path):
@@ -157,6 +156,7 @@ This file stores important information that should persist across sessions.
 def _make_provider(config):
     """Create LiteLLMProvider from config. Exits if no API key found."""
     from zen_claw.providers.litellm_provider import LiteLLMProvider
+
     p = config.get_provider()
     model = config.agents.defaults.model
     if not (p and p.api_key) and not model.startswith("bedrock/"):
@@ -217,8 +217,7 @@ def _print_effective_tool_backends(config) -> None:
     console.print(f"  subagentHardGuardrail: {guardrail_on}")
     cron_channels = config.tools.policy.cron_allowed_channels
     console.print(
-        "  cronAllowedChannels: "
-        + (", ".join(cron_channels) if cron_channels else "(all)")
+        "  cronAllowedChannels: " + (", ".join(cron_channels) if cron_channels else "(all)")
     )
     cron_actions = config.tools.policy.cron_allowed_actions_by_channel
     if cron_actions:
@@ -232,13 +231,9 @@ def _print_effective_tool_backends(config) -> None:
     )
     channel_scopes = sorted(config.tools.policy.channel_policies.keys())
     console.print(
-        "  channelPolicyScopes: "
-        + (", ".join(channel_scopes) if channel_scopes else "(none)")
+        "  channelPolicyScopes: " + (", ".join(channel_scopes) if channel_scopes else "(none)")
     )
-    console.print(
-        "  skillPermissionsMode: "
-        + str(config.agents.defaults.skill_permissions_mode)
-    )
+    console.print("  skillPermissionsMode: " + str(config.agents.defaults.skill_permissions_mode))
     if not guardrail_on:
         console.print(
             "[yellow]Warning:[/yellow] subagent hard guardrail is disabled "
@@ -264,7 +259,9 @@ def _print_sidecar_status(config) -> None:
             + f"uptime={row['uptime']}, "
             + f"health={row['health']}"
         )
-    console.print("  source: tools.network (canonical); legacy tools.exec/tools.web.* are compatibility inputs")
+    console.print(
+        "  source: tools.network (canonical); legacy tools.exec/tools.web.* are compatibility inputs"
+    )
 
 
 def _print_channel_rate_limit_status(config) -> None:
@@ -284,8 +281,14 @@ def _print_channel_rate_limit_status(config) -> None:
     if overrides:
         for name, cfg in sorted(overrides.items()):
             mode = cfg.mode if cfg.mode is not None else config.channels.outbound_rate_limit_mode
-            per_sec = cfg.per_sec if cfg.per_sec is not None else config.channels.outbound_rate_limit_per_sec
-            burst = cfg.burst if cfg.burst is not None else config.channels.outbound_rate_limit_burst
+            per_sec = (
+                cfg.per_sec
+                if cfg.per_sec is not None
+                else config.channels.outbound_rate_limit_per_sec
+            )
+            burst = (
+                cfg.burst if cfg.burst is not None else config.channels.outbound_rate_limit_burst
+            )
             console.print(f"  override.{name}: mode={mode}, rate={per_sec}/s, burst={burst}")
     else:
         console.print("  overrides: (none)")
@@ -431,7 +434,9 @@ def dashboard(
     host: str = typer.Option("127.0.0.1", "--host", help="Dashboard bind host"),
     port: int = typer.Option(18791, "--port", "-p", help="Dashboard port"),
     refresh_sec: int = typer.Option(5, "--refresh-sec", help="Auto-refresh interval in seconds"),
-    allow_remote: bool = typer.Option(False, "--allow-remote", help="Allow non-localhost bind (security risk)"),
+    allow_remote: bool = typer.Option(
+        False, "--allow-remote", help="Allow non-localhost bind (security risk)"
+    ),
 ):
     """Start read-only local dashboard."""
     from zen_claw.config.loader import load_config
@@ -489,6 +494,7 @@ def gateway(
 
     if verbose:
         import logging
+
         logging.basicConfig(level=logging.DEBUG)
 
     console.print(f"{__logo__} Starting zen-claw gateway on port {port}...")
@@ -537,7 +543,9 @@ def gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        target_url = (job.payload.target_url or config.channels.webhook_trigger.cron_target_url or "").strip()
+        target_url = (
+            job.payload.target_url or config.channels.webhook_trigger.cron_target_url or ""
+        ).strip()
         if target_url:
             import httpx
 
@@ -565,7 +573,11 @@ def gateway(
                 headers[str(k)] = str(v)
             timeout_sec = max(
                 1,
-                int(job.payload.target_timeout_sec or config.channels.webhook_trigger.cron_target_timeout_sec or 10),
+                int(
+                    job.payload.target_timeout_sec
+                    or config.channels.webhook_trigger.cron_target_timeout_sec
+                    or 10
+                ),
             )
             async with httpx.AsyncClient(timeout=float(timeout_sec)) as client:
                 method = (job.payload.target_method or "POST").upper()
@@ -581,12 +593,16 @@ def gateway(
         )
         if job.payload.deliver and job.payload.to:
             from zen_claw.bus.events import OutboundMessage
-            await bus.publish_outbound(OutboundMessage(
-                channel=job.payload.channel or "cli",
-                chat_id=job.payload.to,
-                content=response or ""
-            ))
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel=job.payload.channel or "cli",
+                    chat_id=job.payload.to,
+                    content=response or "",
+                )
+            )
         return response
+
     cron.on_job = on_cron_job
 
     # Create heartbeat service
@@ -598,7 +614,7 @@ def gateway(
         workspace=config.workspace_path,
         on_heartbeat=on_heartbeat,
         interval_s=30 * 60,  # 30 minutes
-        enabled=True
+        enabled=True,
     )
 
     # Bridge node task queue to gateway+agent execution loop.
@@ -615,8 +631,16 @@ def gateway(
         trace_id: str | None = None,
     ) -> str:
         target_agent_id = str(agent_id or "").strip().lower() or "default"
-        target_loop = agent if target_agent_id == "default" else await agent_pool.get_or_create(target_agent_id)
-        scoped_session_key = session_key if target_agent_id == "default" else f"agent:{target_agent_id}:{session_key}"
+        target_loop = (
+            agent
+            if target_agent_id == "default"
+            else await agent_pool.get_or_create(target_agent_id)
+        )
+        scoped_session_key = (
+            session_key
+            if target_agent_id == "default"
+            else f"agent:{target_agent_id}:{session_key}"
+        )
         return await target_loop.process_direct(
             prompt,
             session_key=scoped_session_key,
@@ -684,8 +708,6 @@ def gateway(
     asyncio.run(run())
 
 
-
-
 # ============================================================================
 # Agent Commands
 # ============================================================================
@@ -695,8 +717,12 @@ def gateway(
 def agent(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
     session_id: str = typer.Option("cli:default", "--session", "-s", help="Session ID"),
-    skill: list[str] = typer.Option([], "--skill", help="Load skill(s) fully into the system prompt (repeatable)"),
-    media: list[str] = typer.Option([], "--media", help="Attach media refs/paths for this run (repeatable)"),
+    skill: list[str] = typer.Option(
+        [], "--skill", help="Load skill(s) fully into the system prompt (repeatable)"
+    ),
+    media: list[str] = typer.Option(
+        [], "--media", help="Attach media refs/paths for this run (repeatable)"
+    ),
     skill_perms: str = typer.Option(
         "",
         "--skill-perms",
@@ -977,7 +1003,9 @@ def config_providers(
 
     global_count = len([r for r in rows if r["coverage"] in {"global", "china/global"}])
     china_count = len([r for r in rows if r["coverage"] in {"china", "china/global"}])
-    console.print(f"\nSummary: global-capable={global_count}, china-mainstream-capable={china_count}")
+    console.print(
+        f"\nSummary: global-capable={global_count}, china-mainstream-capable={china_count}"
+    )
 
 
 @config_app.command("template")
@@ -991,7 +1019,9 @@ def config_template(
         ),
     ),
     out: str = typer.Option("", "--out", "-o", help="Write template JSON to file"),
-    show_wizard: bool = typer.Option(False, "--show-wizard", help="Print equivalent config wizard command"),
+    show_wizard: bool = typer.Option(
+        False, "--show-wizard", help="Print equivalent config wizard command"
+    ),
 ):
     """Generate executable provider config template snippets."""
     import json
@@ -1041,10 +1071,13 @@ def config_wizard(
     model: str = typer.Option("", "--model", help="Default model for agents.defaults.model"),
     api_base: str = typer.Option("", "--api-base", help="Optional provider API base override"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Apply without confirmation prompt"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes only; do not write file"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview changes only; do not write file"
+    ),
 ):
     """Guided provider configuration wizard (interactive or scripted)."""
     from zen_claw.config.loader import get_config_path, load_config, save_config
+
     path = config_path or get_config_path()
     config = load_config(path)
     catalog = _provider_catalog()
@@ -1078,7 +1111,9 @@ def config_wizard(
 
     if not api_key:
         masked = "(set)" if current_key else ""
-        api_key = typer.prompt("API Key (leave empty to keep current)", default=masked, hide_input=True)
+        api_key = typer.prompt(
+            "API Key (leave empty to keep current)", default=masked, hide_input=True
+        )
         if api_key == "(set)":
             api_key = current_key
     if not model:
@@ -1105,12 +1140,16 @@ def config_wizard(
     summary.add_column("Value", overflow="fold")
     summary.add_row("config_path", str(path))
     summary.add_row("provider", provider)
-    summary.add_row("api_key", "set" if bool(getattr(config.providers, provider).api_key) else "empty")
+    summary.add_row(
+        "api_key", "set" if bool(getattr(config.providers, provider).api_key) else "empty"
+    )
     summary.add_row("api_base", getattr(config.providers, provider).api_base or "(default/none)")
     summary.add_row("default_model", config.agents.defaults.model)
     summary.add_row("written", "no (dry-run)" if dry_run else "yes")
     console.print(summary)
-    console.print("\nNext: [cyan]zen-claw status -v[/cyan] then [cyan]zen-claw agent -m \"Hello\"[/cyan]")
+    console.print(
+        '\nNext: [cyan]zen-claw status -v[/cyan] then [cyan]zen-claw agent -m "Hello"[/cyan]'
+    )
 
 
 @config_app.command("doctor")
@@ -1170,9 +1209,13 @@ def config_doctor(
     ) -> list[str]:
         hints: list[str] = []
         if not key_ids:
-            hints.append("未配置任何 API Key：先运行 `zen-claw config wizard`，再执行 `zen-claw config doctor --strict`。")
+            hints.append(
+                "未配置任何 API Key：先运行 `zen-claw config wizard`，再执行 `zen-claw config doctor --strict`。"
+            )
         if model_name and not inferred_pid:
-            hints.append("模型前缀未识别：建议使用 `provider/model` 形式（例如 `openrouter/...` 或 `deepseek/...`）。")
+            hints.append(
+                "模型前缀未识别：建议使用 `provider/model` 形式（例如 `openrouter/...` 或 `deepseek/...`）。"
+            )
         if inferred_pid and matched_pid and inferred_pid != matched_pid:
             hints.append(
                 f"模型前缀与实际 provider 不一致：当前模型更像 `{inferred_pid}`，但解析到 `{matched_pid}`。请检查 model/apiKey/apiBase 三者是否同源。"
@@ -1180,9 +1223,13 @@ def config_doctor(
         if inferred_pid in {"openrouter", "aihubmix"} and inferred_pid in key_ids:
             hints.append("网关类 provider 建议显式设置 apiBase，避免在多环境切换时指向错误。")
         if inferred_pid == "vllm":
-            hints.append("vLLM 场景务必配置 `providers.vllm.apiBase` 指向 OpenAI-compatible endpoint。")
+            hints.append(
+                "vLLM 场景务必配置 `providers.vllm.apiBase` 指向 OpenAI-compatible endpoint。"
+            )
         if not hints:
-            hints.append("未发现典型配置冲突。若调用仍失败，请先执行 `zen-claw status -v` 查看实际生效后端。")
+            hints.append(
+                "未发现典型配置冲突。若调用仍失败，请先执行 `zen-claw status -v` 查看实际生效后端。"
+            )
         return hints
 
     path = config_path or get_config_path()
@@ -1207,12 +1254,20 @@ def config_doctor(
 
     if not key_enabled:
         issues.append(
-            ("FAIL", "No provider API key configured.", "Run `zen-claw config wizard` to set one provider key.")
+            (
+                "FAIL",
+                "No provider API key configured.",
+                "Run `zen-claw config wizard` to set one provider key.",
+            )
         )
 
     if not model.strip():
         issues.append(
-            ("FAIL", "agents.defaults.model is empty.", "Set a model via `zen-claw config wizard --model ...`.")
+            (
+                "FAIL",
+                "agents.defaults.model is empty.",
+                "Set a model via `zen-claw config wizard --model ...`.",
+            )
         )
 
     if inferred_id and matched_id and inferred_id != matched_id:
@@ -1467,8 +1522,12 @@ def config_doctor(
                 )
             )
         has_matrix_token = bool(str(matrix_cfg.access_token or "").strip())
-        has_matrix_credentials = bool(str(matrix_cfg.username or "").strip()) and bool(str(matrix_cfg.password or ""))
-        can_auto_auth = has_matrix_credentials and (bool(matrix_cfg.auto_login) or bool(matrix_cfg.auto_register))
+        has_matrix_credentials = bool(str(matrix_cfg.username or "").strip()) and bool(
+            str(matrix_cfg.password or "")
+        )
+        can_auto_auth = has_matrix_credentials and (
+            bool(matrix_cfg.auto_login) or bool(matrix_cfg.auto_register)
+        )
         if not has_matrix_token and not can_auto_auth:
             issues.append(
                 (
@@ -1494,7 +1553,11 @@ def config_doctor(
         style = {"FAIL": "red", "WARN": "yellow"}.get(level, "white")
         table.add_row(f"[{style}]{level}[/{style}]", msg, fix)
     if not issues:
-        table.add_row("[green]PASS[/green]", "No configuration issues detected.", "You can run `zen-claw agent -m \"Hello\"`.")
+        table.add_row(
+            "[green]PASS[/green]",
+            "No configuration issues detected.",
+            'You can run `zen-claw agent -m "Hello"`.',
+        )
     console.print(table)
 
     console.print("\n[cyan]Context[/cyan]")
@@ -1642,7 +1705,11 @@ def config_troubleshoot(
     table.add_column("Issue")
     table.add_column("Suggestion", overflow="fold")
     if not issues:
-        table.add_row("[green]PASS[/green]", "未发现常见配置冲突", "可继续执行 `zen-claw config doctor --strict`")
+        table.add_row(
+            "[green]PASS[/green]",
+            "未发现常见配置冲突",
+            "可继续执行 `zen-claw config doctor --strict`",
+        )
     else:
         for level, issue, suggestion in issues:
             style = "red" if level == "FAIL" else "yellow"
@@ -1677,7 +1744,16 @@ def config_production_check(
     config = load_config(path)
 
     gateway_ids = {"openrouter", "aihubmix"}
-    direct_ids = {"anthropic", "openai", "gemini", "deepseek", "zhipu", "dashscope", "moonshot", "groq"}
+    direct_ids = {
+        "anthropic",
+        "openai",
+        "gemini",
+        "deepseek",
+        "zhipu",
+        "dashscope",
+        "moonshot",
+        "groq",
+    }
 
     enabled_keys: set[str] = set()
     for row in _provider_catalog():
@@ -1815,11 +1891,21 @@ def config_production_check(
 
 @config_app.command("migrate")
 def config_migrate(
-    config_path: Optional[Path] = typer.Option(None, "--config", help="Config file path (default: ~/.zen-claw/config.json)"),
-    write: bool = typer.Option(False, "--write", help="Write migrated config to disk (default is dry-run)"),
-    out_path: Optional[Path] = typer.Option(None, "--out", help="Write migrated config to a new file"),
-    backup: bool = typer.Option(True, "--backup", help="When writing in-place, create .bak copy first"),
-    no_backup: bool = typer.Option(False, "--no-backup", help="Disable .bak copy when writing in-place"),
+    config_path: Optional[Path] = typer.Option(
+        None, "--config", help="Config file path (default: ~/.zen-claw/config.json)"
+    ),
+    write: bool = typer.Option(
+        False, "--write", help="Write migrated config to disk (default is dry-run)"
+    ),
+    out_path: Optional[Path] = typer.Option(
+        None, "--out", help="Write migrated config to a new file"
+    ),
+    backup: bool = typer.Option(
+        True, "--backup", help="When writing in-place, create .bak copy first"
+    ),
+    no_backup: bool = typer.Option(
+        False, "--no-backup", help="Disable .bak copy when writing in-place"
+    ),
 ):
     """Migrate legacy config fields to current schema."""
     import json
@@ -1879,7 +1965,9 @@ def config_migrate(
 
     if not write:
         console.print("[yellow]Migration preview (dry-run): changes detected.[/yellow]")
-        console.print("Use [cyan]zen-claw config migrate --write[/cyan] to persist migrated config.")
+        console.print(
+            "Use [cyan]zen-claw config migrate --write[/cyan] to persist migrated config."
+        )
         return
 
     target_path = out_path or path
@@ -2066,7 +2154,9 @@ def social_run(
         )
         return
     try:
-        asyncio.get_event_loop().run_until_complete(loop.run_forever(interval_sec=max(1, int(interval))))
+        asyncio.get_event_loop().run_until_complete(
+            loop.run_forever(interval_sec=max(1, int(interval)))
+        )
     except KeyboardInterrupt:
         console.print("[yellow]Social agent stopped.[/yellow]")
 
@@ -2170,23 +2260,13 @@ def channels_status():
     wa = config.channels.whatsapp
     wa_rbac, wa_admins, wa_users = _rbac_meta(wa)
     table.add_row(
-        "WhatsApp",
-        "yes" if wa.enabled else "no",
-        wa_rbac,
-        wa_admins,
-        wa_users,
-        wa.bridge_url
+        "WhatsApp", "yes" if wa.enabled else "no", wa_rbac, wa_admins, wa_users, wa.bridge_url
     )
 
     dc = config.channels.discord
     dc_rbac, dc_admins, dc_users = _rbac_meta(dc)
     table.add_row(
-        "Discord",
-        "yes" if dc.enabled else "no",
-        dc_rbac,
-        dc_admins,
-        dc_users,
-        dc.gateway_url
+        "Discord", "yes" if dc.enabled else "no", dc_rbac, dc_admins, dc_users, dc.gateway_url
     )
 
     # Telegram
@@ -2194,12 +2274,7 @@ def channels_status():
     tg_config = f"token: {tg.token[:10]}..." if tg.token else "[dim]not configured[/dim]"
     tg_rbac, tg_admins, tg_users = _rbac_meta(tg)
     table.add_row(
-        "Telegram",
-        "yes" if tg.enabled else "no",
-        tg_rbac,
-        tg_admins,
-        tg_users,
-        tg_config
+        "Telegram", "yes" if tg.enabled else "no", tg_rbac, tg_admins, tg_users, tg_config
     )
 
     console.print(table)
@@ -2314,6 +2389,7 @@ def cron_list(
     table.add_column("Next Run")
 
     import time
+
     for job in jobs:
         # Format schedule
         if job.schedule.kind == "every":
@@ -2326,7 +2402,9 @@ def cron_list(
         # Format next run
         next_run = ""
         if job.state.next_run_at_ms:
-            next_time = time.strftime("%Y-%m-%d %H:%M", time.localtime(job.state.next_run_at_ms / 1000))
+            next_time = time.strftime(
+                "%Y-%m-%d %H:%M", time.localtime(job.state.next_run_at_ms / 1000)
+            )
             next_run = next_time
 
         status = "[green]enabled[/green]" if job.enabled else "[dim]disabled[/dim]"
@@ -2345,8 +2423,12 @@ def cron_add(
     at: str = typer.Option(None, "--at", help="Run once at time (ISO format)"),
     deliver: bool = typer.Option(False, "--deliver", "-d", help="Deliver response to channel"),
     to: str = typer.Option(None, "--to", help="Recipient for delivery"),
-    channel: str = typer.Option(None, "--channel", help="Channel for delivery (e.g. 'telegram', 'whatsapp')"),
-    target_url: str = typer.Option(None, "--target-url", help="Webhook target URL for callback trigger"),
+    channel: str = typer.Option(
+        None, "--channel", help="Channel for delivery (e.g. 'telegram', 'whatsapp')"
+    ),
+    target_url: str = typer.Option(
+        None, "--target-url", help="Webhook target URL for callback trigger"
+    ),
     target_method: str = typer.Option("POST", "--target-method", help="HTTP method: POST or PUT"),
 ):
     """Add a scheduled job."""
@@ -2361,6 +2443,7 @@ def cron_add(
         schedule = CronSchedule(kind="cron", expr=cron_expr)
     elif at:
         import datetime
+
         dt = datetime.datetime.fromisoformat(at)
         schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
     else:
@@ -2479,7 +2562,9 @@ def skills_list(
             enabled = loader.is_skill_enabled(name)
             available = loader._check_requirements(loader._get_skill_meta(name))
             manifest_data, manifest_load_errors = loader.get_skill_manifest(name)
-            if manifest_load_errors and any("manifest.json missing" in e for e in manifest_load_errors):
+            if manifest_load_errors and any(
+                "manifest.json missing" in e for e in manifest_load_errors
+            ):
                 manifest_status = "missing"
             else:
                 ok_manifest, _ = loader.validate_skill_manifest(name, strict=True)
@@ -2487,8 +2572,13 @@ def skills_list(
 
             perms_count = 0
             enforce_ready = False
-            if not (manifest_load_errors and any("manifest.json missing" in e for e in manifest_load_errors)):
-                perms = manifest_data.get("permissions") if isinstance(manifest_data, dict) else None
+            if not (
+                manifest_load_errors
+                and any("manifest.json missing" in e for e in manifest_load_errors)
+            ):
+                perms = (
+                    manifest_data.get("permissions") if isinstance(manifest_data, dict) else None
+                )
                 if isinstance(perms, list) and all(isinstance(p, str) and p.strip() for p in perms):
                     perms_count = len([p for p in perms if str(p).strip()])
                     enforce_ready = True
@@ -2506,8 +2596,15 @@ def skills_list(
                     "enforce_ready": enforce_ready,
                     "permissions_count": perms_count,
                     "scopes_count": (
-                        len([s for s in manifest_data.get("scopes", []) if isinstance(s, str) and s.strip()])
-                        if isinstance(manifest_data, dict) and isinstance(manifest_data.get("scopes"), list)
+                        len(
+                            [
+                                s
+                                for s in manifest_data.get("scopes", [])
+                                if isinstance(s, str) and s.strip()
+                            ]
+                        )
+                        if isinstance(manifest_data, dict)
+                        and isinstance(manifest_data.get("scopes"), list)
                         else 0
                     ),
                     "path": s["path"],
@@ -2710,11 +2807,31 @@ def skills_verify_integrity(
     raise typer.Exit(1)
 
 
+def _verify_ip_safe(ip_str: str) -> bool:
+    """Verify if an IP address is safe (not private, loopback, or reserved)."""
+    return is_public_ip(ip_str)
+
+
+def _resolve_safe_ip(host: str) -> str | None:
+    """Resolve a host to an IP and verify it is not a private/local address."""
+    return resolve_safe_ip(host)
+
+
+MAX_ARCHIVE_BYTES = 5 * 1024 * 1024  # 5MB
+MAX_REDIRECTS = 5
+
+
 @skills_app.command("install")
 def skills_install(
-    source_dir: str = typer.Argument(..., help="Skill source: local dir/.zip, http(s) zip URL, or market:<name>"),
-    name: str = typer.Option("", "--name", "-n", help="Install as this skill name (defaults to source dir name)"),
-    overwrite: bool = typer.Option(False, "--overwrite", "-f", help="Overwrite existing workspace skill"),
+    source_dir: str = typer.Argument(
+        ..., help="Skill source: local dir/.zip, http(s) zip URL, or market:<name>"
+    ),
+    name: str = typer.Option(
+        "", "--name", "-n", help="Install as this skill name (defaults to source dir name)"
+    ),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", "-f", help="Overwrite existing workspace skill"
+    ),
     strict_manifest: bool = typer.Option(
         False,
         "--strict-manifest",
@@ -2725,7 +2842,9 @@ def skills_install(
         "--trust-unverified",
         help="Allow downloading from non-whitelisted hosts (URL installs only)",
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Validate install only, do not write files"),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Validate install only, do not write files"
+    ),
 ):
     """Install a skill from local directory into workspace."""
     import hashlib
@@ -2781,7 +2900,9 @@ def skills_install(
             console.print(f"[red]Skill not found in registry:[/red] {skill_name}")
             raise typer.Exit(1)
         if match.yanked:
-            console.print(f"[red]Refused:[/red] registry entry is yanked: {match.name}@{match.version}")
+            console.print(
+                f"[red]Refused:[/red] registry entry is yanked: {match.name}@{match.version}"
+            )
             raise typer.Exit(1)
         if not match.download_url:
             console.print(f"[red]Registry entry has no download_url:[/red] {match.name}")
@@ -2796,25 +2917,81 @@ def skills_install(
         registry_host = urlparse(config.skills_market.registry_url).hostname or ""
         if registry_host:
             trusted_hosts.add(registry_host.lower())
-        source_host = (parsed.hostname or "").lower()
-        if source_host not in trusted_hosts and not trust_unverified:
-            console.print(
-                f"[red]Refused host:[/red] {source_host or '(unknown)'} not in trusted hosts. "
-                "Use --trust-unverified to bypass."
-            )
-            raise typer.Exit(1)
+
         try:
             import httpx
         except ImportError:
             console.print("[red]httpx is required for URL installs[/red]")
             raise typer.Exit(1)
-        try:
-            resp = httpx.get(source_value, timeout=30.0, follow_redirects=True)
-            resp.raise_for_status()
-        except Exception as exc:
-            console.print(f"[red]Download failed:[/red] {exc}")
-            raise typer.Exit(1)
-        payload = bytes(resp.content)
+
+        from urllib.parse import urljoin
+
+        current_url = source_value
+        payload = b""
+        redirect_count = 0
+
+        while True:
+            cur_parsed = urlparse(current_url)
+            source_host = (cur_parsed.hostname or "").lower()
+
+            # 1. Trusted Host Check
+            if source_host not in trusted_hosts and not trust_unverified:
+                console.print(
+                    f"[red]Refused host:[/red] {source_host or '(unknown)'} not in trusted hosts. "
+                    "Use --trust-unverified to bypass."
+                )
+                raise typer.Exit(1)
+
+            # 2. SSRF / IP Resolve Check
+            safe_ip = _resolve_safe_ip(source_host)
+            if not safe_ip:
+                console.print(f"[red]Refused host (unsafe or unresolvable IP):[/red] {source_host}")
+                raise typer.Exit(1)
+
+            try:
+                # Use follow_redirects=False for manual hop-by-hop verification
+                with httpx.stream("GET", current_url, timeout=30.0, follow_redirects=False) as resp:
+                    # Handle Redirects
+                    if resp.status_code in (301, 302, 303, 307, 308):
+                        redirect_count += 1
+                        if redirect_count > MAX_REDIRECTS:
+                            console.print("[red]Too many redirects[/red]")
+                            raise typer.Exit(1)
+
+                        location = resp.headers.get("Location")
+                        if not location:
+                            console.print("[red]Redirect missing Location header[/red]")
+                            raise typer.Exit(1)
+
+                        current_url = urljoin(current_url, location)
+                        continue
+
+                    resp.raise_for_status()
+
+                    # 3. Stream content with size limit
+                    content_len = resp.headers.get("Content-Length")
+                    if content_len and int(content_len) > MAX_ARCHIVE_BYTES:
+                        console.print(
+                            f"[red]Archive too large (Content-Length: {content_len} bytes)[/red]"
+                        )
+                        raise typer.Exit(1)
+
+                    downloaded = 0
+                    chunks = []
+                    for chunk in resp.iter_bytes(chunk_size=8192):
+                        downloaded += len(chunk)
+                        if downloaded > MAX_ARCHIVE_BYTES:
+                            console.print(
+                                f"[red]Archive too large (exceeded {MAX_ARCHIVE_BYTES} bytes)[/red]"
+                            )
+                            raise typer.Exit(1)
+                        chunks.append(chunk)
+                    payload = b"".join(chunks)
+                    break  # Success
+            except Exception as exc:
+                console.print(f"[red]Download failed:[/red] {exc}")
+                raise typer.Exit(1)
+
         if resolved_market_entry and resolved_market_entry.sha256:
             actual = hashlib.sha256(payload).hexdigest()
             expected = resolved_market_entry.sha256.strip().lower()
@@ -2823,7 +3000,9 @@ def skills_install(
                     f"[red]Checksum mismatch:[/red] expected {expected[:12]}..., got {actual[:12]}..."
                 )
                 raise typer.Exit(1)
-        with tempfile.NamedTemporaryFile(prefix="zen-claw-skill-", suffix=".zip", delete=False) as tmpf:
+        with tempfile.NamedTemporaryFile(
+            prefix="zen-claw-skill-", suffix=".zip", delete=False
+        ) as tmpf:
             tmpf.write(payload)
             tmp_path = Path(tmpf.name)
         try:
@@ -2890,7 +3069,9 @@ def skills_info(
     if manifest_load_errors:
         preflight_errors.extend(manifest_load_errors)
     perms = (manifest or {}).get("permissions") if isinstance(manifest, dict) else None
-    if not isinstance(perms, list) or not all(isinstance(p, str) and p.strip() for p in perms or []):
+    if not isinstance(perms, list) or not all(
+        isinstance(p, str) and p.strip() for p in perms or []
+    ):
         preflight_errors.append("permissions missing or invalid in manifest.json")
     enforce_ready = len(preflight_errors) == 0
 
@@ -2931,7 +3112,9 @@ def skills_info(
 def skills_export(
     name: str = typer.Argument(..., help="Skill name to export"),
     out: str = typer.Option("", "--out", "-o", help="Output zip file path"),
-    overwrite: bool = typer.Option(False, "--overwrite", "-f", help="Overwrite output zip if exists"),
+    overwrite: bool = typer.Option(
+        False, "--overwrite", "-f", help="Overwrite output zip if exists"
+    ),
 ):
     """Export a skill to a .zip archive."""
     from zen_claw.agent.skills import SkillsLoader
@@ -2978,7 +3161,9 @@ def skills_search(
     query: str = typer.Argument("", help="Search keyword"),
     tag: str = typer.Option("", "--tag", help="Filter by tag"),
     author: str = typer.Option("", "--author", help="Filter by author"),
-    enforce_ready: bool | None = typer.Option(None, "--enforce-ready/--no-enforce-ready", help="Filter enforce_ready"),
+    enforce_ready: bool | None = typer.Option(
+        None, "--enforce-ready/--no-enforce-ready", help="Filter enforce_ready"
+    ),
     refresh: bool = typer.Option(False, "--refresh", help="Force refresh registry cache"),
 ):
     """Search skills market registry."""
@@ -3026,7 +3211,9 @@ def skills_search(
 @skills_app.command("publish")
 def skills_publish(
     name: str = typer.Argument(..., help="Skill name"),
-    skip_integrity: bool = typer.Option(False, "--skip-integrity", help="Skip integrity requirement"),
+    skip_integrity: bool = typer.Option(
+        False, "--skip-integrity", help="Skip integrity requirement"
+    ),
     out_dir: str = typer.Option("", "--out-dir", help="Output directory"),
 ):
     """Package skill and generate catalog entry JSON."""
@@ -3035,9 +3222,13 @@ def skills_publish(
 
     cfg = load_config()
     workspace = cfg.workspace_path
-    output_dir = Path(out_dir) if out_dir.strip() else (workspace / cfg.skills_market.publish_output_dir)
+    output_dir = (
+        Path(out_dir) if out_dir.strip() else (workspace / cfg.skills_market.publish_output_dir)
+    )
     require_integrity = cfg.skills_market.publish_require_integrity and not skip_integrity
-    publisher = SkillsPublisher(workspace=workspace, output_dir=output_dir, require_integrity=require_integrity)
+    publisher = SkillsPublisher(
+        workspace=workspace, output_dir=output_dir, require_integrity=require_integrity
+    )
     result = publisher.publish(name)
     if not result.ok:
         console.print(f"[red]Publish failed:[/red] {result.error}")
@@ -3089,7 +3280,13 @@ def tenant_list():
     table.add_column("Created")
     for row in rows:
         created = datetime.datetime.fromtimestamp(row.created_at).strftime("%Y-%m-%d")
-        table.add_row(row.tenant_id[:8] + "...", row.name, "Yes" if row.enabled else "No", str(row.quota_llm_calls_per_day), created)
+        table.add_row(
+            row.tenant_id[:8] + "...",
+            row.name,
+            "Yes" if row.enabled else "No",
+            str(row.quota_llm_calls_per_day),
+            created,
+        )
     console.print(table)
 
 
@@ -3131,7 +3328,9 @@ def user_list(tenant: str = typer.Option(..., "--tenant", "-t", help="Tenant ID"
     table.add_column("Created")
     for row in rows:
         created = datetime.datetime.fromtimestamp(row.created_at).strftime("%Y-%m-%d")
-        table.add_row(row.user_id[:8] + "...", row.username, row.role, "Yes" if row.enabled else "No", created)
+        table.add_row(
+            row.user_id[:8] + "...", row.username, row.role, "Yes" if row.enabled else "No", created
+        )
     console.print(table)
 
 
@@ -3149,7 +3348,9 @@ def tts_synthesize(
     voice: str = typer.Option("", "--voice", "-v", help="Voice name"),
     output: str = typer.Option("", "--output", "-o", help="Output file path"),
     fmt: str = typer.Option("mp3", "--format", "-f", help="Output format: mp3 or wav"),
-    provider: str = typer.Option("", "--provider", "-p", help="Override provider: edge|minimax|openai"),
+    provider: str = typer.Option(
+        "", "--provider", "-p", help="Override provider: edge|minimax|openai"
+    ),
 ):
     """Synthesize text to speech."""
     from zen_claw.config.loader import load_config
@@ -3183,7 +3384,9 @@ def tts_synthesize(
     out_path = Path(output)
 
     async def _run() -> None:
-        await tts.synthesize_to_file(text=text, output_path=out_path, voice=voice or None, output_format=fmt)
+        await tts.synthesize_to_file(
+            text=text, output_path=out_path, voice=voice or None, output_format=fmt
+        )
         console.print(f"[green]Done:[/green] {out_path} ({out_path.stat().st_size} bytes)")
 
     try:
@@ -3244,8 +3447,12 @@ def api_key_list():
     table.add_column("Created")
     table.add_column("Enabled")
     for _, row in rows.items():
-        created = datetime.datetime.fromtimestamp(int(row.get("created_at", 0))).strftime("%Y-%m-%d %H:%M")
-        table.add_row(str(row.get("prefix", "")) + "...", created, "Yes" if row.get("enabled", True) else "No")
+        created = datetime.datetime.fromtimestamp(int(row.get("created_at", 0))).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        table.add_row(
+            str(row.get("prefix", "")) + "...", created, "Yes" if row.get("enabled", True) else "No"
+        )
     console.print(table)
 
 
@@ -3292,6 +3499,7 @@ def knowledge_add(
         )
 
     import json
+
     asyncio.run(_run())
 
 
@@ -3324,6 +3532,7 @@ def knowledge_search(
             console.print(str(row.get("content", ""))[:300])
 
     import json
+
     asyncio.run(_run())
 
 
@@ -3350,10 +3559,13 @@ def knowledge_list():
         table.add_column("ID")
         table.add_column("Docs")
         for row in rows:
-            table.add_row(str(row.get("name", "")), str(row.get("id", "")), str(row.get("doc_count", 0)))
+            table.add_row(
+                str(row.get("name", "")), str(row.get("id", "")), str(row.get("doc_count", 0))
+            )
         console.print(table)
 
     import json
+
     asyncio.run(_run())
 
 
@@ -3487,7 +3699,9 @@ def node_policy_set(
         allowed_task_types=allow_task_type if allow_task_type else None,
         allow_gateway_tasks=allow_gateway_tasks,
         max_running_tasks=max_running_tasks if max_running_tasks > 0 else None,
-        require_approval_task_types=require_approval_task_type if require_approval_task_type else None,
+        require_approval_task_types=require_approval_task_type
+        if require_approval_task_type
+        else None,
         approval_timeout_sec=approval_timeout_sec if approval_timeout_sec >= 0 else None,
         approval_required_count=approval_required_count if approval_required_count > 0 else None,
     )
@@ -3581,7 +3795,9 @@ def node_task_add(
     node_id: str = typer.Option(..., "--node-id", help="Target node ID"),
     task_type: str = typer.Option(..., "--type", help="Task type"),
     payload: str = typer.Option("{}", "--payload", help="JSON payload"),
-    idempotency_key: str = typer.Option("", "--idempotency-key", help="Optional idempotency key for dedup"),
+    idempotency_key: str = typer.Option(
+        "", "--idempotency-key", help="Optional idempotency key for dedup"
+    ),
     required_capability: str = typer.Option(
         "",
         "--required-capability",
@@ -3617,17 +3833,17 @@ def node_task_add(
         raise typer.Exit(1)
     if task.get("ok") is False and task.get("error_code") == "node_policy_denied":
         console.print(
-            "[red]task rejected:[/red] task type denied by node policy "
-            f"`{task.get('task_type')}`"
+            f"[red]task rejected:[/red] task type denied by node policy `{task.get('task_type')}`"
         )
         raise typer.Exit(1)
     if task.get("ok") is False and task.get("error_code") == "node_dsl_static_denied":
         violations = task.get("violations") or []
-        v_text = ", ".join([str(v) for v in violations]) if isinstance(violations, list) else str(violations)
-        console.print(
-            "[red]task rejected:[/red] DSL static check failed "
-            f"({v_text})"
+        v_text = (
+            ", ".join([str(v) for v in violations])
+            if isinstance(violations, list)
+            else str(violations)
         )
+        console.print(f"[red]task rejected:[/red] DSL static check failed ({v_text})")
         raise typer.Exit(1)
     if task.get("ok") is False and task.get("error_code") == "node_replay_conflict":
         console.print(
@@ -3796,14 +4012,22 @@ def status(
 
     console.print(f"{__logo__} zen-claw Status\n")
 
-    console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
-    console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
+    console.print(
+        f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}"
+    )
+    console.print(
+        f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}"
+    )
 
     if config_path.exists():
         console.print(f"Model: {config.agents.defaults.model}")
         console.print(
             "Vision Model: "
-            + (config.agents.defaults.vision_model if config.agents.defaults.vision_model else "(same as model)")
+            + (
+                config.agents.defaults.vision_model
+                if config.agents.defaults.vision_model
+                else "(same as model)"
+            )
         )
         console.print(f"Memory Recall Mode: {config.agents.defaults.memory_recall_mode}")
         console.print(f"Planning Enabled: {config.agents.defaults.enable_planning}")
@@ -3820,13 +4044,21 @@ def status(
         has_vllm = bool(config.providers.vllm.api_base)
         has_aihubmix = bool(config.providers.aihubmix.api_key)
 
-        console.print(f"OpenRouter API: {'[green]✓[/green]' if has_openrouter else '[dim]not set[/dim]'}")
-        console.print(f"Anthropic API: {'[green]✓[/green]' if has_anthropic else '[dim]not set[/dim]'}")
+        console.print(
+            f"OpenRouter API: {'[green]✓[/green]' if has_openrouter else '[dim]not set[/dim]'}"
+        )
+        console.print(
+            f"Anthropic API: {'[green]✓[/green]' if has_anthropic else '[dim]not set[/dim]'}"
+        )
         console.print(f"OpenAI API: {'[green]✓[/green]' if has_openai else '[dim]not set[/dim]'}")
         console.print(f"Gemini API: {'[green]✓[/green]' if has_gemini else '[dim]not set[/dim]'}")
         console.print(f"Zhipu AI API: {'[green]✓[/green]' if has_zhipu else '[dim]not set[/dim]'}")
-        console.print(f"AiHubMix API: {'[green]✓[/green]' if has_aihubmix else '[dim]not set[/dim]'}")
-        vllm_status = f"[green]{config.providers.vllm.api_base}[/green]" if has_vllm else "[dim]not set[/dim]"
+        console.print(
+            f"AiHubMix API: {'[green]✓[/green]' if has_aihubmix else '[dim]not set[/dim]'}"
+        )
+        vllm_status = (
+            f"[green]{config.providers.vllm.api_base}[/green]" if has_vllm else "[dim]not set[/dim]"
+        )
         console.print(f"vLLM/Local: {vllm_status}")
         _print_effective_tool_backends(config)
         _print_sidecar_status(config)
@@ -3836,42 +4068,6 @@ def status(
         if verbose:
             _print_policy_audit_matrix(config)
 
-# ============================================================================
-# Identity Commands
-# ============================================================================
-
-identity_app = typer.Typer(help="Manage agent identity (ed25519) keys")
-app.add_typer(identity_app, name="identity")
-
-@identity_app.command(name="show")
-def identity_show():
-    """Show the agent's public key (generates one if missing)."""
-    from zen_claw.auth.identity import AgentIdentity, AgentIdentityError
-    from zen_claw.config.loader import load_config
-    try:
-        config = load_config()
-        identity = AgentIdentity(config.workspace_path / ".agent_keys")
-        identity.get_or_create_keypair()
-        console.print(f"Public Key (hex): [green]{identity.public_key_hex()}[/green]")
-        console.print(f"Created at: {identity.created_at()}")
-    except AgentIdentityError as e:
-        console.print(f"[red]Error:[/red] {e}")
-        raise typer.Exit(1)
-
-@identity_app.command(name="verify")
-def identity_verify(
-    public_key: str = typer.Argument(..., help="The hex public key"),
-    message: str = typer.Argument(..., help="The original message text"),
-    signature: str = typer.Argument(..., help="The base64 signature"),
-):
-    """Verify an ed25519 signature against a public key."""
-    from zen_claw.auth.identity import AgentIdentity
-    valid = AgentIdentity.verify(public_key, message.encode("utf-8"), signature)
-    if valid:
-        console.print("[bold green]✓ Signature is valid.[/bold green]")
-    else:
-        console.print("[bold red]✗ Signature is invalid.[/bold red]")
-        raise typer.Exit(1)
 
 if __name__ == "__main__":
     app()

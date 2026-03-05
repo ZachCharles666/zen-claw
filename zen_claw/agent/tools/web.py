@@ -20,16 +20,16 @@ MAX_REDIRECTS = 5  # Limit redirects to prevent DoS attacks
 
 # Private / reserved IP networks blocked to prevent SSRF
 _BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),      # loopback
-    ipaddress.ip_network("10.0.0.0/8"),        # RFC 1918
-    ipaddress.ip_network("172.16.0.0/12"),     # RFC 1918
-    ipaddress.ip_network("192.168.0.0/16"),    # RFC 1918
-    ipaddress.ip_network("169.254.0.0/16"),    # link-local / AWS metadata
-    ipaddress.ip_network("100.64.0.0/10"),     # CGNAT
-    ipaddress.ip_network("0.0.0.0/8"),         # this-network
-    ipaddress.ip_network("::1/128"),            # IPv6 loopback
-    ipaddress.ip_network("fc00::/7"),           # IPv6 unique local
-    ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
+    ipaddress.ip_network("127.0.0.0/8"),  # loopback
+    ipaddress.ip_network("10.0.0.0/8"),  # RFC 1918
+    ipaddress.ip_network("172.16.0.0/12"),  # RFC 1918
+    ipaddress.ip_network("192.168.0.0/16"),  # RFC 1918
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / AWS metadata
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
+    ipaddress.ip_network("0.0.0.0/8"),  # this-network
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),  # IPv6 unique local
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 ]
 
 
@@ -58,23 +58,23 @@ def _is_private_host(host: str) -> bool:
 
 def _strip_tags(text: str) -> str:
     """Remove HTML tags and decode entities."""
-    text = re.sub(r'<script[\s\S]*?</script>', '', text, flags=re.I)
-    text = re.sub(r'<style[\s\S]*?</style>', '', text, flags=re.I)
-    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.I)
+    text = re.sub(r"<style[\s\S]*?</style>", "", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
     return html.unescape(text).strip()
 
 
 def _normalize(text: str) -> str:
     """Normalize whitespace."""
-    text = re.sub(r'[ \t]+', ' ', text)
-    return re.sub(r'\n{3,}', '\n\n', text).strip()
+    text = re.sub(r"[ \t]+", " ", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _validate_url(url: str) -> tuple[bool, str]:
     """Validate URL: must be http(s), public domain, non-private IP."""
     try:
         p = urlparse(url)
-        if p.scheme not in ('http', 'https'):
+        if p.scheme not in ("http", "https"):
             return False, f"Only http/https allowed, got '{p.scheme or 'none'}'"
         if not p.netloc:
             return False, "Missing domain"
@@ -108,9 +108,14 @@ class WebSearchTool(Tool):
         "type": "object",
         "properties": {
             "query": {"type": "string", "description": "Search query"},
-            "count": {"type": "integer", "description": "Results (1-10)", "minimum": 1, "maximum": 10}
+            "count": {
+                "type": "integer",
+                "description": "Results (1-10)",
+                "minimum": 1,
+                "maximum": 10,
+            },
         },
-        "required": ["query"]
+        "required": ["query"],
     }
 
     def __init__(
@@ -150,7 +155,7 @@ class WebSearchTool(Tool):
                     "https://api.search.brave.com/res/v1/web/search",
                     params={"q": query, "count": n},
                     headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
-                    timeout=10.0
+                    timeout=10.0,
                 )
                 r.raise_for_status()
 
@@ -197,7 +202,9 @@ class WebSearchTool(Tool):
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 if self.proxy_healthcheck:
-                    health = await client.get(_build_proxy_healthz_url(self.proxy_url, "/v1/search"))
+                    health = await client.get(
+                        _build_proxy_healthz_url(self.proxy_url, "/v1/search")
+                    )
                     if health.status_code >= 400:
                         if self.proxy_fallback_to_local:
                             return await self._search_local(query=query, count=count)
@@ -237,7 +244,9 @@ class WebSearchTool(Tool):
         if response.status_code >= 400 or not bool(data.get("ok")):
             code = str(data.get("error_code") or "web_search_proxy_failed")
             msg = str(data.get("error") or f"HTTP {response.status_code}")
-            kind = ToolErrorKind.PERMISSION if response.status_code == 403 else ToolErrorKind.RUNTIME
+            kind = (
+                ToolErrorKind.PERMISSION if response.status_code == 403 else ToolErrorKind.RUNTIME
+            )
             return ToolResult.failure(kind, msg, code=code, http_status=response.status_code)
 
         results = data.get("results") or []
@@ -262,9 +271,9 @@ class WebFetchTool(Tool):
         "properties": {
             "url": {"type": "string", "description": "URL to fetch"},
             "extractMode": {"type": "string", "enum": ["markdown", "text"], "default": "markdown"},
-            "maxChars": {"type": "integer", "minimum": 100}
+            "maxChars": {"type": "integer", "minimum": 100},
         },
-        "required": ["url"]
+        "required": ["url"],
     }
 
     def __init__(
@@ -281,11 +290,11 @@ class WebFetchTool(Tool):
         self.proxy_healthcheck = proxy_healthcheck
         self.proxy_fallback_to_local = proxy_fallback_to_local
 
-    async def execute(
+    async def execute(  # noqa: N803
         self,
         url: str,
-        extractMode: str = "markdown",
-        maxChars: int | None = None,
+        extractMode: str = "markdown",  # noqa: N803
+        maxChars: int | None = None,  # noqa: N803
         **kwargs: Any,
     ) -> ToolResult:
         max_chars = maxChars or self.max_chars
@@ -313,9 +322,7 @@ class WebFetchTool(Tool):
     async def _fetch_local(self, url: str, extract_mode: str, max_chars: int) -> ToolResult:
         try:
             async with httpx.AsyncClient(
-                follow_redirects=True,
-                max_redirects=MAX_REDIRECTS,
-                timeout=30.0
+                follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=30.0
             ) as client:
                 r = await client.get(url, headers={"User-Agent": USER_AGENT})
                 r.raise_for_status()
@@ -328,8 +335,13 @@ class WebFetchTool(Tool):
             # HTML
             elif "text/html" in ctype or r.text[:256].lower().startswith(("<!doctype", "<html")):
                 from readability import Document
+
                 doc = Document(r.text)
-                content = self._to_markdown(doc.summary()) if extract_mode == "markdown" else _strip_tags(doc.summary())
+                content = (
+                    self._to_markdown(doc.summary())
+                    if extract_mode == "markdown"
+                    else _strip_tags(doc.summary())
+                )
                 text = f"# {doc.title()}\n\n{content}" if doc.title() else content
                 extractor = "readability"
             else:
@@ -394,7 +406,9 @@ class WebFetchTool(Tool):
                     health = await client.get(health_url)
                     if health.status_code >= 400:
                         if self.proxy_fallback_to_local:
-                            return await self._fetch_local(url=url, extract_mode=extract_mode, max_chars=max_chars)
+                            return await self._fetch_local(
+                                url=url, extract_mode=extract_mode, max_chars=max_chars
+                            )
                         return ToolResult.failure(
                             ToolErrorKind.RETRYABLE,
                             f"Net proxy health check failed with HTTP {health.status_code}",
@@ -404,7 +418,9 @@ class WebFetchTool(Tool):
                 response = await client.post(self.proxy_url, headers=headers, json=payload)
         except httpx.TimeoutException as e:
             if self.proxy_fallback_to_local:
-                return await self._fetch_local(url=url, extract_mode=extract_mode, max_chars=max_chars)
+                return await self._fetch_local(
+                    url=url, extract_mode=extract_mode, max_chars=max_chars
+                )
             return ToolResult.failure(
                 ToolErrorKind.RETRYABLE,
                 str(e),
@@ -412,7 +428,9 @@ class WebFetchTool(Tool):
             )
         except httpx.RequestError as e:
             if self.proxy_fallback_to_local:
-                return await self._fetch_local(url=url, extract_mode=extract_mode, max_chars=max_chars)
+                return await self._fetch_local(
+                    url=url, extract_mode=extract_mode, max_chars=max_chars
+                )
             return ToolResult.failure(
                 ToolErrorKind.RETRYABLE,
                 str(e),
@@ -431,7 +449,9 @@ class WebFetchTool(Tool):
         if response.status_code >= 400:
             code = str(data.get("error_code") or "web_fetch_proxy_error")
             msg = str(data.get("error") or f"HTTP {response.status_code}")
-            kind = ToolErrorKind.PERMISSION if response.status_code == 403 else ToolErrorKind.RUNTIME
+            kind = (
+                ToolErrorKind.PERMISSION if response.status_code == 403 else ToolErrorKind.RUNTIME
+            )
             return ToolResult.failure(kind, msg, code=code, http_status=response.status_code)
 
         if not bool(data.get("ok")):
@@ -449,8 +469,13 @@ class WebFetchTool(Tool):
         if "text/html" in ctype or text[:256].lower().startswith(("<!doctype", "<html")):
             try:
                 from readability import Document
+
                 doc = Document(text)
-                content = self._to_markdown(doc.summary()) if extract_mode == "markdown" else _strip_tags(doc.summary())
+                content = (
+                    self._to_markdown(doc.summary())
+                    if extract_mode == "markdown"
+                    else _strip_tags(doc.summary())
+                )
                 text = f"# {doc.title()}\n\n{content}" if doc.title() else content
                 extractor = "proxy_readability"
             except Exception:
@@ -474,17 +499,24 @@ class WebFetchTool(Tool):
             )
         )
 
-
     def _to_markdown(self, html: str) -> str:
         """Convert HTML to markdown."""
         # Convert links, headings, lists before stripping tags
-        text = re.sub(r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>',
-                      lambda m: f'[{_strip_tags(m[2])}]({m[1]})', html, flags=re.I)
-        text = re.sub(r'<h([1-6])[^>]*>([\s\S]*?)</h\1>',
-                      lambda m: f'\n{"#" * int(m[1])} {_strip_tags(m[2])}\n', text, flags=re.I)
-        text = re.sub(r'<li[^>]*>([\s\S]*?)</li>', lambda m: f'\n- {_strip_tags(m[1])}', text, flags=re.I)
-        text = re.sub(r'</(p|div|section|article)>', '\n\n', text, flags=re.I)
-        text = re.sub(r'<(br|hr)\s*/?>', '\n', text, flags=re.I)
+        text = re.sub(
+            r'<a\s+[^>]*href=["\']([^"\']+)["\'][^>]*>([\s\S]*?)</a>',
+            lambda m: f"[{_strip_tags(m[2])}]({m[1]})",
+            html,
+            flags=re.I,
+        )
+        text = re.sub(
+            r"<h([1-6])[^>]*>([\s\S]*?)</h\1>",
+            lambda m: f"\n{'#' * int(m[1])} {_strip_tags(m[2])}\n",
+            text,
+            flags=re.I,
+        )
+        text = re.sub(
+            r"<li[^>]*>([\s\S]*?)</li>", lambda m: f"\n- {_strip_tags(m[1])}", text, flags=re.I
+        )
+        text = re.sub(r"</(p|div|section|article)>", "\n\n", text, flags=re.I)
+        text = re.sub(r"<(br|hr)\s*/?>", "\n", text, flags=re.I)
         return _normalize(_strip_tags(text))
-
-

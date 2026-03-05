@@ -14,7 +14,7 @@ except Exception:
 
 pytestmark = pytest.mark.skipif(not _CRYPTO_AVAILABLE, reason="cryptography not installed")
 
-from zen_claw.auth.identity import AgentIdentity, AgentIdentityError
+from zen_claw.auth.identity import AgentIdentity, AgentIdentityError  # noqa: E402
 
 
 def test_keypair_created_on_first_call(tmp_path: Path):
@@ -157,30 +157,31 @@ async def test_agent_public_key_tool(tmp_path: Path):
 
 async def test_agent_verify_tool_success(tmp_path):
     from zen_claw.agent.tools.identity import AgentSignTool, AgentVerifyTool
+
     sign_tool = AgentSignTool(workspace=tmp_path)
     sign_res = await sign_tool.execute(message="Verify me")
     import json
+
     data = json.loads(sign_res.content)
     verify_tool = AgentVerifyTool(workspace=tmp_path)
     ver_res = await verify_tool.execute(
-        public_key=data["public_key"],
-        message="Verify me",
-        signature=data["signature"]
+        public_key=data["public_key"], message="Verify me", signature=data["signature"]
     )
     assert ver_res.ok is True
     assert json.loads(ver_res.content)["valid"] is True
 
+
 async def test_agent_verify_tool_failure(tmp_path):
     from zen_claw.agent.tools.identity import AgentSignTool, AgentVerifyTool
+
     sign_tool = AgentSignTool(workspace=tmp_path)
     sign_res = await sign_tool.execute(message="Verify me")
     import json
+
     data = json.loads(sign_res.content)
     verify_tool = AgentVerifyTool(workspace=tmp_path)
     ver_res = await verify_tool.execute(
-        public_key=data["public_key"],
-        message="Tampered message",
-        signature=data["signature"]
+        public_key=data["public_key"], message="Tampered message", signature=data["signature"]
     )
     assert ver_res.ok is True
     assert json.loads(ver_res.content)["valid"] is False

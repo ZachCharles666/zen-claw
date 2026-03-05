@@ -31,7 +31,7 @@ def test_slack_channel_uses_async_client_when_sdk_present(monkeypatch) -> None:
             self.token = token
             self.uploaded: list[tuple[str, str]] = []
 
-        async def chat_postMessage(self, **kwargs):
+        async def chat_postMessage(self, **kwargs):  # noqa: N802
             sent.append(kwargs)
 
         async def files_upload_v2(self, **kwargs):
@@ -71,11 +71,15 @@ def test_slack_channel_ingest_event_with_file(monkeypatch, tmp_path) -> None:
         async def get(self, url, headers=None):
             return _FakeResp(b"file")
 
-    monkeypatch.setattr("zen_claw.channels.slack.httpx.AsyncClient", lambda timeout=30.0: _FakeClient())
+    monkeypatch.setattr(
+        "zen_claw.channels.slack.httpx.AsyncClient", lambda timeout=30.0: _FakeClient()
+    )
 
     async def _run() -> None:
         bus = MessageBus()
-        ch = SlackChannel(SlackConfig(enabled=True, bot_token="xoxb-test"), bus, media_root=tmp_path)
+        ch = SlackChannel(
+            SlackConfig(enabled=True, bot_token="xoxb-test"), bus, media_root=tmp_path
+        )
         ch.access_checker = lambda *_args, **_kwargs: True
         await ch.ingest_event(
             {

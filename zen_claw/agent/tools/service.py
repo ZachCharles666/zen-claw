@@ -35,15 +35,17 @@ def _is_process_running(pid: int) -> bool:
         if os.name == "nt":
             import ctypes
 
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            STILL_ACTIVE = 259
-            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            process_query_limited_information = 0x1000
+            still_active = 259
+            handle = ctypes.windll.kernel32.OpenProcess(
+                process_query_limited_information, False, int(pid)
+            )
             if not handle:
                 return False
             exit_code = ctypes.c_ulong()
             ok = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
             ctypes.windll.kernel32.CloseHandle(handle)
-            return bool(ok) and int(exit_code.value) == STILL_ACTIVE
+            return bool(ok) and int(exit_code.value) == still_active
         os.kill(pid, 0)
         return True
     except Exception:
@@ -66,11 +68,17 @@ class ServiceStartTool(Tool):
     def __init__(self, workspace: Path):
         self._workspace = Path(workspace).resolve()
 
-    async def execute(self, name: str, command: str, cwd: str | None = None, **kwargs: Any) -> ToolResult:
+    async def execute(
+        self, name: str, command: str, cwd: str | None = None, **kwargs: Any
+    ) -> ToolResult:
         name = str(name or "").strip()
         cmd = str(command or "").strip()
         if not name or not cmd:
-            return ToolResult.failure(ToolErrorKind.PARAMETER, "name and command are required", code="service_missing_args")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER,
+                "name and command are required",
+                code="service_missing_args",
+            )
         pid_path = _pid_file(self._workspace, name)
         if pid_path.exists():
             try:
@@ -79,14 +87,20 @@ class ServiceStartTool(Tool):
                 pid = -1
             if _is_process_running(pid):
                 return ToolResult.failure(
-                    ToolErrorKind.PERMISSION, f"service '{name}' already running", code="service_already_running"
+                    ToolErrorKind.PERMISSION,
+                    f"service '{name}' already running",
+                    code="service_already_running",
                 )
             pid_path.unlink(missing_ok=True)
         workdir = self._workspace if not cwd else (self._workspace / cwd).resolve()
         try:
             workdir.relative_to(self._workspace)
         except Exception:
-            return ToolResult.failure(ToolErrorKind.PERMISSION, "cwd must stay inside workspace", code="service_cwd_outside_workspace")
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "cwd must stay inside workspace",
+                code="service_cwd_outside_workspace",
+            )
         workdir.mkdir(parents=True, exist_ok=True)
         log_path = _log_file(self._workspace, name)
         try:
@@ -103,14 +117,29 @@ class ServiceStartTool(Tool):
             else:
                 argv = shlex.split(cmd, posix=True)
                 proc = subprocess.Popen(
-                    argv, shell=False, cwd=str(workdir), stdout=log_f, stderr=log_f, start_new_session=True
+                    argv,
+                    shell=False,
+                    cwd=str(workdir),
+                    stdout=log_f,
+                    stderr=log_f,
+                    start_new_session=True,
                 )
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"failed to start service: {exc}", code="service_start_failed")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                f"failed to start service: {exc}",
+                code="service_start_failed",
+            )
         pid_path.write_text(str(proc.pid), encoding="utf-8")
         return ToolResult.success(
             json.dumps(
-                {"name": name, "pid": proc.pid, "status": "started", "pid_file": str(pid_path), "log_file": str(log_path)},
+                {
+                    "name": name,
+                    "pid": proc.pid,
+                    "status": "started",
+                    "pid_file": str(pid_path),
+                    "log_file": str(log_path),
+                },
                 ensure_ascii=False,
             )
         )
@@ -132,15 +161,21 @@ class ServiceStopTool(Tool):
         name = str(name or "").strip()
         pid_path = _pid_file(self._workspace, name)
         if not pid_path.exists():
-            return ToolResult.failure(ToolErrorKind.PARAMETER, f"service '{name}' not found", code="service_not_found")
+            return ToolResult.failure(
+                ToolErrorKind.PARAMETER, f"service '{name}' not found", code="service_not_found"
+            )
         try:
             pid = int(pid_path.read_text().strip())
         except Exception:
             pid_path.unlink(missing_ok=True)
-            return ToolResult.failure(ToolErrorKind.RUNTIME, "corrupted pidfile", code="service_pid_corrupt")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, "corrupted pidfile", code="service_pid_corrupt"
+            )
         if not _is_process_running(pid):
             pid_path.unlink(missing_ok=True)
-            return ToolResult.success(json.dumps({"name": name, "pid": pid, "status": "already_stopped"}))
+            return ToolResult.success(
+                json.dumps({"name": name, "pid": pid, "status": "already_stopped"})
+            )
         try:
             if os.name == "nt":
                 args = ["taskkill", "/PID", str(pid)]
@@ -150,7 +185,9 @@ class ServiceStopTool(Tool):
             else:
                 os.kill(pid, signal.SIGKILL if force_kill else signal.SIGTERM)
         except Exception as exc:
-            return ToolResult.failure(ToolErrorKind.RUNTIME, f"failed to stop service: {exc}", code="service_stop_failed")
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME, f"failed to stop service: {exc}", code="service_stop_failed"
+            )
         pid_path.unlink(missing_ok=True)
         return ToolResult.success(json.dumps({"name": name, "pid": pid, "status": "stopped"}))
 
@@ -184,7 +221,11 @@ class ServiceStatusTool(Tool):
         try:
             pid = int(pid_path.read_text().strip())
         except Exception:
-            return ToolResult.success(json.dumps({"name": name, "running": False, "pid": None, "error": "corrupt_pidfile"}))
+            return ToolResult.success(
+                json.dumps(
+                    {"name": name, "running": False, "pid": None, "error": "corrupt_pidfile"}
+                )
+            )
         return ToolResult.success(
             json.dumps(
                 {

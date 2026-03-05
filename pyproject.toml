@@ -105,6 +105,12 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:datetime\\.datetime\\.utcfromtimestamp\\(\\) is deprecated.*:DeprecationWarning:lark_oapi\\.ws\\.pb\\.google\\.protobuf\\.internal\\.well_known_types",
+    "ignore:There is no current event loop:DeprecationWarning:lark_oapi\\.ws\\.client",
+    "ignore:websockets\\.InvalidStatusCode is deprecated:DeprecationWarning:lark_oapi\\.ws\\.client",
+    "ignore:websockets\\.legacy is deprecated.*:DeprecationWarning:websockets\\.legacy",
+]
 
 [tool.uv]
 resolution = "highest"

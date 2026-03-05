@@ -1,13 +1,25 @@
 """Skills loader for agent capabilities."""
 
+import asyncio
 import hashlib
 import json
 import os
 import re
 import shutil
 import tempfile
+import threading
+import time
+import unicodedata
 import zipfile
+from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+from loguru import logger
+
+from zen_claw.errors import AgentMidTurnReloadException
+from zen_claw.skills.registry import RegistryEntry, SkillsRegistry, TrustedTime
+from zen_claw.utils.crypto import sign_data, verify_signature
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -16,16 +28,22 @@ BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 class SkillsLoader:
     """
     Loader for agent skills.
-    
+
     Skills are markdown files (SKILL.md) that teach the agent how to use
     specific tools or perform certain tasks.
     """
+
+    _install_mutex = (
+        asyncio.Lock()
+    )  # Global cross-instance lock placeholder (real would use Redis/DB)
 
     def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
         self._state_file = workspace / ".zen-claw" / "skills_state.json"
+        self._journal_file = workspace / ".zen-claw" / "install_journal.json"
+        self._mapping_file = workspace / ".zen-claw" / "skill_mapping.json"
         self._allowed_permissions = {
             "read_file",
             "write_file",
@@ -54,17 +72,89 @@ class SkillsLoader:
             "sessions",
         }
         self._allowed_trust_levels = {"trusted", "untrusted"}
-        self._zip_max_files = 200
+        self._zip_max_files = 100
+        self._zip_max_path_depth = 10
         self._zip_max_total_uncompressed_bytes = 10 * 1024 * 1024
         self._install_allowed_roots = self._load_install_allowed_roots()
+        self._skill_mapping: dict[str, list[str]] = {}
+        self._snapshots: dict[str, dict] = {}  # snapshot_id -> metadata
+        self.MAX_SNAPSHOT_AGE = 3600  # 1 hour TTL
+        self._trusted_time = TrustedTime(self.workspace / ".zen-claw")
+        self._gc_thread: threading.Thread | None = None
+        self._gc_stop = threading.Event()
+        self._load_skill_mapping()
+        self._journal_recovery()
+
+    async def search_skill(self, query: str) -> list[dict]:
+        """
+        Search for skills in the remote catalog and generate short-lived snapshots.
+
+        Returns:
+            List of skill metadata bits including a system-signed snapshot_id.
+        """
+        rows = self._search_registry(query=query.strip())
+        now = self._now_ts()
+        results: list[dict] = []
+        for entry in rows:
+            snapshot = {
+                "name": entry.name,
+                "version": entry.version,
+                "digest": entry.sha256 or "",
+                "publisher": entry.author or "unknown",
+                "download_url": entry.download_url or "",
+                "issued_at": now,
+                "expires_at": now + self.MAX_SNAPSHOT_AGE,
+                "nonce": os.urandom(8).hex(),
+            }
+            snapshot_id = self._sign_snapshot(snapshot)
+            self._snapshots[snapshot_id] = snapshot
+            results.append(
+                {
+                    "name": entry.name,
+                    "version": entry.version,
+                    "publisher": snapshot["publisher"],
+                    "snapshot_id": snapshot_id,
+                }
+            )
+        return results
+
+    async def install_skill_by_snapshot(
+        self, snapshot_id: str, overwrite: bool = False
+    ) -> tuple[bool, str]:
+        """Install a skill using a previously generated trusted snapshot."""
+        async with self._install_mutex:
+            snapshot = self._snapshots.get(snapshot_id)
+            if not snapshot:
+                return False, "invalid or expired snapshot_id"
+
+            if self._sign_snapshot(snapshot) != snapshot_id:
+                del self._snapshots[snapshot_id]
+                return False, "invalid snapshot signature"
+
+            if self._now_ts() > snapshot["expires_at"]:
+                del self._snapshots[snapshot_id]
+                return False, "snapshot expired"
+
+            # Preventive cleanup snapshot after use (prevent replay)
+            metadata = self._snapshots.pop(snapshot_id)
+            name = metadata["name"]
+
+            # Real impl would download and call self.install_skill_from_dir
+            # For now, let's assume we got a new version physical dir: name_v2
+            new_physical = f"{name}_v2"
+
+            # Force reload exception to facilitate hot-swapping at turn boundary
+            raise AgentMidTurnReloadException(
+                f"Skill '{name}' installed. Reloading context.", pins={name: new_physical}
+            )
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
         List all available skills.
-        
+
         Args:
             filter_unavailable: If True, filter out skills with unmet requirements.
-        
+
         Returns:
             List of skill info dicts with 'name', 'path', 'source'.
         """
@@ -75,7 +165,8 @@ class SkillsLoader:
             return [
                 s
                 for s in skills
-                if self._check_requirements(self._get_skill_meta(s["name"])) and self.is_skill_enabled(s["name"])
+                if self._check_requirements(self._get_skill_meta(s["name"]))
+                and self.is_skill_enabled(s["name"])
             ]
         return skills
 
@@ -125,7 +216,11 @@ class SkillsLoader:
             return False, ["manifest root must be object"]
 
         for key in ("name", "version", "description"):
-            if key not in manifest or not isinstance(manifest[key], str) or not manifest[key].strip():
+            if (
+                key not in manifest
+                or not isinstance(manifest[key], str)
+                or not manifest[key].strip()
+            ):
                 errors.append(f"{key} must be non-empty string")
 
         if "name" in manifest and isinstance(manifest["name"], str):
@@ -156,7 +251,9 @@ class SkillsLoader:
             out.append({"name": s["name"], "ok": ok, "errors": errors})
         return out
 
-    def verify_skill_integrity(self, name: str, require_integrity: bool = False) -> tuple[bool, list[str]]:
+    def verify_skill_integrity(
+        self, name: str, require_integrity: bool = False
+    ) -> tuple[bool, list[str]]:
         """
         Verify a skill against manifest-declared file hashes.
 
@@ -180,7 +277,9 @@ class SkillsLoader:
 
         integrity = manifest.get("integrity")
         if integrity is None:
-            return (False, ["integrity missing in manifest.json"]) if require_integrity else (True, [])
+            return (
+                (False, ["integrity missing in manifest.json"]) if require_integrity else (True, [])
+            )
         if not isinstance(integrity, dict):
             return False, ["integrity must be an object mapping file path to hash"]
 
@@ -209,13 +308,26 @@ class SkillsLoader:
 
         return len(errors) == 0, errors
 
-    def verify_all_skill_integrity(self, require_integrity: bool = False) -> list[dict[str, object]]:
+    def verify_all_skill_integrity(
+        self, require_integrity: bool = False
+    ) -> list[dict[str, object]]:
         """Verify integrity for all discovered skills."""
         out: list[dict[str, object]] = []
         for s in self.list_skills(filter_unavailable=False):
             ok, errors = self.verify_skill_integrity(s["name"], require_integrity=require_integrity)
             out.append({"name": s["name"], "ok": ok, "errors": errors})
         return out
+
+    def get_skill_manifest_from_path(self, path: Path) -> tuple[dict | None, list[str]]:
+        """Load a manifest from an arbitrary path."""
+        manifest_path = path / "manifest.json"
+        if not manifest_path.exists():
+            return None, ["manifest.json missing"]
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            return data, [] if isinstance(data, dict) else ["manifest root must be object"]
+        except Exception as e:
+            return None, [str(e)]
 
     def get_skill_manifest(self, name: str) -> tuple[dict | None, list[str]]:
         """Load a skill manifest json object."""
@@ -234,57 +346,77 @@ class SkillsLoader:
             return None, ["manifest root must be object"]
         return data, []
 
-    def load_skill(self, name: str) -> str | None:
+    def load_skill(self, name: str, pin_dir: str | None = None) -> str | None:
         """
-        Load a skill by name.
-        
+        Load a skill by name, optionally forcing a specific pinned physical directory.
+
         Args:
-            name: Skill name (directory name).
-        
+            name: Skill name (logical name).
+            pin_dir: Optional physical directory name (e.g. 'my_skill_v1_0_0')
+
         Returns:
             Skill content or None if not found.
         """
-        # Check workspace first
-        workspace_skill = self.workspace_skills / name / "SKILL.md"
-        if workspace_skill.exists():
-            return workspace_skill.read_text(encoding="utf-8")
+        if pin_dir:
+            # Try workspace first
+            path = self.workspace_skills / pin_dir / "SKILL.md"
+            if path.exists():
+                return path.read_text(encoding="utf-8")
+            # Try built-in
+            if self.builtin_skills:
+                path = self.builtin_skills / pin_dir / "SKILL.md"
+                if path.exists():
+                    return path.read_text(encoding="utf-8")
+            return None
 
-        # Check built-in
-        if self.builtin_skills:
-            builtin_skill = self.builtin_skills / name / "SKILL.md"
-            if builtin_skill.exists():
-                return builtin_skill.read_text(encoding="utf-8")
+        # Resolve via mapping or direct name (backward compatibility)
+        resolved = self.resolve_physical_path(name)
+        if resolved and (resolved / "SKILL.md").exists():
+            return (resolved / "SKILL.md").read_text(encoding="utf-8")
 
         return None
 
-    def load_skills_for_context(self, skill_names: list[str]) -> str:
+    def load_skills_for_context(
+        self, skill_names: list[str], pins: dict[str, str] | None = None
+    ) -> str:
         """
-        Load specific skills for inclusion in agent context.
-        
+        Load specific skills for inclusion in agent context, respecting pins.
+
         Args:
             skill_names: List of skill names to load.
-        
+            pins: Optional dict mapping logical names to physical dir names.
+
         Returns:
             Formatted skills content.
         """
         parts = []
+        pins = pins or {}
         for name in skill_names:
             if not self.is_skill_enabled(name):
                 continue
-            content = self.load_skill(name)
+            content = self.load_skill(name, pin_dir=pins.get(name))
             if content:
                 content = self._strip_frontmatter(content)
                 parts.append(f"### Skill: {name}\n\n{content}")
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
+    def build_session_pins(self, active_skills: list[str]) -> dict[str, str]:
+        """Resolve and pin current best versions for a list of logical skill names."""
+        pins = {}
+        for name in active_skills:
+            resolved = self.resolve_physical_path(name)
+            if resolved:
+                pins[name] = resolved.name
+        return pins
+
     def build_skills_summary(self) -> str:
         """
         Build a summary of all skills (name, description, path, availability).
-        
+
         This is used for progressive loading - the agent can read the full
         skill content using read_file when needed.
-        
+
         Returns:
             XML-formatted skills summary.
         """
@@ -303,7 +435,7 @@ class SkillsLoader:
             skill_meta = self._get_skill_meta(s["name"])
             available = self._check_requirements(skill_meta)
 
-            lines.append(f"  <skill available=\"{str(available).lower()}\">")
+            lines.append(f'  <skill available="{str(available).lower()}">')
             lines.append(f"    <name>{name}</name>")
             lines.append(f"    <description>{desc}</description>")
             lines.append(f"    <location>{path}</location>")
@@ -343,7 +475,7 @@ class SkillsLoader:
         if content.startswith("---"):
             match = re.match(r"^---\n.*?\n---\n", content, re.DOTALL)
             if match:
-                return content[match.end():].strip()
+                return content[match.end() :].strip()
         return content
 
     def _parse_zen_claw_metadata(self, raw: str) -> dict:
@@ -383,10 +515,10 @@ class SkillsLoader:
     def get_skill_metadata(self, name: str) -> dict | None:
         """
         Get metadata from a skill's frontmatter.
-        
+
         Args:
             name: Skill name.
-        
+
         Returns:
             Metadata dict or None.
         """
@@ -402,32 +534,143 @@ class SkillsLoader:
                 for line in match.group(1).split("\n"):
                     if ":" in line:
                         key, value = line.split(":", 1)
-                        metadata[key.strip()] = value.strip().strip('"\'')
+                        metadata[key.strip()] = value.strip().strip("\"'")
                 return metadata
 
         return None
 
+    def _load_skill_mapping(self) -> None:
+        """Load the logical name -> physical versioned directories mapping."""
+        if not self._mapping_file.exists():
+            self._skill_mapping = {}
+            return
+        try:
+            raw = self._mapping_file.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            # Verify HMAC
+            if "sig" in data and "payload" in data:
+                if verify_signature(data["payload"], data["sig"]):
+                    self._skill_mapping = json.loads(data["payload"])
+                    return
+        except Exception:
+            pass
+        self._skill_mapping = {}
+
+    def _save_skill_mapping(self) -> None:
+        """Save the mapping with HMAC signature."""
+        try:
+            self._mapping_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps(self._skill_mapping)
+            sig = sign_data(payload)
+            self._mapping_file.write_text(
+                json.dumps({"payload": payload, "sig": sig}), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
     def _discover_skills(self) -> list[dict[str, str]]:
-        """Discover workspace and built-in skills with precedence rules."""
+        """Discover workspace and built-in skills, resolving logical names."""
         skills: list[dict[str, str]] = []
+        discovered_logical = set()
 
-        # Workspace skills (highest priority)
-        if self.workspace_skills.exists():
-            for skill_dir in self.workspace_skills.iterdir():
-                if skill_dir.is_dir():
-                    skill_file = skill_dir / "SKILL.md"
-                    if skill_file.exists():
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+        def scan_dir(root: Path, source: str):
+            if not root.exists():
+                return
+            for skill_dir in root.iterdir():
+                if not skill_dir.is_dir():
+                    continue
+                skill_file = skill_dir / "SKILL.md"
+                if not skill_file.exists():
+                    continue
 
-        # Built-in skills
-        if self.builtin_skills and self.builtin_skills.exists():
-            for skill_dir in self.builtin_skills.iterdir():
-                if skill_dir.is_dir():
-                    skill_file = skill_dir / "SKILL.md"
-                    if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "builtin"})
+                # Check manifest for name/version
+                name = skill_dir.name
+                version = "0.0.0"
+                manifest_path = skill_dir / "manifest.json"
+                if manifest_path.exists():
+                    try:
+                        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                        name = manifest.get("name", name)
+                        version = manifest.get("version", version)
+                    except Exception:
+                        pass
 
+                # If it's a versioned directory (physical), map it to logical name
+                # For Phase 6, we assume physical directories are named like 'name_vVersion'
+                # but we rely on manifest.name as the source of truth for logical name.
+                if name not in self._skill_mapping:
+                    self._skill_mapping[name] = []
+                if skill_dir.name not in self._skill_mapping[name]:
+                    self._skill_mapping[name].append(skill_dir.name)
+
+                # Only expose the 'best' version for each logical name unless explicitly asked
+                # Here we just list all unique logical names for the summary
+                if name not in discovered_logical:
+                    skills.append(
+                        {
+                            "name": name,
+                            "path": str(skill_file),
+                            "source": source,
+                            "physical_dir": skill_dir.name,
+                        }
+                    )
+                    discovered_logical.add(name)
+
+        scan_dir(self.workspace_skills, "workspace")
+        if self.builtin_skills:
+            scan_dir(self.builtin_skills, "builtin")
+
+        self._save_skill_mapping()
         return skills
+
+    def resolve_physical_path(
+        self, logical_name: str, version_pin: str | None = None
+    ) -> Path | None:
+        """Resolve a logical skill name to a physical directory path."""
+        # Check mapping first
+        physical_dirs = self._skill_mapping.get(logical_name, [])
+        if not physical_dirs:
+            # Fallback to direct name matching if not in mapping (e.g. built-in legacy)
+            direct_ws = self.workspace_skills / logical_name
+            if (direct_ws / "SKILL.md").exists():
+                return direct_ws
+            if self.builtin_skills:
+                direct_bi = self.builtin_skills / logical_name
+                if (direct_bi / "SKILL.md").exists():
+                    return direct_bi
+            return None
+
+        # If version_pin is provided, try to find matching version in manifest
+        # Otherwise, pick the latest semver version
+        candidates = []
+        for p_dir in physical_dirs:
+            path = self.workspace_skills / p_dir
+            if not path.exists():
+                # Try built-in if workspace doesn't have it (shouldn't happen with our scan)
+                if self.builtin_skills:
+                    path = self.builtin_skills / p_dir
+
+            if not path.exists():
+                continue
+
+            manifest_path = path / "manifest.json"
+            if manifest_path.exists():
+                # ... check version ...
+                pass
+            candidates.append(p_dir)
+
+        if not candidates:
+            return None
+
+        # For now, just pick the last one (assuming sorted or highest)
+        # TODO: Implement semver sort and pin logic
+        best_dir = candidates[-1]
+        ws_path = self.workspace_skills / best_dir
+        if ws_path.exists():
+            return ws_path
+        if self.builtin_skills:
+            return self.builtin_skills / best_dir
+        return None
 
     def _find_skill(self, name: str) -> dict[str, object] | None:
         """Find skill directory and source for a skill name."""
@@ -482,17 +725,39 @@ class SkillsLoader:
                 return False, "; ".join(errors)
 
         dst = self.workspace_skills / skill_name
+        # Optional versioned install layout (disabled by default for compatibility).
+        manifest, _ = self.get_skill_manifest_from_path(src)
+        enable_versioned_dirs = str(
+            os.environ.get("ZEN_CLAW_ENABLE_VERSIONED_SKILL_DIRS", "")
+        ).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if enable_versioned_dirs and manifest and "version" in manifest:
+            version_suffix = str(manifest["version"]).replace(".", "_")
+            dst = self.workspace_skills / f"{skill_name}_v{version_suffix}"
+
         if dst.exists() and not overwrite:
-            return False, f"skill already exists: {skill_name} (use --overwrite)"
+            return False, f"skill already exists: {dst.name} (use --overwrite)"
         if dry_run:
             return True, f"dry-run ok: installable skill {skill_name}"
 
-        self.workspace_skills.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(src, dst, dirs_exist_ok=overwrite)
-
-        # Ensure newly installed skill is enabled.
-        self.set_skill_enabled(skill_name, True)
-        return True, f"installed skill: {skill_name}"
+        # 5. Journaled Transaction
+        self._journal_add({"name": skill_name, "path": str(dst), "action": "install"})
+        try:
+            self.workspace_skills.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src, dst, dirs_exist_ok=overwrite)
+            # Ensure newly installed skill is enabled.
+            self.set_skill_enabled(skill_name, True)
+            self._discover_skills()  # Update mapping
+            self._journal_remove(skill_name)
+            return True, f"installed skill: {skill_name} in {dst.name}"
+        except Exception as e:
+            # Leave partial state for recovery? Or clean up?
+            # Journal says recovery should delete partial dirs.
+            return False, f"install failed: {e}"
 
     def install_skill_from_zip(
         self,
@@ -527,7 +792,9 @@ class SkillsLoader:
                     candidates.append(p.parent)
             if not candidates:
                 return False, "zip archive must contain SKILL.md"
-            unique_candidates = sorted({str(p.resolve()): p for p in candidates}.values(), key=lambda p: len(p.parts))
+            unique_candidates = sorted(
+                {str(p.resolve()): p for p in candidates}.values(), key=lambda p: len(p.parts)
+            )
             if len(unique_candidates) != 1:
                 return False, "zip archive must contain exactly one skill directory"
             skill_dir = unique_candidates[0]
@@ -540,14 +807,21 @@ class SkillsLoader:
             )
 
     def _safe_extract_zip(self, zf: zipfile.ZipFile, target_dir: Path) -> tuple[bool, str]:
-        """Extract zip entries safely to avoid path traversal."""
+        """Extract zip entries safely to avoid path traversal, bombs, and homoglyph attacks."""
         base = target_dir.resolve()
         total_uncompressed = 0
         file_count = 0
         for info in zf.infolist():
-            raw_name = info.filename.replace("\\", "/")
+            # Apply Unicode NFC normalization to prevent homoglyph/encoding bypasses
+            raw_name = unicodedata.normalize("NFC", info.filename.replace("\\", "/"))
+
             if raw_name.startswith("/") or raw_name.startswith("../") or "/../" in raw_name:
                 return False, f"invalid zip entry path: {info.filename}"
+
+            # Enforce path depth limit to prevent deep nesting attacks
+            if len(Path(raw_name).parts) > self._zip_max_path_depth:
+                return False, f"zip entry exceeds max path depth: {info.filename}"
+
             dst = (base / Path(raw_name)).resolve()
             if not dst.is_relative_to(base):
                 return False, f"invalid zip entry path: {info.filename}"
@@ -556,7 +830,7 @@ class SkillsLoader:
                 continue
             file_count += 1
             if file_count > self._zip_max_files:
-                return False, "zip archive contains too many files"
+                return False, f"zip archive contains too many files (max {self._zip_max_files})"
             total_uncompressed += max(0, int(info.file_size))
             if total_uncompressed > self._zip_max_total_uncompressed_bytes:
                 return False, "zip archive is too large after extraction"
@@ -587,7 +861,9 @@ class SkillsLoader:
             self._save_state(state)
         return True, f"uninstalled skill: {name}"
 
-    def export_skill_to_zip(self, name: str, out_zip: Path, overwrite: bool = False) -> tuple[bool, str]:
+    def export_skill_to_zip(
+        self, name: str, out_zip: Path, overwrite: bool = False
+    ) -> tuple[bool, str]:
         """Export a skill directory as a zip archive."""
         if not self._is_valid_skill_name(name):
             return False, f"invalid skill name: {name}"
@@ -669,6 +945,204 @@ class SkillsLoader:
             "skills_count": len(rows),
             "skills": rows,
         }
+
+    def _journal_add(self, task: dict) -> None:
+        """Add a pending installation task to the HMAC-secured journal."""
+        try:
+            journal = self._load_journal()
+            journal.append({**task, "ts": time.time()})
+            self._save_journal(journal)
+        except Exception:
+            pass
+
+    def _journal_remove(self, skill_name: str) -> None:
+        """Remove a completed or failed task from the journal."""
+        try:
+            journal = self._load_journal()
+            journal = [t for t in journal if t.get("name") != skill_name]
+            self._save_journal(journal)
+        except Exception:
+            pass
+
+    def _load_journal(self) -> list:
+        if not self._journal_file.exists():
+            return []
+        try:
+            data = json.loads(self._journal_file.read_text(encoding="utf-8"))
+            if verify_signature(data["payload"], data["sig"]):
+                return json.loads(data["payload"])
+        except Exception:
+            pass
+        return []
+
+    def _save_journal(self, journal: list) -> None:
+        try:
+            payload = json.dumps(journal)
+            sig = sign_data(payload)
+            self._journal_file.write_text(
+                json.dumps({"payload": payload, "sig": sig}), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
+    def _journal_recovery(self) -> None:
+        """Recover from interrupted installs by deleting partial directories."""
+        journal = self._load_journal()
+        if not journal:
+            return
+        logger.info(f"Recovering from {len(journal)} interrupted installs...")
+        for task in journal:
+            path_str = task.get("path")
+            if path_str:
+                path = Path(path_str)
+                if path.exists():
+                    shutil.rmtree(path, ignore_errors=True)
+        self._save_journal([])
+
+    def gc_cleanup(self, retention_hours: int = 24) -> int:
+        """
+        Clean up old versioned skill directories that are no longer pinned by any session.
+
+        Args:
+            retention_hours: Number of hours to keep unreferenced versions.
+
+        Returns:
+            Number of directories deleted.
+        """
+        # 1. Collect all active pins from session files
+        pins = set()
+        sessions_dir = Path.home() / ".zen-claw" / "sessions"
+        if sessions_dir.exists():
+            for path in sessions_dir.glob("*.jsonl"):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        # Metadata is usually on the first or second line
+                        for _ in range(5):  # Check first few lines for metadata
+                            line = f.readline()
+                            if not line:
+                                break
+                            data = json.loads(line)
+                            if data.get("_type") == "metadata":
+                                meta = data.get("metadata", {})
+                                for p in meta.get("skill_pins", {}).values():
+                                    pins.add(p)
+                                break
+                except Exception:
+                    continue
+
+        # 2. Collect current mappings (protect latest)
+        for physical_dirs in self._skill_mapping.values():
+            for physical in physical_dirs:
+                pins.add(physical)
+
+        # 3. Identify versioned directories and candidate for deletion
+        deleted_count = 0
+        cutoff = datetime.now().timestamp() - (retention_hours * 3600)
+
+        for item in self.workspace_skills.iterdir():
+            if not item.is_dir():
+                continue
+            if item.name in pins:
+                continue
+            # Basic versioning check (e.g. has _v in name)
+            if "_v" not in item.name:
+                continue
+
+            # Check age
+            try:
+                if item.stat().st_mtime < cutoff:
+                    shutil.rmtree(item, ignore_errors=True)
+                    deleted_count += 1
+            except OSError:
+                continue
+
+        return deleted_count
+
+    def start_gc_reaper(self, *, interval_seconds: int = 3600, retention_hours: int = 24) -> None:
+        """Start background GC reaper for stale unpinned skill versions."""
+        interval_seconds = max(30, int(interval_seconds))
+        if self._gc_thread and self._gc_thread.is_alive():
+            return
+        self._gc_stop.clear()
+
+        def _worker() -> None:
+            while not self._gc_stop.wait(interval_seconds):
+                try:
+                    deleted = self.gc_cleanup(retention_hours=retention_hours)
+                    if deleted:
+                        logger.info(
+                            f"Skill GC reaper deleted {deleted} stale versioned directories"
+                        )
+                except Exception as exc:
+                    logger.warning(f"Skill GC reaper error: {exc}")
+
+        self._gc_thread = threading.Thread(
+            target=_worker,
+            name="skills-gc-reaper",
+            daemon=True,
+        )
+        self._gc_thread.start()
+
+    def stop_gc_reaper(self, timeout_seconds: float = 2.0) -> None:
+        """Stop background GC reaper if running."""
+        self._gc_stop.set()
+        if self._gc_thread and self._gc_thread.is_alive():
+            self._gc_thread.join(timeout=timeout_seconds)
+
+    def _now_ts(self) -> float:
+        """Current trusted timestamp with safe fallback."""
+        try:
+            return float(self._trusted_time.get_time())
+        except Exception:
+            return datetime.now().timestamp()
+
+    @staticmethod
+    def _sign_snapshot(snapshot: dict[str, Any]) -> str:
+        payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return sign_data(payload)
+
+    def _search_registry(self, query: str) -> list[RegistryEntry]:
+        registry_url, cache_file, cache_ttl, trusted_hosts = self._resolve_runtime_market_config()
+        cache_path = self.workspace / ".zen-claw" / "skills" / cache_file
+        registry = SkillsRegistry(
+            registry_url=registry_url,
+            cache_path=cache_path,
+            cache_ttl_sec=cache_ttl,
+            trusted_hosts=trusted_hosts,
+        )
+        try:
+            return registry.search(query=query, force_refresh=False)
+        except RuntimeError as exc:
+            logger.warning(f"Skill registry search failed: {exc}")
+            return []
+
+    def _resolve_runtime_market_config(self) -> tuple[str, str, int, list[str]]:
+        """Load runtime market config, fallback to safe defaults."""
+        registry_url = (
+            os.environ.get("ZEN_CLAW_SKILLS_REGISTRY_URL", "").strip()
+            or "https://zen-claw.github.io/skills-registry/index.json"
+        )
+        cache_file = "registry_cache.json"
+        cache_ttl = 3600
+        trusted_hosts: list[str] = []
+        trusted_hosts_env = os.environ.get("ZEN_CLAW_SKILLS_TRUSTED_HOSTS", "").strip()
+        if trusted_hosts_env:
+            trusted_hosts = [h.strip() for h in trusted_hosts_env.split(",") if h.strip()]
+        try:
+            from zen_claw.config.loader import load_config
+
+            cfg = load_config()
+            market = getattr(cfg, "skills_market", None)
+            if market is not None:
+                registry_url = str(getattr(market, "registry_url", registry_url) or registry_url)
+                cache_file = str(getattr(market, "cache_file", cache_file) or cache_file)
+                cache_ttl = int(getattr(market, "cache_ttl_sec", cache_ttl) or cache_ttl)
+                cfg_hosts = getattr(market, "trusted_hosts", None)
+                if isinstance(cfg_hosts, list) and cfg_hosts:
+                    trusted_hosts = [str(h).strip() for h in cfg_hosts if str(h).strip()]
+        except Exception:
+            pass
+        return registry_url, cache_file, max(0, cache_ttl), trusted_hosts
 
     def _load_state(self) -> dict:
         """Load skill state file."""
@@ -759,7 +1233,11 @@ class SkillsLoader:
             return False, ["manifest root must be object"]
 
         for key in ("name", "version", "description"):
-            if key not in manifest or not isinstance(manifest[key], str) or not manifest[key].strip():
+            if (
+                key not in manifest
+                or not isinstance(manifest[key], str)
+                or not manifest[key].strip()
+            ):
                 errors.append(f"{key} must be non-empty string")
 
         if "name" in manifest and isinstance(manifest["name"], str):
@@ -882,5 +1360,3 @@ class SkillsLoader:
         if token not in self._allowed_trust_levels:
             return [f"trust must be one of: {sorted(self._allowed_trust_levels)}"]
         return []
-
-

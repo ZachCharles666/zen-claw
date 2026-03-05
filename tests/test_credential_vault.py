@@ -13,7 +13,7 @@ except ImportError:
 
 pytestmark = pytest.mark.skipif(not _CRYPTO_AVAILABLE, reason="cryptography not installed")
 
-from zen_claw.auth.credentials import CredentialVault
+from zen_claw.auth.credentials import CredentialVault  # noqa: E402
 
 
 def _make_vault(tmp_path: Path, key: str | None = None) -> CredentialVault:
@@ -101,4 +101,3 @@ def test_auto_generated_key_file_reusable(tmp_path: Path, monkeypatch: pytest.Mo
     v1.store("p", "k", "v")
     v2 = CredentialVault(data_dir=tmp_path / "data")
     assert v2.get("p", "k") == "v"
-

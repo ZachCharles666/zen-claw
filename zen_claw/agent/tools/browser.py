@@ -69,9 +69,7 @@ class _BrowserSidecarBase(Tool):
             )
 
         effective_max_steps = (
-            max(1, int(override_max_steps))
-            if override_max_steps is not None
-            else self.max_steps
+            max(1, int(override_max_steps)) if override_max_steps is not None else self.max_steps
         )
         req = {
             "action": self.action_name,
@@ -89,7 +87,9 @@ class _BrowserSidecarBase(Tool):
             headers["X-Approval-Token"] = self.sidecar_approval_token
 
         try:
-            async with httpx.AsyncClient(timeout=float(self.timeout_sec), proxy=None, trust_env=False) as client:
+            async with httpx.AsyncClient(
+                timeout=float(self.timeout_sec), proxy=None, trust_env=False
+            ) as client:
                 if self.sidecar_healthcheck:
                     health = await client.get(_healthz_from_sidecar_url(self.sidecar_url))
                     if health.status_code >= 400:
@@ -112,7 +112,9 @@ class _BrowserSidecarBase(Tool):
         if response.status_code >= 400:
             code = str(data.get("error_code") or "browser_sidecar_error")
             msg = str(data.get("error") or f"HTTP {response.status_code}")
-            kind = ToolErrorKind.PERMISSION if response.status_code == 403 else ToolErrorKind.RUNTIME
+            kind = (
+                ToolErrorKind.PERMISSION if response.status_code == 403 else ToolErrorKind.RUNTIME
+            )
             return ToolResult.failure(kind, msg, code=code, http_status=response.status_code)
 
         if not bool(data.get("ok", True)):
@@ -166,11 +168,11 @@ class BrowserOpenTool(_BrowserSidecarBase):
         "required": ["url"],
     }
 
-    async def execute(
+    async def execute(  # noqa: N803
         self,
         url: str,
-        sessionId: str | None = None,
-        maxSteps: int | None = None,
+        sessionId: str | None = None,  # noqa: N803
+        maxSteps: int | None = None,  # noqa: N803
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
@@ -200,12 +202,12 @@ class BrowserExtractTool(_BrowserSidecarBase):
         "required": [],
     }
 
-    async def execute(
+    async def execute(  # noqa: N803
         self,
-        sessionId: str | None = None,
+        sessionId: str | None = None,  # noqa: N803
         selector: str | None = None,
-        maxChars: int | None = None,
-        maxSteps: int | None = None,
+        maxChars: int | None = None,  # noqa: N803
+        maxSteps: int | None = None,  # noqa: N803
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
@@ -238,11 +240,11 @@ class BrowserScreenshotTool(_BrowserSidecarBase):
         "required": [],
     }
 
-    async def execute(
+    async def execute(  # noqa: N803
         self,
-        sessionId: str | None = None,
-        fullPage: bool = False,
-        maxSteps: int | None = None,
+        sessionId: str | None = None,  # noqa: N803
+        fullPage: bool = False,  # noqa: N803
+        maxSteps: int | None = None,  # noqa: N803
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
@@ -271,11 +273,11 @@ class BrowserClickTool(_BrowserSidecarBase):
         "required": ["sessionId", "selector"],
     }
 
-    async def execute(
+    async def execute(  # noqa: N803
         self,
-        sessionId: str,
+        sessionId: str,  # noqa: N803
         selector: str,
-        maxSteps: int | None = None,
+        maxSteps: int | None = None,  # noqa: N803
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
@@ -304,13 +306,13 @@ class BrowserTypeTool(_BrowserSidecarBase):
         "required": ["sessionId", "selector", "text"],
     }
 
-    async def execute(
+    async def execute(  # noqa: N803
         self,
-        sessionId: str,
+        sessionId: str,  # noqa: N803
         selector: str,
         text: str,
         clear: bool = True,
-        maxSteps: int | None = None,
+        maxSteps: int | None = None,  # noqa: N803
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
@@ -335,7 +337,7 @@ class BrowserSaveSessionTool(_BrowserSidecarBase):
         "required": ["sessionId"],
     }
 
-    async def execute(self, sessionId: str, **kwargs: Any) -> ToolResult:
+    async def execute(self, sessionId: str, **kwargs: Any) -> ToolResult:  # noqa: N803
         trace_id = str(kwargs.get("trace_id") or "")
         payload: dict[str, Any] = {"session_id": sessionId}
         return await self._execute_action(payload, trace_id)
@@ -354,10 +356,10 @@ class BrowserLoadSessionTool(_BrowserSidecarBase):
         "required": [],
     }
 
-    async def execute(
+    async def execute(  # noqa: N803
         self,
-        sessionId: str | None = None,
-        stateFile: str | None = None,
+        sessionId: str | None = None,  # noqa: N803
+        stateFile: str | None = None,  # noqa: N803
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")

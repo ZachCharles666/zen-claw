@@ -7,11 +7,13 @@ from zen_claw.agent.approval_gate import ApprovalGate, ApprovalStatus
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+
 def _gate(tmp_path: Path, **kwargs) -> ApprovalGate:
     return ApprovalGate(data_dir=tmp_path, **kwargs)
 
 
 # ── tests: is_sensitive ───────────────────────────────────────────────────────
+
 
 def test_is_sensitive_returns_true_for_write_file(tmp_path: Path):
     gate = _gate(tmp_path)
@@ -35,6 +37,7 @@ def test_is_sensitive_custom_set(tmp_path: Path):
 
 
 # ── tests: request_approval ───────────────────────────────────────────────────
+
 
 async def test_request_approval_creates_pending_record(tmp_path: Path):
     gate = _gate(tmp_path)
@@ -68,6 +71,7 @@ async def test_request_approval_message_contains_tool_name(tmp_path: Path):
 
 # ── tests: approve / deny ─────────────────────────────────────────────────────
 
+
 async def test_approve_updates_status(tmp_path: Path):
     gate = _gate(tmp_path)
     rec = await gate.request_approval("sess-1", "exec", {"cmd": "ls"})
@@ -99,6 +103,7 @@ async def test_double_deny_returns_none(tmp_path: Path):
 
 # ── tests: expiry ─────────────────────────────────────────────────────────────
 
+
 async def test_expired_records_show_as_expired(tmp_path: Path):
     gate = _gate(tmp_path, ttl_seconds=0)  # instant TTL
     rec = await gate.request_approval("sess-1", "spawn", {})
@@ -111,6 +116,7 @@ async def test_expired_records_show_as_expired(tmp_path: Path):
 
 
 # ── tests: list_pending ───────────────────────────────────────────────────────
+
 
 async def test_list_pending_returns_only_pending(tmp_path: Path):
     gate = _gate(tmp_path)
@@ -128,12 +134,13 @@ async def test_list_pending_filters_by_session(tmp_path: Path):
     await gate.request_approval("sess-A", "exec", {})
     await gate.request_approval("sess-B", "spawn", {})
 
-    pendingA = gate.list_pending(session_id="sess-A")
-    assert all(r.session_id == "sess-A" for r in pendingA)
-    assert len(pendingA) == 1
+    pending_a = gate.list_pending(session_id="sess-A")
+    assert all(r.session_id == "sess-A" for r in pending_a)
+    assert len(pending_a) == 1
 
 
 # ── tests: AgentLoop /approve integration ────────────────────────────────────
+
 
 async def test_agent_loop_approve_command_returns_confirmation(tmp_path: Path):
     """AgentLoop /approve command should return a confirmation without calling LLM."""
@@ -199,6 +206,7 @@ async def test_agent_loop_deny_command_returns_confirmation(tmp_path: Path):
 
 # ── tests: MEDIUM-009 — approval_required breaks the tool batch ───────────────
 
+
 async def test_approval_required_stops_remaining_batch_tools(tmp_path):
     """
     When the first tool call in a batch triggers approval_required, the loop must
@@ -219,7 +227,9 @@ async def test_approval_required_stops_remaining_batch_tools(tmp_path):
     # LLM returns two sensitive tool calls in one response batch.
     # After the first is blocked, the second must NOT be executed.
     exec_call = ToolCallRequest(id="tc-1", name="exec", arguments={"command": "rm -rf /"})
-    write_call = ToolCallRequest(id="tc-2", name="write_file", arguments={"path": "/tmp/x", "content": "y"})
+    write_call = ToolCallRequest(
+        id="tc-2", name="write_file", arguments={"path": "/tmp/x", "content": "y"}
+    )
 
     first_response = LLMResponse(
         content="",
@@ -281,8 +291,12 @@ async def test_notification_failure_is_logged_as_error(tmp_path: Path):
 
     with patch("zen_claw.agent.approval_gate.logger") as mock_logger:
         rec = await gate.request_approval(
-            "sess-1", "exec", {"cmd": "ls"},
-            bus=bus, channel="telegram", chat_id="chat-99",
+            "sess-1",
+            "exec",
+            {"cmd": "ls"},
+            bus=bus,
+            channel="telegram",
+            chat_id="chat-99",
         )
 
     # The approval record must still be created despite the notification failure
@@ -371,16 +385,20 @@ async def test_approval_notification_uses_correct_channel_and_chat_id(tmp_path: 
     bus.consume_inbound = AsyncMock()
     # Capture outbound messages to verify the channel/chat_id
     outbound_msgs: list = []
+
     async def _capture_outbound(msg):
         outbound_msgs.append(msg)
+
     bus.publish_outbound = AsyncMock(side_effect=_capture_outbound)
 
     exec_call = ToolCallRequest(id="tc-1", name="exec", arguments={"command": "ls"})
     provider = MagicMock()
-    provider.chat = AsyncMock(side_effect=[
-        LLMResponse(content="", finish_reason="tool_calls", tool_calls=[exec_call]),
-        LLMResponse(content="done", finish_reason="stop", tool_calls=[]),
-    ])
+    provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(content="", finish_reason="tool_calls", tool_calls=[exec_call]),
+            LLMResponse(content="done", finish_reason="stop", tool_calls=[]),
+        ]
+    )
 
     loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path)
     loop.approval_gate = gate
