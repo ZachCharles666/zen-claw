@@ -66,6 +66,13 @@ class AgentRouteStore:
             prev_updated = int(row[1]) if row else 0
             # LWW: skip stale updates.
             if row and now < prev_updated:
+                conn.execute(
+                    """
+                    INSERT INTO route_audit(route_key, previous_agent_id, new_agent_id, reason, at_ms)
+                    VALUES(?, ?, ?, ?, ?)
+                    """,
+                    (route_key, prev_agent, new_agent, str(reason or "").strip(), now),
+                )
                 return AgentRoute(
                     route_key=route_key,
                     channel=str(channel).lower(),
@@ -183,7 +190,7 @@ class AgentRouteStore:
                 SELECT route_key, previous_agent_id, new_agent_id, reason, at_ms
                 FROM route_audit
                 WHERE route_key = ?
-                ORDER BY id ASC
+                ORDER BY at_ms ASC, id ASC
                 """,
                 (route_key,),
             ).fetchall()
