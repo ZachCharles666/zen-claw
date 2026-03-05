@@ -3,6 +3,8 @@ import hmac
 import time
 
 import pytest
+
+pytest.importorskip("fastapi", reason="fastapi not installed")
 from fastapi import HTTPException
 
 from zen_claw.tunnel.gateway import TunnelGatewaySecurity

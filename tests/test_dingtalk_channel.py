@@ -2,12 +2,14 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from dingtalk_stream import CallbackMessage
 
-from zen_claw.bus.events import OutboundMessage
-from zen_claw.bus.queue import MessageBus
-from zen_claw.channels.dingtalk import DingTalkChannel
-from zen_claw.config.schema import DingTalkConfig
+dingtalk_stream = pytest.importorskip("dingtalk_stream", reason="dingtalk_stream not installed")
+CallbackMessage = dingtalk_stream.CallbackMessage
+
+from zen_claw.bus.events import OutboundMessage  # noqa: E402
+from zen_claw.bus.queue import MessageBus  # noqa: E402
+from zen_claw.channels.dingtalk import DingTalkChannel  # noqa: E402
+from zen_claw.config.schema import DingTalkConfig  # noqa: E402
 
 
 @pytest.fixture
