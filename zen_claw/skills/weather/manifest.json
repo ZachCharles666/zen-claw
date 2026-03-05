@@ -5,7 +5,6 @@
   "permissions": [
     "web_fetch"
   ],
-  "trust": "untrusted",
   "scopes": [
     "network"
   ]

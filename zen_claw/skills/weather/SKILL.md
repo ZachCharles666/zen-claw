@@ -2,7 +2,7 @@
 name: weather
 description: Get current weather and forecasts for any location.
 homepage: https://wttr.in
-metadata: {"zen-claw":{"emoji":"🌤","trust":"untrusted","scopes":["network"]}}
+metadata: {"zen-claw":{"emoji":"🌤","scopes":["network"]}}
 ---
 
 # Weather Skill
