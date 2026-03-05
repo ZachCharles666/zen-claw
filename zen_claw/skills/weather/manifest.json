@@ -2,5 +2,11 @@
   "name": "weather",
   "version": "1.0.1",
   "description": "Fetch current weather and forecasts using the web_fetch tool.",
-  "permissions": ["web_fetch"]
+  "permissions": [
+    "web_fetch"
+  ],
+  "trust": "untrusted",
+  "scopes": [
+    "network"
+  ]
 }

@@ -2,7 +2,7 @@
 name: weather
 description: Get current weather and forecasts for any location.
 homepage: https://wttr.in
-metadata: {"zen-claw":{"emoji":"🌤","requires":{"tools":["web_fetch"]},"always":true}}
+metadata: {"zen-claw":{"emoji":"🌤","requires":{"tools":["web_fetch"]},"always":true,"trust":"untrusted","scopes":["network"]}}
 ---
 
 # Weather Skill
@@ -10,8 +10,9 @@ metadata: {"zen-claw":{"emoji":"🌤","requires":{"tools":["web_fetch"]},"always
 This skill fetches free weather data from `wttr.in`.
 
 **CRITICAL INSTRUCTIONS FOR AI Agent:**
-DO NOT attempt to use `web_search` or `exec` with curl!
-DO NOT attempt to guess or hallucinate any Python scripts (e.g. `main.py`)!
+1. DO NOT use `exec` or `curl`. Your `exec` tool has been intentionally REMOVED by the safety sandbox when this skill is active.
+2. DO NOT use `web_search`.
+3. You MUST use the `web_fetch` tool. It is your only network tool.
 
 **Method: Using `web_fetch` (MANDATORY)**
 1. Identify the city or location the user is asking about.
