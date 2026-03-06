@@ -25,7 +25,9 @@ jobs:
           pip install -e .[dev]
           
       - name: Basic Tests
-        run: pytest -v tests/
+        env:
+          PYTEST_ADDOPTS: ""
+        run: python -m pytest -p no:timeout -v tests/
 
   channel-matrix:
     runs-on: windows-latest
@@ -55,7 +57,9 @@ jobs:
           pip install -e .[dev]
 
       - name: Channel Tests (${{ matrix.suite.name }})
-        run: pytest -q ${{ matrix.suite.tests }}
+        env:
+          PYTEST_ADDOPTS: ""
+        run: python -m pytest -p no:timeout -q ${{ matrix.suite.tests }}
           
   loc-gate:
     runs-on: windows-latest
