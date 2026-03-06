@@ -9,8 +9,12 @@ on:
       - main
 
 jobs:
-  test:
+  core-tests:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v3
       
@@ -23,11 +27,61 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+          pip install "chardet<5.3"
           
-      - name: Basic Tests
+      - name: Core Tests (Shard ${{ matrix.shard }})
+        shell: pwsh
         env:
           PYTEST_ADDOPTS: ""
-        run: python -m pytest -p no:timeout -v tests/
+          CI_TOTAL_SHARDS: "4"
+          CI_SHARD_INDEX: "${{ matrix.shard }}"
+        run: |
+          $exclude = @(
+            "tests/test_webchat_channel.py",
+            "tests/test_webhook_trigger.py",
+            "tests/test_slack_channel.py",
+            "tests/test_signal_channel.py",
+            "tests/test_matrix_channel.py",
+            "tests/test_memory_recall.py"
+          )
+          $files = Get-ChildItem tests -Filter "test_*.py" -File |
+            ForEach-Object { "tests/$($_.Name)" } |
+            Where-Object { $exclude -notcontains $_ } |
+            Sort-Object
+          $total = [int]$env:CI_TOTAL_SHARDS
+          $index = [int]$env:CI_SHARD_INDEX
+          $selected = @()
+          for ($i = 0; $i -lt $files.Count; $i++) {
+            if (($i % $total) -eq $index) {
+              $selected += $files[$i]
+            }
+          }
+          if ($selected.Count -eq 0) {
+            throw "No tests selected for shard $index"
+          }
+          Write-Host ("Running shard {0}/{1}: {2}" -f ($index + 1), $total, ($selected -join " "))
+          & python -m pytest -p no:timeout -q @selected
+
+  memory-recall:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+          pip install "chardet<5.3"
+
+      - name: Memory Recall Tests
+        env:
+          PYTEST_ADDOPTS: ""
+        run: python -m pytest -p no:timeout -q tests/test_memory_recall.py
 
   channel-matrix:
     runs-on: windows-latest
@@ -55,6 +109,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
+          pip install "chardet<5.3"
 
       - name: Channel Tests (${{ matrix.suite.name }})
         env:

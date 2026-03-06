@@ -7,9 +7,25 @@ from pathlib import Path
 import pytest
 
 
+def _make_mini_repo(tmp_path: Path) -> Path:
+    repo_root = tmp_path / "mini-repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='mini'\nversion='0.0.0'\n", encoding="utf-8")
+    src = repo_root / "src"
+    src.mkdir(parents=True, exist_ok=True)
+    (src / "app.py").write_text("print('hello')\n\nx = 1\n", encoding="utf-8")
+    (src / "worker.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    go_dir = repo_root / "go"
+    go_dir.mkdir(parents=True, exist_ok=True)
+    (go_dir / "main.go").write_text("package main\n\nfunc main() {}\n", encoding="utf-8")
+    (go_dir / "helper.go").write_text("package main\n\nfunc helper() int { return 1 }\n", encoding="utf-8")
+    return repo_root
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="powershell-based test for Windows")
 def test_loc_report_fail_on_increase_blocks_when_over_threshold(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = _make_mini_repo(tmp_path)
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "loc_report.ps1"
     baseline = tmp_path / "baseline.json"
     baseline.write_text(
         json.dumps(
@@ -26,10 +42,11 @@ def test_loc_report_fail_on_increase_blocks_when_over_threshold(tmp_path: Path) 
     out = tmp_path / "out.json"
     cmd = [
         "powershell",
+        "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        str(repo_root / "scripts" / "loc_report.ps1"),
+        str(script_path),
         "-RepoRoot",
         str(repo_root),
         "-OutFile",
@@ -47,14 +64,16 @@ def test_loc_report_fail_on_increase_blocks_when_over_threshold(tmp_path: Path) 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="powershell-based test for Windows")
 def test_loc_report_fail_on_increase_allows_within_threshold(tmp_path: Path) -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = _make_mini_repo(tmp_path)
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "loc_report.ps1"
     probe_out = tmp_path / "probe.json"
     probe_cmd = [
         "powershell",
+        "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        str(repo_root / "scripts" / "loc_report.ps1"),
+        str(script_path),
         "-RepoRoot",
         str(repo_root),
         "-OutFile",
@@ -82,10 +101,11 @@ def test_loc_report_fail_on_increase_allows_within_threshold(tmp_path: Path) -> 
     out = tmp_path / "out.json"
     cmd = [
         "powershell",
+        "-NoProfile",
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        str(repo_root / "scripts" / "loc_report.ps1"),
+        str(script_path),
         "-RepoRoot",
         str(repo_root),
         "-OutFile",
