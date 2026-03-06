@@ -14,6 +14,12 @@ from zen_claw.config.schema import SlackConfig
 def test_slack_channel_passive_mode_without_sdk() -> None:
     async def _run() -> None:
         ch = SlackChannel(SlackConfig(enabled=True, bot_token="x"), MessageBus())
+
+        async def _fake_post(msg: OutboundMessage):
+            return {"ok": True}
+
+        ch._post_message = _fake_post  # type: ignore[method-assign]
+
         await ch.start()
         assert ch.is_running is True
         await ch.send(OutboundMessage(channel="slack", chat_id="C1", content="hello"))

@@ -10,7 +10,13 @@ from zen_claw.config.schema import Config, MatrixConfig
 
 def test_matrix_channel_start_send_stop() -> None:
     async def _run() -> None:
-        ch = MatrixChannel(MatrixConfig(enabled=True), MessageBus())
+        ch = MatrixChannel(MatrixConfig(enabled=True, access_token="mock"), MessageBus())
+
+        async def _fake_put(path: str, payload: dict):
+            return {"event_id": "$mock"}
+
+        ch._matrix_put = _fake_put  # type: ignore[method-assign]
+
         await ch.start()
         assert ch.is_running is True
         await ch.send(

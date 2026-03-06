@@ -11,6 +11,12 @@ from zen_claw.config.schema import Config, SignalConfig
 def test_signal_channel_start_send_stop() -> None:
     async def _run() -> None:
         ch = SignalChannel(SignalConfig(enabled=True), MessageBus())
+
+        async def _fake_post(path: str, payload: dict):
+            return {"ok": True}
+
+        ch._signald_post = _fake_post  # type: ignore[method-assign]
+
         await ch.start()
         assert ch.is_running is True
         await ch.send(OutboundMessage(channel="signal", chat_id="+100", content="hello"))
