@@ -1,7 +1,18 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from zen_claw.agent.context import ContextBuilder
+from zen_claw.agent.skills import SkillsLoader
+
+
+@pytest.fixture(autouse=True)
+def mock_skills_loader(monkeypatch):
+    # Mock mapping and time to prevent potentially slow/hanging I/O or crypto in CI
+    monkeypatch.setattr(SkillsLoader, "_load_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_save_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_now_ts", lambda self: 1000.0)
 
 
 def _write_skill(root: Path, name: str, content: str, always: bool = False) -> None:

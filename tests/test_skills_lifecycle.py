@@ -6,6 +6,14 @@ import pytest
 from zen_claw.agent.skills import SkillsLoader
 
 
+@pytest.fixture(autouse=True)
+def mock_skills_loader(monkeypatch):
+    # Mock mapping and time to prevent potentially slow/hanging I/O or crypto in CI
+    monkeypatch.setattr(SkillsLoader, "_load_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_save_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_now_ts", lambda self: 1000.0)
+
+
 def _write_skill(workspace: Path, name: str, manifest: str | None = None) -> None:
     skill_dir = workspace / "skills" / name
     skill_dir.mkdir(parents=True, exist_ok=True)
@@ -316,13 +324,19 @@ def test_install_skill_rejects_invalid_name_and_missing_skill_md(tmp_path: Path)
     assert "invalid skill name" in msg_name
 
 
-def test_uninstall_builtin_skill_is_denied(tmp_path: Path) -> None:
+def test_uninstall_builtin_skill_is_denied(tmp_path: Path, monkeypatch) -> None:
     workspace = tmp_path / "ws"
     builtin = tmp_path / "builtin"
     workspace.mkdir(parents=True)
     builtin_skill = builtin / "core"
     builtin_skill.mkdir(parents=True)
     (builtin_skill / "SKILL.md").write_text("# core\n", encoding="utf-8")
+
+    # Mock mapping and time to prevent potentially slow/hanging I/O or crypto in CI
+    monkeypatch.setattr(SkillsLoader, "_load_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_save_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_now_ts", lambda self: 1000.0)
+
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
 
     ok, msg = loader.uninstall_skill("core")

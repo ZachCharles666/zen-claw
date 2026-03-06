@@ -3,13 +3,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 import zen_claw.agent.loop as _loop_module
 from zen_claw.agent.loop import AgentLoop
+from zen_claw.agent.skills import SkillsLoader
 from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.bus.queue import MessageBus
 from zen_claw.config.schema import ToolPolicyConfig
 from zen_claw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+
+
+@pytest.fixture(autouse=True)
+def mock_skills_loader(monkeypatch):
+    # Mock mapping and time to prevent potentially slow/hanging I/O or crypto in CI
+    monkeypatch.setattr(SkillsLoader, "_load_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_save_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_now_ts", lambda self: 1000.0)
 
 
 @dataclass

@@ -4,10 +4,19 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from typer.testing import CliRunner
 
 from zen_claw.agent.skills import SkillsLoader
 from zen_claw.cli.commands import app
+
+
+@pytest.fixture(autouse=True)
+def mock_skills_loader(monkeypatch):
+    # Mock mapping and time to prevent potentially slow/hanging I/O or crypto in CI
+    monkeypatch.setattr(SkillsLoader, "_load_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_save_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_now_ts", lambda self: 1000.0)
 
 
 def _write_skill(workspace: Path, name: str, manifest: str | None = None) -> None:
