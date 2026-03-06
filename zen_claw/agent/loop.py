@@ -3,9 +3,11 @@
 import asyncio
 import hashlib
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 if TYPE_CHECKING:
     from zen_claw.config.schema import (
@@ -774,6 +776,19 @@ class AgentLoop:
             all_active.extend(self.context.skills.get_always_skills())
             session.metadata["skill_pins"] = self.context.skills.build_session_pins(all_active)
 
+        weather_reply = await self._try_direct_weather_response(msg.content, trace_id=trace_id)
+        if weather_reply is not None:
+            session.add_message("user", msg.content)
+            session.add_message("assistant", weather_reply)
+            await self._extract_and_store_memory(msg.content, weather_reply, trace_id)
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=weather_reply,
+                metadata=TraceContext.child_metadata(trace_id),
+            )
+
         history = await self._build_history_with_compression(session, trace_id)
 
         # Build initial messages (use compressed history for LLM-formatted messages)
@@ -1105,6 +1120,109 @@ class AgentLoop:
         meta = metadata or {}
         identity_keys = {"channel_role", "tenant_id", "tid", "role"}
         return bool(meta.get("identity_verified")) or any(k in meta for k in identity_keys)
+
+    async def _try_direct_weather_response(self, content: str, trace_id: str) -> str | None:
+        location = self._extract_weather_location(content)
+        if not location:
+            return None
+
+        result = await self.tools.execute(
+            "web_fetch",
+            {
+                "url": f"https://wttr.in/{quote(location)}?format=j1",
+                "extractMode": "text",
+                "maxChars": 20000,
+            },
+            trace_id=trace_id,
+        )
+        if not result.ok:
+            return None
+
+        try:
+            payload = json.loads(result.content)
+            weather_payload = json.loads(str(payload.get("text") or "{}"))
+        except Exception:
+            return None
+
+        forecast = weather_payload.get("weather")
+        if not isinstance(forecast, list) or not forecast:
+            return None
+
+        days = self._extract_weather_days(content)
+        lines: list[str] = []
+        for day in forecast[:days]:
+            if not isinstance(day, dict):
+                continue
+            date = str(day.get("date") or "").strip()
+            if not date:
+                continue
+            desc = self._weather_desc_from_day(day)
+            high = str(day.get("maxtempC") or "").strip()
+            low = str(day.get("mintempC") or "").strip()
+            parts = [date]
+            if desc:
+                parts.append(desc)
+            if high or low:
+                if high and low:
+                    parts.append(f"{low}~{high}°C")
+                else:
+                    parts.append(f"{high or low}°C")
+            lines.append(" ".join(parts))
+
+        if not lines:
+            return None
+        return f"{location}天气预报：\n" + "\n".join(lines)
+
+    @staticmethod
+    def _extract_weather_days(content: str) -> int:
+        text = content.lower()
+        if any(token in text for token in ("最近一周", "未来一周", "这一周", "本周", "7天", "7-day", "week")):
+            return 7
+        return 3
+
+    @staticmethod
+    def _weather_desc_from_day(day: dict[str, Any]) -> str:
+        hourly = day.get("hourly")
+        if isinstance(hourly, list) and hourly:
+            index = 4 if len(hourly) > 4 else len(hourly) - 1
+            slot = hourly[index] if isinstance(hourly[index], dict) else {}
+            desc_rows = slot.get("weatherDesc")
+            if isinstance(desc_rows, list) and desc_rows:
+                first = desc_rows[0]
+                if isinstance(first, dict):
+                    value = str(first.get("value") or "").strip()
+                    if value:
+                        return value
+        return ""
+
+    @classmethod
+    def _extract_weather_location(cls, content: str) -> str | None:
+        if not content:
+            return None
+        text = re.split(r"[，,。！？!?；;]", content.strip(), maxsplit=1)[0]
+        lowered = text.lower()
+        if not any(token in lowered for token in ("天气", "weather", "forecast")):
+            return None
+
+        patterns = (
+            r"(?P<loc>[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-zA-Za-z\s·\-.]{0,40}?)(?:最近一周|未来一周|这一周|本周|近7天|未来7天|7天|今天天气|今日天气|今天|今日)?的?天气",
+            r"(?:weather|forecast)(?:\s+(?:for|in))?\s+(?P<loc>[A-Za-z][A-Za-z\s\-.]{1,40})",
+            r"(?P<loc>[A-Za-z][A-Za-z\s\-.]{1,40})\s+(?:weather|forecast)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if not match:
+                continue
+            location = str(match.group("loc") or "").strip()
+            location = re.sub(
+                r"^(告诉我|帮我|请|查询|查一下|查下|查查|看看|我想知道|我想看|麻烦你|想知道)",
+                "",
+                location,
+            ).strip()
+            location = location.strip(" 的天气forecastweather")
+            if location:
+                return location
+        return None
 
     async def _build_history_with_compression(
         self, session: "Session", trace_id: str
