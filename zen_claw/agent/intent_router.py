@@ -87,7 +87,7 @@ class IntentRouter:
             weather_payload = self._extract_weather_payload(wttr_result.content)
             if isinstance(weather_payload, dict):
                 lines = self._build_wttr_weather_lines(weather_payload, days=days)
-                if lines:
+                if len(lines) >= days:
                     return IntentRouteResult(
                         handled=True,
                         intent_name="weather",

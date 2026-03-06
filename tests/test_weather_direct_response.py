@@ -61,6 +61,42 @@ def test_process_direct_returns_weather_without_llm(tmp_path: Path, monkeypatch)
                             "mintempC": "10",
                             "hourly": [{"weatherDesc": [{"value": "Cloudy"}]}] * 8,
                         },
+                        {
+                            "date": "2026-03-08",
+                            "maxtempC": "16",
+                            "mintempC": "9",
+                            "hourly": [{"weatherDesc": [{"value": "Rain"}]}] * 8,
+                        },
+                        {
+                            "date": "2026-03-09",
+                            "maxtempC": "15",
+                            "mintempC": "8",
+                            "hourly": [{"weatherDesc": [{"value": "Sunny"}]}] * 8,
+                        },
+                        {
+                            "date": "2026-03-10",
+                            "maxtempC": "14",
+                            "mintempC": "7",
+                            "hourly": [{"weatherDesc": [{"value": "Cloudy"}]}] * 8,
+                        },
+                        {
+                            "date": "2026-03-11",
+                            "maxtempC": "13",
+                            "mintempC": "6",
+                            "hourly": [{"weatherDesc": [{"value": "Rain"}]}] * 8,
+                        },
+                        {
+                            "date": "2026-03-12",
+                            "maxtempC": "12",
+                            "mintempC": "5",
+                            "hourly": [{"weatherDesc": [{"value": "Sunny"}]}] * 8,
+                        },
+                        {
+                            "date": "2026-03-13",
+                            "maxtempC": "11",
+                            "mintempC": "4",
+                            "hourly": [{"weatherDesc": [{"value": "Cloudy"}]}] * 8,
+                        },
                     ]
                 },
                 ensure_ascii=False,
@@ -75,6 +111,7 @@ def test_process_direct_returns_weather_without_llm(tmp_path: Path, monkeypatch)
     assert out.startswith("成都天气预报：")
     assert "2026-03-06 Sunny 11~18°C" in out
     assert "2026-03-07 Cloudy 10~17°C" in out
+    assert "2026-03-12 Sunny 5~12°C" in out
 
 
 def test_process_direct_returns_deterministic_failure_when_primary_payload_is_bad_and_fallback_fails(
@@ -260,6 +297,99 @@ def test_process_direct_falls_back_to_open_meteo_when_wttr_payload_is_unparseabl
     assert out.startswith("成都天气预报：")
     assert "2026-03-06 晴 12~20°C" in out
     assert "2026-03-07 阴 11~18°C" in out
+    assert len([url for url in calls if "wttr.in" in url]) == 1
+    assert len([url for url in calls if "geocoding-api.open-meteo.com" in url]) == 1
+    assert len([url for url in calls if "https://api.open-meteo.com/v1/forecast" in url]) == 1
+
+
+def test_process_direct_falls_back_to_open_meteo_when_wttr_only_returns_three_days(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FailIfCalledProvider(),
+        workspace=tmp_path,
+        model="fake-model",
+        enable_planning=True,
+    )
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop._extract_and_store_memory = AsyncMock()  # type: ignore[method-assign]
+
+    calls: list[str] = []
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        assert name == "web_fetch"
+        url = params["url"]
+        calls.append(url)
+        if "wttr.in" in url:
+            payload = {
+                "text": json.dumps(
+                    {
+                        "weather": [
+                            {
+                                "date": "2026-03-07",
+                                "maxtempC": "16",
+                                "mintempC": "14",
+                                "hourly": [{"weatherDesc": [{"value": "Overcast"}]}] * 8,
+                            },
+                            {
+                                "date": "2026-03-08",
+                                "maxtempC": "14",
+                                "mintempC": "12",
+                                "hourly": [{"weatherDesc": [{"value": "Patchy rain nearby"}]}] * 8,
+                            },
+                            {
+                                "date": "2026-03-09",
+                                "maxtempC": "12",
+                                "mintempC": "11",
+                                "hourly": [{"weatherDesc": [{"value": "Patchy rain nearby"}]}] * 8,
+                            },
+                        ]
+                    },
+                    ensure_ascii=False,
+                )
+            }
+            return ToolResult.success(json.dumps(payload, ensure_ascii=False))
+        if "geocoding-api.open-meteo.com" in url:
+            payload = {
+                "results": [
+                    {
+                        "name": "成都市",
+                        "latitude": 30.66667,
+                        "longitude": 104.06667,
+                        "timezone": "Asia/Shanghai",
+                    }
+                ]
+            }
+            return ToolResult.success(json.dumps({"text": json.dumps(payload, ensure_ascii=False)}))
+        if "api.open-meteo.com" in url:
+            payload = {
+                "daily": {
+                    "time": [
+                        "2026-03-07",
+                        "2026-03-08",
+                        "2026-03-09",
+                        "2026-03-10",
+                        "2026-03-11",
+                        "2026-03-12",
+                        "2026-03-13",
+                    ],
+                    "weather_code": [3, 61, 61, 63, 2, 3, 1],
+                    "temperature_2m_max": [16.0, 14.0, 12.0, 13.0, 15.0, 16.0, 17.0],
+                    "temperature_2m_min": [14.0, 12.0, 11.0, 10.0, 9.0, 8.0, 9.0],
+                }
+            }
+            return ToolResult.success(json.dumps({"text": json.dumps(payload, ensure_ascii=False)}))
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+
+    out = asyncio.run(loop.process_direct("告诉我成都最近7天的天气，需要给我的结果是日期+天气的样式"))
+
+    assert out.startswith("成都天气预报：")
+    assert out.count("\n") == 7
+    assert "2026-03-13 大部晴朗 9~17°C" in out
     assert len([url for url in calls if "wttr.in" in url]) == 1
     assert len([url for url in calls if "geocoding-api.open-meteo.com" in url]) == 1
     assert len([url for url in calls if "https://api.open-meteo.com/v1/forecast" in url]) == 1
