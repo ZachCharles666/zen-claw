@@ -198,7 +198,8 @@ class SkillsRegistry:
 
     def fetch(self, force: bool = False) -> list[RegistryEntry]:
         """Fetch and parse the catalog, ensuring version monotonicity and time integrity."""
-        self._trusted_time.get_time()
+        if not self._is_local_registry():
+            self._trusted_time.get_time()
 
         if not force and self._entries is not None:
             return self._entries
@@ -232,6 +233,10 @@ class SkillsRegistry:
         self._entries = sanitized_entries
         self._save_cache(raw)
         return self._entries
+
+    def _is_local_registry(self) -> bool:
+        """Return True when the registry source is a local file path."""
+        return self._url.startswith("file://")
 
     def search(
         self,

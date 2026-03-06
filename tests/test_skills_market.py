@@ -77,6 +77,20 @@ def test_registry_fetch_all(local_registry):
     assert "web-search" in names and "pdf-reader" in names and "chat-helper" in names
 
 
+def test_registry_fetch_all_file_catalog_skips_trusted_time_network_probe(
+    local_registry, monkeypatch
+):
+    registry, _ = local_registry
+
+    def _unexpected_trusted_time_call():
+        raise AssertionError("trusted time should not be queried for local file registry")
+
+    monkeypatch.setattr(registry._trusted_time, "get_time", _unexpected_trusted_time_call)
+
+    entries = registry.fetch()
+    assert len(entries) == 3
+
+
 def test_registry_search_by_query(local_registry):
     registry, _ = local_registry
     rows = registry.search(query="pdf")
