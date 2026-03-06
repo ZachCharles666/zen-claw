@@ -781,7 +781,7 @@ class AgentLoop:
             tools=self.tools,
             trace_id=trace_id,
         )
-        if route_result.route_status == "direct_success" and route_result.content is not None:
+        if route_result.route_status in {"direct_success", "direct_failed"} and route_result.content is not None:
             session.add_message("user", msg.content)
             session.add_message("assistant", route_result.content)
             await self._extract_and_store_memory(msg.content, route_result.content, trace_id)
@@ -829,7 +829,8 @@ class AgentLoop:
         preferred_model = str(session.metadata.get("override_model") or "").strip() or self.model
         run_model = self._resolve_run_model(messages, preferred_model=preferred_model)
         try:
-            messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
+            if not route_result.skip_planning:
+                messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
             usage: dict[str, int] = {}
             final_content, _ = await self._run_execute_reflect_loop(
                 messages,
@@ -843,6 +844,14 @@ class AgentLoop:
             )
         finally:
             self.tools.clear_policy_scope("intent_contract")
+
+        if (
+            route_result.route_status == "needs_constrained_replan"
+            and route_result.contract is not None
+            and not route_result.contract.allow_high_risk_escalation
+            and self._looks_like_permission_escalation_text(final_content)
+        ):
+            final_content = self._build_non_permission_route_failure(route_result)
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
@@ -1164,6 +1173,26 @@ class AgentLoop:
             f"Do not use denied tools: {denied}. "
             "Answer normally once you have the result."
         )
+
+    @staticmethod
+    def _looks_like_permission_escalation_text(content: str | None) -> bool:
+        text = str(content or "").lower()
+        if not text:
+            return False
+        markers = (
+            "approval",
+            "permission restriction",
+            "requires approval",
+            "external commands",
+            "unable to proceed without the necessary permissions",
+        )
+        return any(marker in text for marker in markers)
+
+    @staticmethod
+    def _build_non_permission_route_failure(route_result: IntentRouteResult) -> str:
+        if route_result.intent_name == "weather":
+            return "暂时无法获取天气数据。这次失败不是权限或审批问题，而是安全路径下的数据请求未成功。请稍后重试。"
+        return "当前安全路径执行未成功，这次失败不是权限或审批问题。请稍后重试。"
 
     async def _build_history_with_compression(
         self, session: "Session", trace_id: str

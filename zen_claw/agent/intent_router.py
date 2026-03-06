@@ -40,6 +40,7 @@ class IntentRouteResult:
         "needs_explicit_approval",
     ] = "miss"
     diagnostic: str | None = None
+    skip_planning: bool = False
 
 
 class IntentRouter:
@@ -75,21 +76,14 @@ class IntentRouter:
         tools: ToolRegistry,
         trace_id: str,
     ) -> IntentRouteResult:
-        result = await tools.execute(
-            "web_fetch",
-            {
-                "url": f"https://wttr.in/{quote(location)}?format=j1",
-                "extractMode": "text",
-                "maxChars": 20000,
-            },
-            trace_id=trace_id,
-        )
+        result = await self._fetch_weather_payload_text(location=location, tools=tools, trace_id=trace_id)
         if not result.ok:
             return IntentRouteResult(
-                handled=False,
+                handled=True,
                 intent_name="weather",
+                content=self._build_weather_failure_message(location),
                 contract=self._WEATHER_CONTRACT,
-                route_status="needs_constrained_replan",
+                route_status="direct_failed",
                 diagnostic=f"web_fetch_failed:{result.error.code if result.error else 'unknown'}",
             )
 
@@ -101,6 +95,7 @@ class IntentRouter:
                 contract=self._WEATHER_CONTRACT,
                 route_status="needs_constrained_replan",
                 diagnostic="weather_payload_not_parseable",
+                skip_planning=True,
             )
 
         forecast = weather_payload.get("weather")
@@ -111,6 +106,7 @@ class IntentRouter:
                 contract=self._WEATHER_CONTRACT,
                 route_status="needs_constrained_replan",
                 diagnostic="weather_array_missing",
+                skip_planning=True,
             )
 
         days = self._extract_weather_days(content)
@@ -138,6 +134,7 @@ class IntentRouter:
                 contract=self._WEATHER_CONTRACT,
                 route_status="needs_constrained_replan",
                 diagnostic="weather_lines_empty",
+                skip_planning=True,
             )
 
         return IntentRouteResult(
@@ -172,6 +169,11 @@ class IntentRouter:
                 "",
                 location,
             ).strip()
+            location = re.sub(
+                r"(最近一周|未来一周|这一周|本周|近7天|未来7天|最近7天|7天|一周|最近|未来|最)$",
+                "",
+                location,
+            )
             location = location.strip(" 的天气forecastweather")
             if location:
                 return location
@@ -247,3 +249,30 @@ class IntentRouter:
             return json.loads(text)
         except Exception:
             return None
+
+    async def _fetch_weather_payload_text(
+        self,
+        *,
+        location: str,
+        tools: ToolRegistry,
+        trace_id: str,
+    ):
+        params = {
+            "url": f"https://wttr.in/{quote(location)}?format=j1",
+            "extractMode": "text",
+            "maxChars": 20000,
+        }
+        result = await tools.execute("web_fetch", params, trace_id=trace_id)
+        if result.ok:
+            return result
+        retryable = bool(result.error and result.error.retryable)
+        if not retryable:
+            return result
+        return await tools.execute("web_fetch", params, trace_id=trace_id)
+
+    @staticmethod
+    def _build_weather_failure_message(location: str) -> str:
+        return (
+            f"暂时无法获取{location}的天气数据。这次失败是天气服务请求超时或网络波动，"
+            "不是权限或审批问题。请稍后重试。"
+        )
