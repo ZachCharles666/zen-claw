@@ -76,19 +76,25 @@ class IntentRouter:
         tools: ToolRegistry,
         trace_id: str,
     ) -> IntentRouteResult:
-        result = await self._fetch_weather_payload_text(location=location, tools=tools, trace_id=trace_id)
-        if not result.ok:
-            return IntentRouteResult(
-                handled=True,
-                intent_name="weather",
-                content=self._build_weather_failure_message(location),
-                contract=self._WEATHER_CONTRACT,
-                route_status="direct_failed",
-                diagnostic=f"web_fetch_failed:{result.error.code if result.error else 'unknown'}",
-            )
+        days = self._extract_weather_days(content)
 
-        weather_payload = self._extract_weather_payload(result.content)
-        if not isinstance(weather_payload, dict):
+        wttr_result = await self._fetch_weather_payload_text(
+            location=location,
+            tools=tools,
+            trace_id=trace_id,
+        )
+        if wttr_result.ok:
+            weather_payload = self._extract_weather_payload(wttr_result.content)
+            if isinstance(weather_payload, dict):
+                lines = self._build_wttr_weather_lines(weather_payload, days=days)
+                if lines:
+                    return IntentRouteResult(
+                        handled=True,
+                        intent_name="weather",
+                        content=f"{location}天气预报：\n" + "\n".join(lines),
+                        contract=self._WEATHER_CONTRACT,
+                        route_status="direct_success",
+                    )
             return IntentRouteResult(
                 handled=False,
                 intent_name="weather",
@@ -98,51 +104,38 @@ class IntentRouter:
                 skip_planning=True,
             )
 
-        forecast = weather_payload.get("weather")
-        if not isinstance(forecast, list) or not forecast:
+        fallback_lines = await self._fetch_open_meteo_weather_lines(
+            location=location,
+            days=days,
+            tools=tools,
+            trace_id=trace_id,
+        )
+        if fallback_lines:
             return IntentRouteResult(
-                handled=False,
+                handled=True,
                 intent_name="weather",
+                content=f"{location}天气预报：\n" + "\n".join(fallback_lines),
                 contract=self._WEATHER_CONTRACT,
-                route_status="needs_constrained_replan",
-                diagnostic="weather_array_missing",
-                skip_planning=True,
+                route_status="direct_success",
             )
 
-        days = self._extract_weather_days(content)
-        lines: list[str] = []
-        for day in forecast[:days]:
-            if not isinstance(day, dict):
-                continue
-            date = str(day.get("date") or "").strip()
-            if not date:
-                continue
-            desc = self._weather_desc_from_day(day)
-            high = str(day.get("maxtempC") or "").strip()
-            low = str(day.get("mintempC") or "").strip()
-            parts = [date]
-            if desc:
-                parts.append(desc)
-            if high or low:
-                parts.append(f"{low}~{high}°C" if high and low else f"{high or low}°C")
-            lines.append(" ".join(parts))
-
-        if not lines:
+        if not wttr_result.ok:
             return IntentRouteResult(
-                handled=False,
+                handled=True,
                 intent_name="weather",
+                content=self._build_weather_failure_message(location),
                 contract=self._WEATHER_CONTRACT,
-                route_status="needs_constrained_replan",
-                diagnostic="weather_lines_empty",
-                skip_planning=True,
+                route_status="direct_failed",
+                diagnostic=f"weather_sources_failed:{wttr_result.error.code if wttr_result.error else 'unknown'}",
             )
 
         return IntentRouteResult(
-            handled=True,
+            handled=False,
             intent_name="weather",
-            content=f"{location}天气预报：\n" + "\n".join(lines),
             contract=self._WEATHER_CONTRACT,
-            route_status="direct_success",
+            route_status="needs_constrained_replan",
+            diagnostic="weather_lines_empty",
+            skip_planning=True,
         )
 
     @classmethod
@@ -222,6 +215,30 @@ class IntentRouter:
                 return candidate
         return None
 
+    @staticmethod
+    def _build_wttr_weather_lines(weather_payload: dict[str, Any], *, days: int) -> list[str]:
+        forecast = weather_payload.get("weather")
+        if not isinstance(forecast, list) or not forecast:
+            return []
+
+        lines: list[str] = []
+        for day in forecast[:days]:
+            if not isinstance(day, dict):
+                continue
+            date = str(day.get("date") or "").strip()
+            if not date:
+                continue
+            desc = IntentRouter._weather_desc_from_day(day)
+            high = str(day.get("maxtempC") or "").strip()
+            low = str(day.get("mintempC") or "").strip()
+            parts = [date]
+            if desc:
+                parts.append(desc)
+            if high or low:
+                parts.append(f"{low}~{high}°C" if high and low else f"{high or low}°C")
+            lines.append(" ".join(parts))
+        return lines
+
     @classmethod
     def _walk_json_candidates(cls, raw: str) -> list[Any]:
         out: list[Any] = []
@@ -270,9 +287,159 @@ class IntentRouter:
             return result
         return await tools.execute("web_fetch", params, trace_id=trace_id)
 
+    async def _fetch_open_meteo_weather_lines(
+        self,
+        *,
+        location: str,
+        days: int,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> list[str]:
+        geo_result = await self._fetch_with_retry(
+            tools=tools,
+            params={
+                "url": (
+                    "https://geocoding-api.open-meteo.com/v1/search"
+                    f"?name={quote(location)}&count=1&language=zh&format=json"
+                ),
+                "extractMode": "text",
+                "maxChars": 12000,
+            },
+            trace_id=trace_id,
+        )
+        if not geo_result.ok:
+            return []
+
+        geo_payload = self._extract_json_object(geo_result.content)
+        results = geo_payload.get("results")
+        if not isinstance(results, list) or not results:
+            return []
+        first = results[0] if isinstance(results[0], dict) else {}
+        latitude = first.get("latitude")
+        longitude = first.get("longitude")
+        if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+            return []
+        timezone = str(first.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+
+        forecast_result = await self._fetch_with_retry(
+            tools=tools,
+            params={
+                "url": (
+                    "https://api.open-meteo.com/v1/forecast"
+                    f"?latitude={latitude}&longitude={longitude}"
+                    "&daily=weather_code,temperature_2m_max,temperature_2m_min"
+                    f"&forecast_days={days}&timezone={quote(timezone)}"
+                ),
+                "extractMode": "text",
+                "maxChars": 12000,
+            },
+            trace_id=trace_id,
+        )
+        if not forecast_result.ok:
+            return []
+
+        forecast_payload = self._extract_json_object(forecast_result.content)
+        daily = forecast_payload.get("daily")
+        if not isinstance(daily, dict):
+            return []
+        dates = daily.get("time")
+        codes = daily.get("weather_code")
+        highs = daily.get("temperature_2m_max")
+        lows = daily.get("temperature_2m_min")
+        if not all(isinstance(item, list) for item in (dates, codes, highs, lows)):
+            return []
+
+        lines: list[str] = []
+        count = min(len(dates), len(codes), len(highs), len(lows), days)
+        for idx in range(count):
+            date = str(dates[idx] or "").strip()
+            if not date:
+                continue
+            desc = self._open_meteo_weather_desc(codes[idx])
+            high = self._format_temperature(highs[idx])
+            low = self._format_temperature(lows[idx])
+            parts = [date]
+            if desc:
+                parts.append(desc)
+            if high or low:
+                parts.append(f"{low}~{high}°C" if high and low else f"{high or low}°C")
+            lines.append(" ".join(parts))
+        return lines
+
+    async def _fetch_with_retry(
+        self,
+        *,
+        tools: ToolRegistry,
+        params: dict[str, Any],
+        trace_id: str,
+    ):
+        result = await tools.execute("web_fetch", params, trace_id=trace_id)
+        if result.ok:
+            return result
+        if not bool(result.error and result.error.retryable):
+            return result
+        return await tools.execute("web_fetch", params, trace_id=trace_id)
+
+    @classmethod
+    def _extract_json_object(cls, tool_content: str) -> dict[str, Any]:
+        for obj in cls._walk_json_candidates(tool_content):
+            if isinstance(obj, dict):
+                if isinstance(obj.get("text"), str):
+                    nested = cls._safe_json_loads(obj["text"])
+                    if isinstance(nested, dict):
+                        return nested
+                return obj
+        return {}
+
+    @staticmethod
+    def _format_temperature(value: Any) -> str:
+        if isinstance(value, int | float):
+            if isinstance(value, float) and value.is_integer():
+                return str(int(value))
+            return f"{value:g}"
+        text = str(value or "").strip()
+        return text
+
+    @staticmethod
+    def _open_meteo_weather_desc(code: Any) -> str:
+        code_int = int(code) if isinstance(code, int | float) or str(code).isdigit() else None
+        mapping = {
+            0: "晴",
+            1: "大部晴朗",
+            2: "多云",
+            3: "阴",
+            45: "雾",
+            48: "冻雾",
+            51: "小毛雨",
+            53: "毛雨",
+            55: "大毛雨",
+            56: "小冻雨",
+            57: "冻雨",
+            61: "小雨",
+            63: "中雨",
+            65: "大雨",
+            66: "小冻雨",
+            67: "大冻雨",
+            71: "小雪",
+            73: "中雪",
+            75: "大雪",
+            77: "冰粒",
+            80: "阵雨",
+            81: "强阵雨",
+            82: "暴雨",
+            85: "阵雪",
+            86: "强阵雪",
+            95: "雷暴",
+            96: "雷暴伴冰雹",
+            99: "强雷暴伴冰雹",
+        }
+        if code_int is None:
+            return ""
+        return mapping.get(code_int, f"天气代码{code_int}")
+
     @staticmethod
     def _build_weather_failure_message(location: str) -> str:
         return (
-            f"暂时无法获取{location}的天气数据。这次失败是天气服务请求超时或网络波动，"
+            f"暂时无法获取{location}的天气数据。主天气源和备用天气源都未成功响应，可能是网络波动或上游服务异常，"
             "不是权限或审批问题。请稍后重试。"
         )
