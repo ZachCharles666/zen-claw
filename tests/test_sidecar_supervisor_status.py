@@ -41,6 +41,34 @@ def test_collect_sidecar_status_includes_exec_pid_and_uptime(tmp_path: Path) -> 
     assert row["uptime"] != "-"
 
 
+def test_collect_sidecar_status_skips_health_probe_for_live_pid(
+    tmp_path: Path, monkeypatch
+) -> None:
+    cfg = Config()
+    cfg.tools.network.exec.mode = "sidecar"
+
+    state_file = tmp_path / "sec-execd.json"
+    state_file.write_text(
+        (
+            "{"
+            f'"name":"sec-execd","managed":true,"pid":{os.getpid()},'
+            f'"started_at_unix":{int(time.time()) - 3},"status":"running"'
+            "}"
+        ),
+        encoding="utf-8",
+    )
+
+    def _unexpected_health_probe(*_args, **_kwargs):
+        raise AssertionError("health probe should be skipped for a live pid")
+
+    monkeypatch.setattr("zen_claw.runtime.sidecar_supervisor._check_health", _unexpected_health_probe)
+
+    rows = collect_sidecar_status(cfg, state_dir=tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["status"] == "running"
+    assert rows[0]["pid"] == os.getpid()
+
+
 def test_collect_sidecar_status_includes_browser_sidecar(tmp_path: Path) -> None:
     cfg = Config()
     cfg.tools.network.browser.mode = "sidecar"

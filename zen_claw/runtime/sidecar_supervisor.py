@@ -216,7 +216,10 @@ def collect_sidecar_status(config, *, state_dir: Path | None = None) -> list[dic
             state_status = ""
 
         pid_alive = _is_pid_alive(pid)
-        healthy = _check_health(spec.health_url)
+        # Avoid a redundant socket probe when we already know the managed process is alive.
+        # This keeps status collection non-blocking in CI and still preserves health checks
+        # for external or stopped sidecars.
+        healthy = True if pid_alive else _check_health(spec.health_url)
         uptime = "-"
         if started_at and pid_alive:
             uptime = _format_uptime(now - started_at)

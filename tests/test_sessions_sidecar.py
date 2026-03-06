@@ -2,10 +2,8 @@ import asyncio
 import json as jsonlib
 
 import httpx
-import pytest
 
 from zen_claw.agent.loop import AgentLoop
-from zen_claw.agent.skills import SkillsLoader
 from zen_claw.agent.tools.result import ToolErrorKind
 from zen_claw.agent.tools.sessions import (
     SessionsKillTool,
