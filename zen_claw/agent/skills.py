@@ -809,24 +809,17 @@ class SkillsLoader:
     def _safe_extract_zip(self, zf: zipfile.ZipFile, target_dir: Path) -> tuple[bool, str]:
         """Extract zip entries safely to avoid path traversal, bombs, and homoglyph attacks."""
         base = target_dir.resolve()
+        validated_entries: list[tuple[zipfile.ZipInfo, Path]] = []
         total_uncompressed = 0
         file_count = 0
         for info in zf.infolist():
-            # Apply Unicode NFC normalization to prevent homoglyph/encoding bypasses
-            raw_name = unicodedata.normalize("NFC", info.filename.replace("\\", "/"))
-
-            if raw_name.startswith("/") or raw_name.startswith("../") or "/../" in raw_name:
-                return False, f"invalid zip entry path: {info.filename}"
-
-            # Enforce path depth limit to prevent deep nesting attacks
-            if len(Path(raw_name).parts) > self._zip_max_path_depth:
-                return False, f"zip entry exceeds max path depth: {info.filename}"
-
-            dst = (base / Path(raw_name)).resolve()
-            if not dst.is_relative_to(base):
-                return False, f"invalid zip entry path: {info.filename}"
+            ok, err, dst = self._validate_zip_entry(info, base)
+            if not ok:
+                return False, err
+            if dst is None:
+                continue
             if info.is_dir():
-                dst.mkdir(parents=True, exist_ok=True)
+                validated_entries.append((info, dst))
                 continue
             file_count += 1
             if file_count > self._zip_max_files:
@@ -834,10 +827,35 @@ class SkillsLoader:
             total_uncompressed += max(0, int(info.file_size))
             if total_uncompressed > self._zip_max_total_uncompressed_bytes:
                 return False, "zip archive is too large after extraction"
+            validated_entries.append((info, dst))
+
+        for info, dst in validated_entries:
+            if info.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+                continue
             dst.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info, "r") as src_f, open(dst, "wb") as dst_f:
                 shutil.copyfileobj(src_f, dst_f)
         return True, ""
+
+    def _validate_zip_entry(
+        self,
+        info: zipfile.ZipInfo,
+        base: Path,
+    ) -> tuple[bool, str, Path | None]:
+        """Validate a zip entry path before any extraction occurs."""
+        raw_name = unicodedata.normalize("NFC", info.filename.replace("\\", "/"))
+        if not raw_name:
+            return False, "invalid zip entry path: empty entry name", None
+        if raw_name.startswith("/") or raw_name.startswith("../") or "/../" in raw_name:
+            return False, f"invalid zip entry path: {info.filename}", None
+        if len(Path(raw_name).parts) > self._zip_max_path_depth:
+            return False, f"zip entry exceeds max path depth: {info.filename}", None
+
+        dst = (base / Path(raw_name)).resolve()
+        if not dst.is_relative_to(base):
+            return False, f"invalid zip entry path: {info.filename}", None
+        return True, "", dst
 
     def uninstall_skill(self, name: str) -> tuple[bool, str]:
         """Uninstall a workspace skill (built-in skills cannot be removed)."""

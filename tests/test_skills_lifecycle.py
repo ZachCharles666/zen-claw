@@ -613,6 +613,36 @@ def test_install_skill_from_zip_rejects_too_many_files(tmp_path: Path) -> None:
     assert "too many files" in msg
 
 
+def test_install_skill_from_zip_rejects_too_many_files_before_extracting(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    zip_path = tmp_path / "too_many_no_extract.zip"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("bulk/SKILL.md", "# bulk\n")
+        zf.writestr("bulk/manifest.json", '{"name":"bulk","version":"1.0.0","description":"x"}')
+        for i in range(250):
+            zf.writestr(f"bulk/files/{i}.txt", "x")
+
+    original_open = zipfile.ZipFile.open
+
+    def _fail_if_extracting(self, name, mode="r", pwd=None, *, force_zip64=False):
+        if mode == "r":
+            raise AssertionError("zip entries should not be opened on rejected archive")
+        return original_open(self, name, mode=mode, pwd=pwd, force_zip64=force_zip64)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", _fail_if_extracting)
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    ok, msg = loader.install_skill_from_zip(zip_path)
+    assert ok is False
+    assert "too many files" in msg
+
+
 def test_install_skill_from_zip_rejects_oversized_uncompressed_payload(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     builtin = tmp_path / "builtin"
