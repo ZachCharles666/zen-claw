@@ -59,8 +59,20 @@ jobs:
           if ($selected.Count -eq 0) {
             throw "No tests selected for shard $index"
           }
-          Write-Host ("Running shard {0}/{1}: {2}" -f ($index + 1), $total, ($selected -join " "))
-          & python -m pytest -p no:timeout -q @selected
+          $env:CI_SELECTED_TESTS = ($selected -join "`n")
+          @'
+import os
+import subprocess
+import sys
+
+files = [line.strip() for line in os.environ["CI_SELECTED_TESTS"].splitlines() if line.strip()]
+index = int(os.environ["CI_SHARD_INDEX"])
+total = int(os.environ["CI_TOTAL_SHARDS"])
+print(f"Running shard {index + 1}/{total}: {' '.join(files)}")
+raise SystemExit(
+    subprocess.call([sys.executable, "-m", "pytest", "-p", "no:timeout", "-q", *files])
+)
+'@ | python -
 
   memory-recall:
     runs-on: windows-latest
