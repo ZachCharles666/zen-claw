@@ -9,7 +9,7 @@ from zen_claw.agent.loop import AgentLoop
 from zen_claw.agent.skills import SkillsLoader
 from zen_claw.agent.tools.result import ToolResult
 from zen_claw.bus.queue import MessageBus
-from zen_claw.providers.base import LLMProvider
+from zen_claw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 
 @pytest.fixture(autouse=True)
@@ -75,3 +75,80 @@ def test_process_direct_returns_weather_without_llm(tmp_path: Path, monkeypatch)
     assert out.startswith("成都天气预报：")
     assert "2026-03-06 Sunny 11~18°C" in out
     assert "2026-03-07 Cloudy 10~17°C" in out
+
+
+class _ConstrainedWeatherProvider(LLMProvider):
+    def __init__(self) -> None:
+        super().__init__(api_key=None, api_base=None)
+        self.calls = 0
+
+    async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7):
+        self.calls += 1
+        if tools is not None:
+            tool_names = [item["function"]["name"] for item in tools]
+            assert tool_names == ["web_fetch"]
+            if self.calls == 1:
+                return LLMResponse(
+                    content="retry weather via constrained tools",
+                    tool_calls=[
+                        ToolCallRequest(
+                            id="weather-1",
+                            name="web_fetch",
+                            arguments={
+                                "url": "https://wttr.in/%E6%88%90%E9%83%BD?format=j1",
+                                "extractMode": "text",
+                                "maxChars": 20000,
+                            },
+                        )
+                    ],
+                )
+        return LLMResponse(content="2026-03-06 Sunny\n2026-03-07 Cloudy")
+
+    def get_default_model(self) -> str:
+        return "fake-model"
+
+
+def test_process_direct_uses_constrained_replan_when_direct_route_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_ConstrainedWeatherProvider(),
+        workspace=tmp_path,
+        model="fake-model",
+        enable_planning=False,
+    )
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop._extract_and_store_memory = AsyncMock()  # type: ignore[method-assign]
+
+    calls = {"count": 0}
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        calls["count"] += 1
+        assert name == "web_fetch"
+        if calls["count"] == 1:
+            return ToolResult.success("not-json-response")
+        payload = {
+            "text": json.dumps(
+                {
+                    "weather": [
+                        {
+                            "date": "2026-03-06",
+                            "maxtempC": "18",
+                            "mintempC": "11",
+                            "hourly": [{"weatherDesc": [{"value": "Sunny"}]}] * 8,
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        }
+        return ToolResult.success(json.dumps(payload, ensure_ascii=False))
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+
+    out = asyncio.run(loop.process_direct("告诉我成都最近一周的天气，我希望呈现方式是日期+天气的样式"))
+
+    assert out == "2026-03-06 Sunny\n2026-03-07 Cloudy"
+    assert calls["count"] == 2

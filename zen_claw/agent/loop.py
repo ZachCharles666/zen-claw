@@ -3,11 +3,9 @@
 import asyncio
 import hashlib
 import json
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
 
 if TYPE_CHECKING:
     from zen_claw.config.schema import (
@@ -26,6 +24,7 @@ from zen_claw.agent.approval_gate import ApprovalGate, ApprovalStatus
 from zen_claw.agent.context import ContextBuilder
 from zen_claw.agent.context_compression import ContextCompressor
 from zen_claw.agent.execution import ExecutionController
+from zen_claw.agent.intent_router import IntentRouter, IntentRouteResult, IntentToolContract
 from zen_claw.agent.memory_extractor import MemoryExtractor
 from zen_claw.agent.subagent import SubagentManager
 from zen_claw.agent.tools.browser import (
@@ -195,6 +194,7 @@ class AgentLoop:
             max_reflections=self.max_reflections,
             enable_planning=self.enable_planning,
         )
+        self.intent_router = IntentRouter()
         self.compressor = ContextCompressor(
             trigger_ratio=self.compression_trigger_ratio,
             hysteresis_ratio=self.compression_hysteresis_ratio,
@@ -776,16 +776,20 @@ class AgentLoop:
             all_active.extend(self.context.skills.get_always_skills())
             session.metadata["skill_pins"] = self.context.skills.build_session_pins(all_active)
 
-        weather_reply = await self._try_direct_weather_response(msg.content, trace_id=trace_id)
-        if weather_reply is not None:
+        route_result = await self.intent_router.route(
+            msg.content,
+            tools=self.tools,
+            trace_id=trace_id,
+        )
+        if route_result.route_status == "direct_success" and route_result.content is not None:
             session.add_message("user", msg.content)
-            session.add_message("assistant", weather_reply)
-            await self._extract_and_store_memory(msg.content, weather_reply, trace_id)
+            session.add_message("assistant", route_result.content)
+            await self._extract_and_store_memory(msg.content, route_result.content, trace_id)
             self.sessions.save(session)
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content=weather_reply,
+                content=route_result.content,
                 metadata=TraceContext.child_metadata(trace_id),
             )
 
@@ -801,6 +805,19 @@ class AgentLoop:
             chat_id=msg.chat_id,
             pins=session.metadata["skill_pins"],
         )
+        constrained_tools: list[dict[str, Any]] | None = None
+        if route_result.route_status == "needs_constrained_replan" and route_result.contract:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": self._build_intent_replan_instruction(route_result),
+                }
+            )
+            self._apply_intent_contract_policy(route_result.contract)
+            constrained_tools = self.tools.get_visible_definitions(
+                extra_allow=route_result.contract.allowed_tools,
+                extra_deny=route_result.contract.denied_tools,
+            )
         if bool(session.metadata.get("think_enabled", False)):
             messages.append(
                 {
@@ -811,17 +828,21 @@ class AgentLoop:
 
         preferred_model = str(session.metadata.get("override_model") or "").strip() or self.model
         run_model = self._resolve_run_model(messages, preferred_model=preferred_model)
-        messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
-        usage: dict[str, int] = {}
-        final_content, _ = await self._run_execute_reflect_loop(
-            messages,
-            trace_id,
-            session=session,
-            model=run_model,
-            channel=msg.channel,
-            chat_id=msg.chat_id,
-            usage_collector=usage,
-        )
+        try:
+            messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
+            usage: dict[str, int] = {}
+            final_content, _ = await self._run_execute_reflect_loop(
+                messages,
+                trace_id,
+                session=session,
+                model=run_model,
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                usage_collector=usage,
+                tool_definitions=constrained_tools,
+            )
+        finally:
+            self.tools.clear_policy_scope("intent_contract")
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
@@ -1121,108 +1142,28 @@ class AgentLoop:
         identity_keys = {"channel_role", "tenant_id", "tid", "role"}
         return bool(meta.get("identity_verified")) or any(k in meta for k in identity_keys)
 
-    async def _try_direct_weather_response(self, content: str, trace_id: str) -> str | None:
-        location = self._extract_weather_location(content)
-        if not location:
-            return None
-
-        result = await self.tools.execute(
-            "web_fetch",
-            {
-                "url": f"https://wttr.in/{quote(location)}?format=j1",
-                "extractMode": "text",
-                "maxChars": 20000,
-            },
-            trace_id=trace_id,
+    def _apply_intent_contract_policy(self, contract: IntentToolContract) -> None:
+        self.tools.set_policy_scope(
+            "intent_contract",
+            allow=sorted(contract.allowed_tools),
+            deny=sorted(contract.denied_tools),
         )
-        if not result.ok:
-            return None
-
-        try:
-            payload = json.loads(result.content)
-            weather_payload = json.loads(str(payload.get("text") or "{}"))
-        except Exception:
-            return None
-
-        forecast = weather_payload.get("weather")
-        if not isinstance(forecast, list) or not forecast:
-            return None
-
-        days = self._extract_weather_days(content)
-        lines: list[str] = []
-        for day in forecast[:days]:
-            if not isinstance(day, dict):
-                continue
-            date = str(day.get("date") or "").strip()
-            if not date:
-                continue
-            desc = self._weather_desc_from_day(day)
-            high = str(day.get("maxtempC") or "").strip()
-            low = str(day.get("mintempC") or "").strip()
-            parts = [date]
-            if desc:
-                parts.append(desc)
-            if high or low:
-                if high and low:
-                    parts.append(f"{low}~{high}°C")
-                else:
-                    parts.append(f"{high or low}°C")
-            lines.append(" ".join(parts))
-
-        if not lines:
-            return None
-        return f"{location}天气预报：\n" + "\n".join(lines)
 
     @staticmethod
-    def _extract_weather_days(content: str) -> int:
-        text = content.lower()
-        if any(token in text for token in ("最近一周", "未来一周", "这一周", "本周", "7天", "7-day", "week")):
-            return 7
-        return 3
-
-    @staticmethod
-    def _weather_desc_from_day(day: dict[str, Any]) -> str:
-        hourly = day.get("hourly")
-        if isinstance(hourly, list) and hourly:
-            index = 4 if len(hourly) > 4 else len(hourly) - 1
-            slot = hourly[index] if isinstance(hourly[index], dict) else {}
-            desc_rows = slot.get("weatherDesc")
-            if isinstance(desc_rows, list) and desc_rows:
-                first = desc_rows[0]
-                if isinstance(first, dict):
-                    value = str(first.get("value") or "").strip()
-                    if value:
-                        return value
-        return ""
-
-    @classmethod
-    def _extract_weather_location(cls, content: str) -> str | None:
-        if not content:
-            return None
-        text = re.split(r"[，,。！？!?；;]", content.strip(), maxsplit=1)[0]
-        lowered = text.lower()
-        if not any(token in lowered for token in ("天气", "weather", "forecast")):
-            return None
-
-        patterns = (
-            r"(?P<loc>[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-zA-Za-z\s·\-.]{0,40}?)(?:最近一周|未来一周|这一周|本周|近7天|未来7天|7天|今天天气|今日天气|今天|今日)?的?天气",
-            r"(?:weather|forecast)(?:\s+(?:for|in))?\s+(?P<loc>[A-Za-z][A-Za-z\s\-.]{1,40})",
-            r"(?P<loc>[A-Za-z][A-Za-z\s\-.]{1,40})\s+(?:weather|forecast)",
+    def _build_intent_replan_instruction(route_result: IntentRouteResult) -> str:
+        contract = route_result.contract
+        if contract is None:
+            return ""
+        allowed = ", ".join(sorted(contract.allowed_tools))
+        denied = ", ".join(sorted(contract.denied_tools))
+        diagnostic = route_result.diagnostic or "direct route failed"
+        return (
+            f"The request matched intent '{contract.intent_name}'. "
+            f"The deterministic route failed ({diagnostic}). "
+            f"Retry using only these tools: {allowed}. "
+            f"Do not use denied tools: {denied}. "
+            "Answer normally once you have the result."
         )
-        for pattern in patterns:
-            match = re.search(pattern, text, flags=re.IGNORECASE)
-            if not match:
-                continue
-            location = str(match.group("loc") or "").strip()
-            location = re.sub(
-                r"^(告诉我|帮我|请|查询|查一下|查下|查查|看看|我想知道|我想看|麻烦你|想知道)",
-                "",
-                location,
-            ).strip()
-            location = location.strip(" 的天气forecastweather")
-            if location:
-                return location
-        return None
 
     async def _build_history_with_compression(
         self, session: "Session", trace_id: str
@@ -1449,6 +1390,7 @@ class AgentLoop:
         channel: str = "cli",
         chat_id: str = "direct",
         usage_collector: dict[str, int] | None = None,
+        tool_definitions: list[dict[str, Any]] | None = None,
     ) -> tuple[str | None, list[dict[str, Any]]]:
         """Run execute loop with bounded reflection retries and mid-turn hot-swapping."""
         iteration = 0
@@ -1462,7 +1404,7 @@ class AgentLoop:
             try:
                 response = await self.provider.chat(
                     messages=messages,
-                    tools=self.tools.get_definitions(),
+                    tools=tool_definitions if tool_definitions is not None else self.tools.get_definitions(),
                     model=active_model,
                 )
                 self._accumulate_usage(usage_collector, response.usage)

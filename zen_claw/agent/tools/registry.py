@@ -51,6 +51,36 @@ class ToolRegistry:
         """Get all tool definitions in OpenAI format."""
         return [tool.to_schema() for tool in self._tools.values()]
 
+    def get_visible_definitions(
+        self,
+        *,
+        extra_allow: set[str] | list[str] | tuple[str, ...] | None = None,
+        extra_deny: set[str] | list[str] | tuple[str, ...] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get only tool definitions visible under current/runtime-local constraints."""
+        allow_set = (
+            {str(t).strip().lower() for t in extra_allow if str(t).strip()}
+            if extra_allow is not None
+            else None
+        )
+        deny_set = (
+            {str(t).strip().lower() for t in extra_deny if str(t).strip()}
+            if extra_deny is not None
+            else set()
+        )
+
+        visible: list[dict[str, Any]] = []
+        for name, tool in self._tools.items():
+            token = str(name or "").strip().lower()
+            if token in deny_set or "*" in deny_set:
+                continue
+            if allow_set is not None and "*" not in allow_set and token not in allow_set:
+                continue
+            if not self._is_visible_under_current_policy(token):
+                continue
+            visible.append(tool.to_schema())
+        return visible
+
     def set_policy_scope(
         self,
         scope: str,
@@ -300,6 +330,15 @@ class ToolRegistry:
             result = ToolResult.success(str(raw_result))
 
         return result.purify()
+
+    def _is_visible_under_current_policy(self, name: str) -> bool:
+        if self._kill_switch_enabled:
+            return False
+        if self._skill_allowed_tools is not None:
+            if "*" not in self._skill_allowed_tools and name not in self._skill_allowed_tools:
+                return False
+        decision = self._policy.evaluate(name)
+        return bool(decision.allowed)
 
     def _from_legacy_string(self, name: str, text: str) -> ToolResult:
         stripped = text.strip()
