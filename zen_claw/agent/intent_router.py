@@ -95,13 +95,27 @@ class IntentRouter:
                         contract=self._WEATHER_CONTRACT,
                         route_status="direct_success",
                     )
+            fallback_lines = await self._fetch_open_meteo_weather_lines(
+                location=location,
+                days=days,
+                tools=tools,
+                trace_id=trace_id,
+            )
+            if fallback_lines:
+                return IntentRouteResult(
+                    handled=True,
+                    intent_name="weather",
+                    content=f"{location}天气预报：\n" + "\n".join(fallback_lines),
+                    contract=self._WEATHER_CONTRACT,
+                    route_status="direct_success",
+                )
             return IntentRouteResult(
-                handled=False,
+                handled=True,
                 intent_name="weather",
+                content=self._build_weather_failure_message(location),
                 contract=self._WEATHER_CONTRACT,
-                route_status="needs_constrained_replan",
+                route_status="direct_failed",
                 diagnostic="weather_payload_not_parseable",
-                skip_planning=True,
             )
 
         fallback_lines = await self._fetch_open_meteo_weather_lines(
@@ -277,7 +291,7 @@ class IntentRouter:
         params = {
             "url": f"https://wttr.in/{quote(location)}?format=j1",
             "extractMode": "text",
-            "maxChars": 20000,
+            "maxChars": 80000,
         }
         result = await tools.execute("web_fetch", params, trace_id=trace_id)
         if result.ok:
