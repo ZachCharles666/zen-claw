@@ -8,9 +8,12 @@ from zen_claw.agent.skills import SkillsLoader
 
 @pytest.fixture(autouse=True)
 def mock_skills_loader(monkeypatch):
-    # Mock mapping and time to prevent potentially slow/hanging I/O or crypto in CI
+    # Isolate lifecycle tests from mapping/journal/HMAC side effects in CI.
     monkeypatch.setattr(SkillsLoader, "_load_skill_mapping", lambda self: None)
     monkeypatch.setattr(SkillsLoader, "_save_skill_mapping", lambda self: None)
+    monkeypatch.setattr(SkillsLoader, "_load_journal", lambda self: [])
+    monkeypatch.setattr(SkillsLoader, "_save_journal", lambda self, journal: None)
+    monkeypatch.setattr(SkillsLoader, "_journal_recovery", lambda self: None)
     monkeypatch.setattr(SkillsLoader, "_now_ts", lambda self: 1000.0)
 
 
