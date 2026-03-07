@@ -1,3 +1,4 @@
+import json
 import zipfile
 from pathlib import Path
 
@@ -225,6 +226,288 @@ def test_manifest_validation_rejects_permission_scope_mismatch(tmp_path: Path) -
     ok, errors = loader.validate_skill_manifest("alpha", strict=True)
     assert ok is False
     assert any("permissions not covered by scopes" in e for e in errors)
+
+
+def test_get_skill_runtime_contract_loads_runtime_contract_from_manifest(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["web_fetch"],
+  "runtime_contract": {
+    "intent": "weather",
+    "version": 1,
+    "intent_mode": "router_first",
+    "preferred_tools": ["web_fetch"],
+    "allowed_tools": ["web_fetch"],
+    "denied_tools": ["exec"],
+    "allow_constrained_replan": true,
+    "allow_high_risk_escalation": false,
+    "response_mode": "direct",
+    "failure_mode": "runtime_direct",
+    "fact_payload_schema": {
+      "type": "object",
+      "fields": ["location", "requested_days", "max_supported_days", "reason"]
+    }
+  }
+}
+""".strip(),
+    )
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    contract, errors = loader.get_skill_runtime_contract("alpha")
+
+    assert errors == []
+    assert contract is not None
+    assert contract.intent_name == "weather"
+    assert contract.version == 1
+    assert contract.intent_mode == "router_first"
+    assert contract.preferred_tools == ["web_fetch"]
+    assert contract.allowed_tools == {"web_fetch"}
+    assert contract.denied_tools == {"exec"}
+    assert contract.response_mode == "direct"
+    assert contract.failure_mode == "runtime_direct"
+    assert contract.fact_payload_schema == {
+        "type": "object",
+        "fields": ["location", "requested_days", "max_supported_days", "reason"],
+    }
+
+
+def test_get_skill_runtime_contract_rejects_allowed_tools_outside_manifest_permissions(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["read_file"],
+  "runtime_contract": {
+    "intent": "weather",
+    "preferred_tools": ["web_fetch"],
+    "allowed_tools": ["web_fetch"],
+    "denied_tools": ["exec"],
+    "response_mode": "direct"
+  }
+}
+""".strip(),
+    )
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    contract, errors = loader.get_skill_runtime_contract("alpha")
+
+    assert contract is None
+    assert any("allowed_tools must be a subset" in err for err in errors)
+
+
+def test_manifest_validation_accepts_runtime_contract_metadata(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["web_fetch"],
+  "runtime_contract": {
+    "intent": "weather",
+    "intent_mode": "router_first",
+    "preferred_tools": ["web_fetch"],
+    "allowed_tools": ["web_fetch"],
+    "denied_tools": ["exec"],
+    "response_mode": "direct",
+    "failure_mode": "runtime_direct",
+    "fact_payload_schema": {
+      "type": "object",
+      "fields": ["location", "reason"]
+    }
+  }
+}
+""".strip(),
+    )
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    ok, errors = loader.validate_skill_manifest("alpha", strict=True)
+
+    assert ok is True
+    assert errors == []
+
+
+def test_manifest_validation_rejects_invalid_runtime_contract_intent_mode(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["web_fetch"],
+  "runtime_contract": {
+    "intent": "weather",
+    "intent_mode": "router_only",
+    "preferred_tools": ["web_fetch"],
+    "allowed_tools": ["web_fetch"]
+  }
+}
+""".strip(),
+    )
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    ok, errors = loader.validate_skill_manifest("alpha", strict=True)
+
+    assert ok is False
+    assert any("runtime_contract.intent_mode must be one of" in err for err in errors)
+
+
+def test_manifest_validation_rejects_runtime_contract_preferred_tools_outside_allowed_tools(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["web_fetch"],
+  "runtime_contract": {
+    "intent": "weather",
+    "preferred_tools": ["web_fetch", "exec"],
+    "allowed_tools": ["web_fetch"],
+    "response_mode": "direct"
+  }
+}
+""".strip(),
+    )
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    ok, errors = loader.validate_skill_manifest("alpha", strict=True)
+
+    assert ok is False
+    assert any("preferred_tools must be a subset" in err for err in errors)
+
+
+def test_classify_runtime_contract_intent_mode_infers_router_first(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["web_fetch"],
+  "runtime_contract": {
+    "intent": "weather",
+    "allowed_tools": ["web_fetch"],
+    "preferred_tools": ["web_fetch"],
+    "response_mode": "direct"
+  }
+}
+""".strip(),
+    )
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+
+    mode, errors = loader.classify_skill_intent_mode("alpha")
+
+    assert errors == []
+    assert mode == "router_first"
+
+
+def test_classify_runtime_contract_intent_mode_infers_hybrid(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["read_file", "web_fetch"],
+  "runtime_contract": {
+    "intent": "summarize",
+    "allowed_tools": ["read_file", "web_fetch"],
+    "preferred_tools": ["read_file"],
+    "response_mode": "llm_assisted"
+  }
+}
+""".strip(),
+    )
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+
+    mode, errors = loader.classify_skill_intent_mode("alpha")
+
+    assert errors == []
+    assert mode == "hybrid"
+
+
+def test_classify_runtime_contract_intent_mode_infers_skill_first(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["exec", "read_file"],
+  "runtime_contract": {
+    "intent": "github_ops",
+    "allowed_tools": ["exec", "read_file"],
+    "preferred_tools": ["exec"],
+    "response_mode": "direct"
+  }
+}
+""".strip(),
+    )
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+
+    mode, errors = loader.classify_skill_intent_mode("alpha")
+
+    assert errors == []
+    assert mode == "skill_first"
 
 
 def test_validate_all_skill_manifests_returns_per_skill_results(tmp_path: Path) -> None:
@@ -516,6 +799,167 @@ def test_install_skill_from_zip(tmp_path: Path) -> None:
     assert (workspace / "skills" / "zip_skill" / "SKILL.md").exists()
 
 
+def test_install_skill_from_zip_preserves_runtime_contract(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    source = tmp_path / "zip_weather"
+    zip_path = tmp_path / "zip_weather.zip"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text("# zip_weather\n", encoding="utf-8")
+    (source / "manifest.json").write_text(
+        """
+{
+  "name": "zip_weather",
+  "version": "1.0.0",
+  "description": "weather zip",
+  "permissions": ["web_fetch"],
+  "runtime_contract": {
+    "intent": "weather",
+    "version": 1,
+    "intent_mode": "router_first",
+    "preferred_tools": ["web_fetch"],
+    "allowed_tools": ["web_fetch"],
+    "response_mode": "direct",
+    "failure_mode": "runtime_direct",
+    "fact_payload_schema": {
+      "type": "object",
+      "fields": ["location", "requested_days", "max_supported_days", "reason"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(source / "SKILL.md", arcname="zip_weather/SKILL.md")
+        zf.write(source / "manifest.json", arcname="zip_weather/manifest.json")
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    ok, msg = loader.install_skill_from_zip(zip_path, require_manifest=True)
+    assert ok is True
+    assert "installed skill: zip_weather" in msg
+
+    contract, errors = loader.get_skill_runtime_contract("zip_weather")
+    assert errors == []
+    assert contract is not None
+    assert contract.intent_name == "weather"
+    assert contract.version == 1
+    assert contract.intent_mode == "router_first"
+    assert contract.allowed_tools == {"web_fetch"}
+    assert contract.failure_mode == "runtime_direct"
+    assert contract.fact_payload_schema == {
+        "type": "object",
+        "fields": ["location", "requested_days", "max_supported_days", "reason"],
+    }
+
+
+def test_install_and_sanitize_skill_from_dir_rewrites_skill_and_manifest(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    source = tmp_path / "wild_weather"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text(
+        "# wild_weather\nUse exec to run helper.\nUse curl to fetch weather.\n",
+        encoding="utf-8",
+    )
+    (source / "manifest.json").write_text(
+        """
+{
+  "name": "wild_weather",
+  "version": "1.0.0",
+  "description": "wild weather",
+  "permissions": ["exec", "web_fetch", "read_file"],
+  "scopes": ["exec", "network", "filesystem"],
+  "trust": "trusted",
+  "runtime_contract": {
+    "intent": "weather",
+    "preferred_tools": ["web_fetch", "exec"],
+    "allowed_tools": ["web_fetch"],
+    "response_mode": "direct",
+    "failure_mode": "runtime_direct"
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    ok, msg = loader.install_and_sanitize_skill_from_dir(source, require_manifest=True)
+    assert ok is True
+    assert "installed skill: wild_weather" in msg
+
+    installed_skill = workspace / "skills" / "wild_weather"
+    manifest = json.loads((installed_skill / "manifest.json").read_text(encoding="utf-8"))
+    skill_md = (installed_skill / "SKILL.md").read_text(encoding="utf-8").lower()
+    assert manifest["permissions"] == ["web_fetch"]
+    assert manifest["scopes"] == ["network"]
+    assert manifest["trust"] == "untrusted"
+    assert manifest["runtime_contract"]["allowed_tools"] == ["web_fetch"]
+    assert manifest["runtime_contract"]["preferred_tools"] == ["web_fetch"]
+    assert manifest["runtime_contract"]["intent_mode"] == "router_first"
+    assert "exec" not in skill_md
+    assert "curl" not in skill_md
+
+    mode, errors = loader.classify_skill_intent_mode("wild_weather")
+    assert errors == []
+    assert mode == "router_first"
+
+
+def test_install_and_sanitize_skill_from_zip_preserves_sanitized_artifact(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    source = tmp_path / "wild_time"
+    zip_path = tmp_path / "wild_time.zip"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    source.mkdir(parents=True)
+    (source / "SKILL.md").write_text(
+        "# wild_time\nSpawn a process if needed.\nThen use curl for timezone data.\n",
+        encoding="utf-8",
+    )
+    (source / "manifest.json").write_text(
+        """
+{
+  "name": "wild_time",
+  "version": "1.0.0",
+  "description": "wild time",
+  "permissions": ["spawn", "web_fetch"],
+  "scopes": ["exec", "network"],
+  "runtime_contract": {
+    "intent": "time",
+    "allowed_tools": ["web_fetch"],
+    "preferred_tools": ["web_fetch"],
+    "response_mode": "direct",
+    "failure_mode": "runtime_direct"
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.write(source / "SKILL.md", arcname="wild_time/SKILL.md")
+        zf.write(source / "manifest.json", arcname="wild_time/manifest.json")
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    ok, msg = loader.install_and_sanitize_skill_from_zip(zip_path, require_manifest=True)
+    assert ok is True
+    assert "installed skill: wild_time" in msg
+
+    installed_skill = workspace / "skills" / "wild_time"
+    manifest = json.loads((installed_skill / "manifest.json").read_text(encoding="utf-8"))
+    skill_md = (installed_skill / "SKILL.md").read_text(encoding="utf-8").lower()
+    assert manifest["permissions"] == ["web_fetch"]
+    assert manifest["scopes"] == ["network"]
+    assert manifest["trust"] == "untrusted"
+    assert manifest["runtime_contract"]["intent_mode"] == "router_first"
+    assert "spawn" not in skill_md
+    assert "curl" not in skill_md
+
+
 def test_install_skill_source_allowlist_blocks_unapproved_path(tmp_path: Path, monkeypatch) -> None:
     workspace = tmp_path / "ws"
     builtin = tmp_path / "builtin"
@@ -690,6 +1134,44 @@ def test_export_skill_to_zip(tmp_path: Path) -> None:
     ok2, _ = loader2.install_skill_from_zip(out_zip)
     assert ok2 is True
     assert (ws2 / "skills" / "alpha" / "SKILL.md").exists()
+
+
+def test_export_skill_to_zip_preserves_runtime_contract_manifest(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "weather_export",
+        """
+{
+  "name": "weather_export",
+  "version": "1.0.0",
+  "description": "weather export",
+  "permissions": ["web_fetch"],
+  "runtime_contract": {
+    "intent": "weather",
+    "intent_mode": "router_first",
+    "preferred_tools": ["web_fetch"],
+    "allowed_tools": ["web_fetch"],
+    "response_mode": "direct",
+    "failure_mode": "runtime_direct"
+  }
+}
+""".strip(),
+    )
+    out_zip = tmp_path / "out" / "weather_export.zip"
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+
+    ok, msg = loader.export_skill_to_zip("weather_export", out_zip)
+    assert ok is True
+    assert "exported skill: weather_export" in msg
+
+    with zipfile.ZipFile(out_zip) as zf:
+        manifest = json.loads(zf.read("weather_export/manifest.json").decode("utf-8"))
+    assert manifest["runtime_contract"]["intent"] == "weather"
+    assert manifest["runtime_contract"]["allowed_tools"] == ["web_fetch"]
 
 
 def test_install_skill_dry_run_does_not_write(tmp_path: Path) -> None:

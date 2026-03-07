@@ -215,6 +215,8 @@ class AgentLoop:
         )
 
         self._running = False
+        self._deferred_retry_delay_sec = 2.0
+        self._deferred_retry_tasks: set[asyncio.Task[Any]] = set()
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
@@ -781,15 +783,47 @@ class AgentLoop:
             tools=self.tools,
             trace_id=trace_id,
         )
+        explicit_approved_tools: set[str] = set()
+        if route_result.route_status == "needs_explicit_approval":
+            explicit_approved_tools, approval_reply = await self._resolve_one_shot_explicit_approval(
+                msg,
+                session,
+                route_result,
+                trace_id,
+            )
+            if approval_reply is not None:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=approval_reply,
+                    metadata=TraceContext.child_metadata(trace_id),
+                )
+            if explicit_approved_tools and route_result.contract is not None:
+                route_result = IntentRouteResult(
+                    handled=route_result.handled,
+                    intent_name=route_result.intent_name,
+                    content=route_result.content,
+                    contract=self._contract_with_one_shot_approval(
+                        route_result.contract,
+                        explicit_approved_tools,
+                    ),
+                    route_status="needs_constrained_replan",
+                    diagnostic=route_result.diagnostic,
+                    skip_planning=route_result.skip_planning,
+                )
         if route_result.route_status in {"direct_success", "direct_failed"} and route_result.content is not None:
+            direct_content = route_result.content
+            if self._should_schedule_deferred_retry(msg, route_result):
+                self._schedule_deferred_retry(msg, route_result, trace_id)
+                direct_content += "\n\n我会在后台再试一次；若成功会把结果回推到当前会话。"
             session.add_message("user", msg.content)
-            session.add_message("assistant", route_result.content)
-            await self._extract_and_store_memory(msg.content, route_result.content, trace_id)
+            session.add_message("assistant", direct_content)
+            await self._extract_and_store_memory(msg.content, direct_content, trace_id)
             self.sessions.save(session)
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content=route_result.content,
+                content=direct_content,
                 metadata=TraceContext.child_metadata(trace_id),
             )
 
@@ -841,6 +875,8 @@ class AgentLoop:
                 chat_id=msg.chat_id,
                 usage_collector=usage,
                 tool_definitions=constrained_tools,
+                approved_one_shot_tools=explicit_approved_tools,
+                active_intent_contract=route_result.contract,
             )
         finally:
             self.tools.clear_policy_scope("intent_contract")
@@ -1076,6 +1112,226 @@ class AgentLoop:
 
         response = await self._process_message(msg)
         return response.content if response else ""
+
+    async def _resolve_one_shot_explicit_approval(
+        self,
+        msg: InboundMessage,
+        session: "Session",
+        route_result: IntentRouteResult,
+        trace_id: str,
+    ) -> tuple[set[str], str | None]:
+        approval_args = self._build_one_shot_approval_args(route_result)
+        if approval_args is None:
+            return set(), "当前高风险升级请求缺少最小授权范围信息，因此不能发起一次性授权。"
+        if self.approval_gate is None:
+            return set(), "当前运行环境未启用审批网关，因此不能处理一次性高风险授权。"
+
+        approved = self.approval_gate.consume_approved(
+            session.key,
+            "intent_one_shot_approval",
+            approval_args,
+        )
+        if approved is not None:
+            requested_tools = approval_args.get("approved_tools")
+            if isinstance(requested_tools, list):
+                return {str(tool).strip().lower() for tool in requested_tools if str(tool).strip()}, None
+            return set(), None
+
+        approval = await self.approval_gate.request_approval(
+            session_id=session.key,
+            tool_name="intent_one_shot_approval",
+            tool_args=approval_args,
+            reason=self._build_one_shot_approval_reason(route_result, approval_args),
+            bus=self.bus,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+        )
+        approval_msg = approval.format_request_message()
+        if msg.channel == "cli":
+            return set(), approval_msg
+        return set(), (
+            f"{route_result.content or '当前请求需要一次性显式授权。'}\n\n"
+            f"{approval_msg}"
+        )
+
+    def _build_one_shot_approval_args(
+        self,
+        route_result: IntentRouteResult,
+    ) -> dict[str, Any] | None:
+        contract = route_result.contract
+        if contract is None or not contract.allow_high_risk_escalation:
+            return None
+        requested_tools = self._parse_one_shot_requested_tools(route_result)
+        if not requested_tools:
+            return None
+        return {
+            "intent": route_result.intent_name or contract.intent_name,
+            "approved_tools": sorted(requested_tools),
+        }
+
+    def _parse_one_shot_requested_tools(self, route_result: IntentRouteResult) -> set[str]:
+        diagnostic = str(route_result.diagnostic or "")
+        prefix = "explicit_approval:"
+        if not diagnostic.startswith(prefix):
+            return set()
+        requested_tools: set[str] = set()
+        for token in diagnostic[len(prefix) :].split(","):
+            tool_name = token.strip().lower()
+            if not tool_name or not self.tools.has(tool_name):
+                continue
+            if self.approval_gate is not None:
+                if not self.approval_gate.is_sensitive(tool_name):
+                    continue
+            elif tool_name not in {"exec", "spawn", "write_file", "edit_file"}:
+                continue
+            requested_tools.add(tool_name)
+        return requested_tools
+
+    @staticmethod
+    def _build_one_shot_approval_reason(
+        route_result: IntentRouteResult,
+        approval_args: dict[str, Any],
+    ) -> str:
+        requested_tools = approval_args.get("approved_tools") or []
+        tools_text = ", ".join(str(tool) for tool in requested_tools)
+        return (
+            f"One-shot explicit approval for intent '{route_result.intent_name or 'unknown'}' "
+            f"to temporarily allow: {tools_text}"
+        )
+
+    @staticmethod
+    def _contract_with_one_shot_approval(
+        contract: IntentToolContract,
+        approved_tools: set[str],
+    ) -> IntentToolContract:
+        allowed_tools = set(contract.allowed_tools) | set(approved_tools)
+        denied_tools = {tool for tool in contract.denied_tools if tool not in approved_tools}
+        preferred_tools = list(contract.preferred_tools)
+        for tool in sorted(approved_tools):
+            if tool not in preferred_tools:
+                preferred_tools.append(tool)
+        return IntentToolContract(
+            intent_name=contract.intent_name,
+            preferred_tools=preferred_tools,
+            allowed_tools=allowed_tools,
+            denied_tools=denied_tools,
+            allow_constrained_replan=contract.allow_constrained_replan,
+            allow_high_risk_escalation=contract.allow_high_risk_escalation,
+            response_mode=contract.response_mode,
+        )
+
+    def _should_schedule_deferred_retry(
+        self,
+        msg: InboundMessage,
+        route_result: IntentRouteResult,
+    ) -> bool:
+        if msg.channel == "cli":
+            return False
+        if route_result.route_status != "direct_failed":
+            return False
+        if route_result.intent_name not in {"weather", "exchange_rate", "fixed_site_fetch"}:
+            return False
+        diagnostic = str(route_result.diagnostic or "")
+        retryable_prefixes = (
+            "weather_sources_failed:",
+            "exchange_sources_failed:",
+            "fixed_site_failed:",
+        )
+        return diagnostic.startswith(retryable_prefixes)
+
+    def _schedule_deferred_retry(
+        self,
+        msg: InboundMessage,
+        route_result: IntentRouteResult,
+        trace_id: str,
+    ) -> None:
+        task = asyncio.create_task(self._run_deferred_retry(msg, route_result, trace_id))
+        self._deferred_retry_tasks.add(task)
+        task.add_done_callback(self._deferred_retry_tasks.discard)
+
+    async def _run_deferred_retry(
+        self,
+        msg: InboundMessage,
+        route_result: IntentRouteResult,
+        trace_id: str,
+    ) -> None:
+        try:
+            if self._deferred_retry_delay_sec > 0:
+                await asyncio.sleep(self._deferred_retry_delay_sec)
+
+            session = self.sessions.get_or_create(msg.session_key)
+            self._apply_channel_tool_policy(msg.channel)
+            self._apply_channel_role_tool_policy(msg.metadata)
+            self._apply_session_tool_policy(session.metadata)
+
+            retry_result = await self.intent_router.route(
+                msg.content,
+                tools=self.tools,
+                trace_id=trace_id,
+            )
+            if retry_result.route_status == "direct_success" and retry_result.content:
+                followup_content = self._build_deferred_retry_followup(retry_result.content)
+                await self._publish_followup_reply(
+                    msg=msg,
+                    session=session,
+                    trace_id=trace_id,
+                    content=followup_content,
+                    metadata={
+                        "deferred_retry": True,
+                        "followup_kind": "success",
+                        "intent_name": route_result.intent_name,
+                    },
+                )
+                return
+            if retry_result.route_status == "direct_failed" and retry_result.content:
+                followup_content = self._build_deferred_retry_failure_followup(retry_result.content)
+                await self._publish_followup_reply(
+                    msg=msg,
+                    session=session,
+                    trace_id=trace_id,
+                    content=followup_content,
+                    metadata={
+                        "deferred_retry": True,
+                        "followup_kind": "failed",
+                        "intent_name": route_result.intent_name,
+                    },
+                )
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(f"Deferred retry failed: {exc}")
+
+    async def _publish_followup_reply(
+        self,
+        *,
+        msg: InboundMessage,
+        session: Any,
+        trace_id: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        session.add_message("assistant", content)
+        self.sessions.save(session)
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=content,
+                metadata={
+                    **TraceContext.child_metadata(trace_id),
+                    **(metadata or {}),
+                },
+            )
+        )
+
+    @staticmethod
+    def _build_deferred_retry_followup(content: str) -> str:
+        return f"后台重试成功：{content}"
+
+    @staticmethod
+    def _build_deferred_retry_failure_followup(content: str) -> str:
+        return f"后台重试后仍未成功：{content}"
 
     def _apply_session_tool_policy(self, metadata: dict[str, Any]) -> None:
         """Apply optional session-level allow/deny lists from session metadata."""
@@ -1420,6 +1676,8 @@ class AgentLoop:
         chat_id: str = "direct",
         usage_collector: dict[str, int] | None = None,
         tool_definitions: list[dict[str, Any]] | None = None,
+        approved_one_shot_tools: set[str] | None = None,
+        active_intent_contract: IntentToolContract | None = None,
     ) -> tuple[str | None, list[dict[str, Any]]]:
         """Run execute loop with bounded reflection retries and mid-turn hot-swapping."""
         iteration = 0
@@ -1465,7 +1723,28 @@ class AgentLoop:
                     call_args = self._maybe_rewrite_tool_args(
                         tool_call.name, dict(raw_args), messages
                     )
-                    if self.approval_gate and self.approval_gate.is_sensitive(tool_call.name):
+                    contract_violation = self._evaluate_intent_contract_tool_use(
+                        active_intent_contract,
+                        tool_call.name,
+                        approved_one_shot_tools or set(),
+                    )
+                    if contract_violation is not None:
+                        result = ToolResult.failure(
+                            ToolErrorKind.PERMISSION,
+                            contract_violation,
+                            code="intent_contract_denied",
+                        )
+                        tool_results.append(result)
+                        messages = self.context.add_tool_result(
+                            messages, tool_call.id, tool_call.name, result
+                        )
+                        continue
+                    one_shot_approved = tool_call.name in (approved_one_shot_tools or set())
+                    if (
+                        self.approval_gate
+                        and self.approval_gate.is_sensitive(tool_call.name)
+                        and not one_shot_approved
+                    ):
                         session_id = session.key if session is not None else f"{channel}:{chat_id}"
                         approved = self.approval_gate.consume_approved(
                             session_id, tool_call.name, call_args
@@ -1549,6 +1828,36 @@ class AgentLoop:
                 messages.append({"role": "user", "content": reflection_prompt})
                 continue
         return final_content, messages
+
+    @staticmethod
+    def _evaluate_intent_contract_tool_use(
+        contract: IntentToolContract | None,
+        tool_name: str,
+        approved_one_shot_tools: set[str],
+    ) -> str | None:
+        if contract is None:
+            return None
+        tool = str(tool_name or "").strip().lower()
+        if not tool:
+            return None
+        if tool in contract.denied_tools and tool not in approved_one_shot_tools:
+            return (
+                f"Tool '{tool}' denied by intent contract for '{contract.intent_name}'. "
+                "This request cannot escalate through approval for that tool."
+            )
+        if tool in approved_one_shot_tools:
+            return None
+        if tool in contract.allowed_tools:
+            return None
+        if contract.allow_high_risk_escalation:
+            return (
+                f"Tool '{tool}' is outside the approved one-shot scope for intent '{contract.intent_name}'. "
+                "Only explicitly approved tools may be used."
+            )
+        return (
+            f"Tool '{tool}' is outside the allowed tool contract for intent '{contract.intent_name}'. "
+            "This request cannot escalate through approval."
+        )
 
     def _maybe_rewrite_tool_args(
         self,

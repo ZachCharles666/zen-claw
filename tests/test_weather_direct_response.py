@@ -114,6 +114,47 @@ def test_process_direct_returns_weather_without_llm(tmp_path: Path, monkeypatch)
     assert "2026-03-12 Sunny 5~12°C" in out
 
 
+def test_process_direct_returns_14_day_weather_without_llm(tmp_path: Path, monkeypatch) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FailIfCalledProvider(),
+        workspace=tmp_path,
+        model="fake-model",
+        enable_planning=False,
+    )
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop._extract_and_store_memory = AsyncMock()  # type: ignore[method-assign]
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        assert name == "web_fetch"
+        payload = {
+            "text": json.dumps(
+                {
+                    "weather": [
+                        {
+                            "date": f"2026-03-{day:02d}",
+                            "maxtempC": str(20 - (day % 5)),
+                            "mintempC": str(10 - (day % 3)),
+                            "hourly": [{"weatherDesc": [{"value": "Sunny"}]}] * 8,
+                        }
+                        for day in range(7, 21)
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        }
+        return ToolResult.success(json.dumps(payload, ensure_ascii=False))
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+
+    out = asyncio.run(loop.process_direct("告诉我成都最近14天的天气，需要给我的结果是日期+天气的样式"))
+
+    assert out.startswith("成都天气预报：")
+    assert out.count("\n") == 14
+    assert "2026-03-20 Sunny" in out
+
+
 def test_process_direct_returns_deterministic_failure_when_primary_payload_is_bad_and_fallback_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -393,3 +434,28 @@ def test_process_direct_falls_back_to_open_meteo_when_wttr_only_returns_three_da
     assert len([url for url in calls if "wttr.in" in url]) == 1
     assert len([url for url in calls if "geocoding-api.open-meteo.com" in url]) == 1
     assert len([url for url in calls if "https://api.open-meteo.com/v1/forecast" in url]) == 1
+
+
+def test_process_direct_reports_weather_limit_when_requested_days_exceed_supported_range(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FailIfCalledProvider(),
+        workspace=tmp_path,
+        model="fake-model",
+        enable_planning=True,
+    )
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop._extract_and_store_memory = AsyncMock()  # type: ignore[method-assign]
+
+    async def _fail_execute(name: str, params: dict, trace_id: str | None = None):
+        raise AssertionError("weather requests beyond supported range should fail before tool execution")
+
+    monkeypatch.setattr(loop.tools, "execute", _fail_execute)
+
+    out = asyncio.run(loop.process_direct("告诉我成都最近70天的天气，需要给我的结果是日期+天气的样式"))
+
+    assert "最多支持未来16天天气预报" in out
+    assert "暂时无法直接提供成都最近70天的天气" in out

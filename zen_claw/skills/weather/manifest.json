@@ -5,6 +5,35 @@
   "permissions": [
     "web_fetch"
   ],
+  "runtime_contract": {
+    "intent": "weather",
+    "intent_mode": "router_first",
+    "preferred_tools": [
+      "web_fetch"
+    ],
+    "allowed_tools": [
+      "web_fetch"
+    ],
+    "denied_tools": [
+      "exec",
+      "spawn",
+      "write_file",
+      "edit_file"
+    ],
+    "allow_constrained_replan": true,
+    "allow_high_risk_escalation": false,
+    "response_mode": "direct",
+    "failure_mode": "runtime_direct",
+    "fact_payload_schema": {
+      "type": "object",
+      "fields": [
+        "location",
+        "requested_days",
+        "max_supported_days",
+        "reason"
+      ]
+    }
+  },
   "scopes": [
     "network"
   ]

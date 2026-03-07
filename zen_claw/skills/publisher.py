@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from zen_claw.agent.skills import SkillsLoader
+
 _REQUIRED_MANIFEST_KEYS = {"name", "version", "description", "author", "entry", "permissions"}
 
 
@@ -42,6 +44,18 @@ class SkillsPublisher:
             manifest = self._load_manifest(manifest_path)
         except (FileNotFoundError, ValueError) as exc:
             return PublishResult(ok=False, skill_name=skill_name, error=str(exc))
+        validator = SkillsLoader(self._workspace)
+        valid_manifest, manifest_errors = validator._validate_manifest_file(
+            manifest_path,
+            skill_name,
+            strict=True,
+        )
+        if not valid_manifest:
+            return PublishResult(
+                ok=False,
+                skill_name=skill_name,
+                error="Manifest validation failed: " + "; ".join(manifest_errors),
+            )
         if self._require_integrity:
             ok, err = self._check_integrity(skill_dir)
             if not ok:
@@ -130,7 +144,7 @@ class SkillsPublisher:
     def _make_catalog_entry(
         manifest: dict[str, Any], zip_filename: str, sha256_hex: str
     ) -> dict[str, Any]:
-        return {
+        catalog = {
             "name": str(manifest.get("name", "")),
             "version": str(manifest.get("version", "")),
             "description": str(manifest.get("description", "")),
@@ -143,3 +157,7 @@ class SkillsPublisher:
             "enforce_ready": bool(manifest.get("enforce_ready", False)),
             "size_bytes": 0,
         }
+        runtime_contract = manifest.get("runtime_contract")
+        if isinstance(runtime_contract, dict):
+            catalog["runtime_contract"] = runtime_contract
+        return catalog

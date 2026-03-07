@@ -205,7 +205,7 @@ def _make_skill_dir(workspace: Path, name: str, manifest: dict | None = None) ->
         "description": f"Test skill {name}",
         "author": "test-author",
         "entry": "tools/main.py",
-        "permissions": ["fs.read"],
+        "permissions": ["read_file"],
         "tags": ["test"],
     }
     (skill_dir / "manifest.json").write_text(json.dumps(m), encoding="utf-8")
@@ -268,6 +268,61 @@ def test_publisher_success_without_integrity(tmp_path: Path):
     assert catalog["version"] == "1.0.0"
     assert catalog["sha256"] == result.sha256
     assert "download_url" in catalog
+
+
+def test_publisher_catalog_preserves_runtime_contract(tmp_path: Path):
+    _make_skill_dir(
+        tmp_path,
+        "weather-tool",
+        {
+            "name": "weather-tool",
+            "version": "1.0.0",
+            "description": "Weather tool",
+            "author": "test-author",
+            "entry": "tools/main.py",
+            "permissions": ["web_fetch"],
+            "runtime_contract": {
+                "intent": "weather",
+                "intent_mode": "router_first",
+                "preferred_tools": ["web_fetch"],
+                "allowed_tools": ["web_fetch"],
+                "failure_mode": "runtime_direct",
+            },
+        },
+    )
+    pub = SkillsPublisher(workspace=tmp_path, output_dir=tmp_path / "dist", require_integrity=False)
+    result = pub.publish("weather-tool")
+
+    assert result.ok is True, result.error
+    catalog = json.loads(Path(result.catalog_entry_path).read_text(encoding="utf-8"))
+    assert catalog["runtime_contract"]["intent"] == "weather"
+    assert catalog["runtime_contract"]["allowed_tools"] == ["web_fetch"]
+
+
+def test_publisher_rejects_invalid_runtime_contract_manifest(tmp_path: Path):
+    _make_skill_dir(
+        tmp_path,
+        "bad-weather",
+        {
+            "name": "bad-weather",
+            "version": "1.0.0",
+            "description": "Bad weather tool",
+            "author": "test-author",
+            "entry": "tools/main.py",
+            "permissions": ["read_file"],
+            "runtime_contract": {
+                "intent": "weather",
+                "preferred_tools": ["web_fetch"],
+                "allowed_tools": ["web_fetch"],
+            },
+        },
+    )
+    pub = SkillsPublisher(workspace=tmp_path, require_integrity=False)
+    result = pub.publish("bad-weather")
+
+    assert result.ok is False
+    assert "Manifest validation failed" in result.error
+    assert "allowed_tools must be a subset" in result.error
 
 
 def test_publisher_integrity_check_fails_when_file_tampered(tmp_path: Path):

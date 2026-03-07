@@ -17,6 +17,7 @@ from typing import Any
 
 from loguru import logger
 
+from zen_claw.agent.intent_router import IntentToolContract
 from zen_claw.errors import AgentMidTurnReloadException
 from zen_claw.skills.registry import RegistryEntry, SkillsRegistry, TrustedTime
 from zen_claw.utils.crypto import sign_data, verify_signature
@@ -36,6 +37,8 @@ class SkillsLoader:
     _install_mutex = (
         asyncio.Lock()
     )  # Global cross-instance lock placeholder (real would use Redis/DB)
+    _router_first_safe_tools = {"web_fetch", "message"}
+    _high_risk_tools = {"exec", "spawn", "write_file", "edit_file"}
 
     def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
         self.workspace = workspace
@@ -240,6 +243,7 @@ class SkillsLoader:
         if "trust" in manifest:
             errors.extend(self._validate_trust(manifest["trust"]))
         errors.extend(self._validate_scope_permission_alignment(manifest))
+        errors.extend(self._validate_runtime_contract(manifest))
 
         return len(errors) == 0, errors
 
@@ -345,6 +349,84 @@ class SkillsLoader:
         if not isinstance(data, dict):
             return None, ["manifest root must be object"]
         return data, []
+
+    def get_skill_runtime_contract(self, name: str) -> tuple[IntentToolContract | None, list[str]]:
+        """Load and validate runtime contract metadata from a skill manifest."""
+        manifest, errors = self.get_skill_manifest(name)
+        if errors:
+            return None, errors
+        return self.get_runtime_contract_from_manifest(manifest)
+
+    def classify_skill_intent_mode(self, name: str) -> tuple[str | None, list[str]]:
+        """Classify a skill as router_first / skill_first / hybrid from manifest metadata."""
+        manifest, errors = self.get_skill_manifest(name)
+        if errors:
+            return None, errors
+        return self.classify_runtime_contract_intent_mode(manifest)
+
+    def classify_runtime_contract_intent_mode(
+        self,
+        manifest: dict | None,
+    ) -> tuple[str | None, list[str]]:
+        """Infer intent_mode when the tooling pipeline needs a stable classification."""
+        if not isinstance(manifest, dict):
+            return None, ["manifest root must be object"]
+        payload = manifest.get("runtime_contract")
+        if payload is None:
+            return None, []
+        if not isinstance(payload, dict):
+            return None, ["runtime_contract must be object"]
+
+        explicit_mode = str(payload.get("intent_mode") or "").strip().lower()
+        if explicit_mode in {"router_first", "skill_first", "hybrid"}:
+            return explicit_mode, []
+
+        contract, errors = self.get_runtime_contract_from_manifest(manifest)
+        if errors:
+            return None, errors
+        if contract is None:
+            return "skill_first", []
+
+        allowed_tools = set(contract.allowed_tools)
+        if not allowed_tools:
+            return "skill_first", []
+        if bool(payload.get("allow_high_risk_escalation")):
+            return "skill_first", []
+        if allowed_tools & self._high_risk_tools:
+            return "skill_first", []
+
+        response_mode = str(payload.get("response_mode") or contract.response_mode).strip().lower()
+        if (
+            response_mode == "direct"
+            and allowed_tools.issubset(self._router_first_safe_tools)
+            and len(contract.preferred_tools) <= 2
+        ):
+            return "router_first", []
+        return "hybrid", []
+
+    @staticmethod
+    def get_runtime_contract_from_manifest(
+        manifest: dict | None,
+    ) -> tuple[IntentToolContract | None, list[str]]:
+        """Build a runtime contract from manifest metadata if present."""
+        if not isinstance(manifest, dict):
+            return None, ["manifest root must be object"]
+        payload = manifest.get("runtime_contract")
+        if payload is None:
+            return None, []
+        if not isinstance(payload, dict):
+            return None, ["runtime_contract must be object"]
+        contract = IntentToolContract.from_payload(payload)
+        if contract is None:
+            return None, ["runtime_contract invalid"]
+        permissions = manifest.get("permissions")
+        if isinstance(permissions, list):
+            permission_set = {
+                str(item).strip().lower() for item in permissions if str(item).strip()
+            }
+            if not contract.allowed_tools.issubset(permission_set):
+                return None, ["runtime_contract allowed_tools must be a subset of manifest permissions"]
+        return contract, []
 
     def load_skill(self, name: str, pin_dir: str | None = None) -> str | None:
         """
@@ -724,6 +806,60 @@ class SkillsLoader:
             if not ok:
                 return False, "; ".join(errors)
 
+        return self._install_skill_tree(
+            src,
+            skill_name=skill_name,
+            overwrite=overwrite,
+            dry_run=dry_run,
+        )
+
+    def install_and_sanitize_skill_from_dir(
+        self,
+        source_dir: Path,
+        name: str | None = None,
+        overwrite: bool = False,
+        require_manifest: bool = True,
+        dry_run: bool = False,
+    ) -> tuple[bool, str]:
+        """Install a local skill only after sandbox sanitization and revalidation."""
+        src = source_dir.resolve()
+        if not src.exists() or not src.is_dir():
+            return False, f"source directory not found: {source_dir}"
+        if not self._is_install_source_allowed(src):
+            return False, f"source path not allowed by install allowlist: {src}"
+
+        skill_name = name.strip() if isinstance(name, str) and name.strip() else src.name
+        if not self._is_valid_skill_name(skill_name):
+            return False, f"invalid skill name: {skill_name}"
+
+        with tempfile.TemporaryDirectory(prefix="zen-claw-skill-sanitize-") as tmp:
+            sandbox_root = Path(tmp) / skill_name
+            try:
+                shutil.copytree(src, sandbox_root)
+            except Exception as exc:
+                return False, f"sanitize staging failed: {exc}"
+            ok, msg = self._sanitize_skill_dir(
+                sandbox_root,
+                skill_name=skill_name,
+                require_manifest=require_manifest,
+            )
+            if not ok:
+                return False, msg
+            return self._install_skill_tree(
+                sandbox_root,
+                skill_name=skill_name,
+                overwrite=overwrite,
+                dry_run=dry_run,
+            )
+
+    def _install_skill_tree(
+        self,
+        src: Path,
+        skill_name: str,
+        overwrite: bool = False,
+        dry_run: bool = False,
+    ) -> tuple[bool, str]:
+        """Copy a validated skill tree into the workspace."""
         dst = self.workspace_skills / skill_name
         # Optional versioned install layout (disabled by default for compatibility).
         manifest, _ = self.get_skill_manifest_from_path(src)
@@ -806,6 +942,53 @@ class SkillsLoader:
                 dry_run=dry_run,
             )
 
+    def install_and_sanitize_skill_from_zip(
+        self,
+        zip_path: Path,
+        name: str | None = None,
+        overwrite: bool = False,
+        require_manifest: bool = True,
+        dry_run: bool = False,
+    ) -> tuple[bool, str]:
+        """Install a skill from zip only after sandbox sanitization and revalidation."""
+        src = zip_path.resolve()
+        if not src.exists() or not src.is_file():
+            return False, f"zip file not found: {zip_path}"
+        if src.suffix.lower() != ".zip":
+            return False, "source file must be .zip"
+        if not self._is_install_source_allowed(src):
+            return False, f"source path not allowed by install allowlist: {src}"
+
+        with tempfile.TemporaryDirectory(prefix="zen-claw-skill-zip-") as tmp:
+            tmpdir = Path(tmp)
+            try:
+                with zipfile.ZipFile(src, "r") as zf:
+                    ok, err = self._safe_extract_zip(zf, tmpdir)
+                    if not ok:
+                        return False, err
+            except zipfile.BadZipFile:
+                return False, "invalid zip archive"
+
+            candidates = []
+            for p in tmpdir.rglob("SKILL.md"):
+                if p.is_file():
+                    candidates.append(p.parent)
+            if not candidates:
+                return False, "zip archive must contain SKILL.md"
+            unique_candidates = sorted(
+                {str(p.resolve()): p for p in candidates}.values(), key=lambda p: len(p.parts)
+            )
+            if len(unique_candidates) != 1:
+                return False, "zip archive must contain exactly one skill directory"
+            skill_dir = unique_candidates[0]
+            return self.install_and_sanitize_skill_from_dir(
+                skill_dir,
+                name=name,
+                overwrite=overwrite,
+                require_manifest=require_manifest,
+                dry_run=dry_run,
+            )
+
     def _safe_extract_zip(self, zf: zipfile.ZipFile, target_dir: Path) -> tuple[bool, str]:
         """Extract zip entries safely to avoid path traversal, bombs, and homoglyph attacks."""
         base = target_dir.resolve()
@@ -856,6 +1039,132 @@ class SkillsLoader:
         if not dst.is_relative_to(base):
             return False, f"invalid zip entry path: {info.filename}", None
         return True, "", dst
+
+    def _sanitize_skill_dir(
+        self,
+        skill_dir: Path,
+        skill_name: str,
+        require_manifest: bool = True,
+    ) -> tuple[bool, str]:
+        """Rewrite a staged skill into a safer, runtime-consumable form."""
+        if not skill_dir.exists() or not skill_dir.is_dir():
+            return False, f"source directory not found: {skill_dir}"
+        if self._contains_symlink(skill_dir):
+            return False, "source skill directory must not contain symlinks"
+
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.exists():
+            return False, "source skill directory must contain SKILL.md"
+
+        manifest_path = skill_dir / "manifest.json"
+        if require_manifest and not manifest_path.exists():
+            return False, "manifest.json missing (required by strict mode)"
+        if not manifest_path.exists():
+            return True, "sanitized skill without manifest"
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return False, f"manifest json invalid: {str(exc)}"
+        if not isinstance(manifest, dict):
+            return False, "manifest root must be object"
+
+        sanitized_manifest = self._sanitize_skill_manifest(manifest, skill_name)
+        ok, errors = self._validate_manifest_file(
+            manifest_path=self._write_sanitized_manifest(manifest_path, sanitized_manifest),
+            skill_name=skill_name,
+            strict=require_manifest,
+        )
+        if not ok:
+            return False, "; ".join(errors)
+
+        skill_md.write_text(
+            self._sanitize_skill_markdown(skill_md.read_text(encoding="utf-8")),
+            encoding="utf-8",
+        )
+        return True, f"sanitized skill: {skill_name}"
+
+    def _write_sanitized_manifest(self, manifest_path: Path, manifest: dict) -> Path:
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        return manifest_path
+
+    def _sanitize_skill_manifest(self, manifest: dict, skill_name: str) -> dict:
+        """Repair manifest fields so sanitized output becomes installable and constrained."""
+        sanitized = dict(manifest)
+        sanitized["name"] = skill_name
+        sanitized["trust"] = "untrusted"
+
+        contract_payload = sanitized.get("runtime_contract")
+        if isinstance(contract_payload, dict):
+            allowed_tools = contract_payload.get("allowed_tools")
+            if isinstance(allowed_tools, list):
+                normalized_allowed = [
+                    str(item).strip().lower() for item in allowed_tools if str(item).strip()
+                ]
+                if normalized_allowed:
+                    unique_allowed = list(dict.fromkeys(normalized_allowed))
+                    sanitized["permissions"] = unique_allowed
+                    if "scopes" in sanitized:
+                        sanitized["scopes"] = self._scopes_for_permissions(unique_allowed)
+                    preferred_tools = contract_payload.get("preferred_tools")
+                    if isinstance(preferred_tools, list):
+                        contract_payload["preferred_tools"] = [
+                            tool
+                            for tool in preferred_tools
+                            if str(tool).strip().lower() in set(unique_allowed)
+                        ]
+                    contract_payload["allowed_tools"] = unique_allowed
+            intent_mode, errors = self.classify_runtime_contract_intent_mode(sanitized)
+            if not errors and intent_mode:
+                contract_payload["intent_mode"] = intent_mode
+            sanitized["runtime_contract"] = contract_payload
+
+        return sanitized
+
+    def _sanitize_skill_markdown(self, content: str) -> str:
+        """Drop raw shell/network execution guidance from staged SKILL.md content."""
+        sanitized_lines: list[str] = []
+        scrubbed_any = False
+        for line in content.splitlines():
+            lowered = line.lower()
+            if "curl" in lowered or re.search(r"\b(exec|spawn)\b", lowered):
+                scrubbed_any = True
+                continue
+            sanitized_lines.append(line)
+        if scrubbed_any:
+            sanitized_lines.append("")
+            sanitized_lines.append("> Sanitized for zero-trust runtime: use native tools only.")
+        return "\n".join(sanitized_lines).rstrip() + "\n"
+
+    def _scopes_for_permissions(self, permissions: list[str]) -> list[str]:
+        permission_to_scope = {
+            "web_search": "network",
+            "web_fetch": "network",
+            "read_file": "filesystem",
+            "write_file": "filesystem",
+            "edit_file": "filesystem",
+            "list_dir": "filesystem",
+            "exec": "exec",
+            "spawn": "exec",
+            "message": "message",
+            "cron": "cron",
+            "sessions_spawn": "sessions",
+            "sessions_list": "sessions",
+            "sessions_kill": "sessions",
+            "sessions_read": "sessions",
+            "sessions_write": "sessions",
+            "sessions_signal": "sessions",
+            "sessions_resize": "sessions",
+        }
+        scopes: list[str] = []
+        for permission in permissions:
+            scope = permission_to_scope.get(permission)
+            if scope and scope not in scopes:
+                scopes.append(scope)
+        return scopes
 
     def uninstall_skill(self, name: str) -> tuple[bool, str]:
         """Uninstall a workspace skill (built-in skills cannot be removed)."""
@@ -1275,7 +1584,90 @@ class SkillsLoader:
         if "trust" in manifest:
             errors.extend(self._validate_trust(manifest["trust"]))
         errors.extend(self._validate_scope_permission_alignment(manifest))
+        errors.extend(self._validate_runtime_contract(manifest))
         return len(errors) == 0, errors
+
+    def _validate_runtime_contract(self, manifest: dict) -> list[str]:
+        """Validate optional runtime_contract metadata in skill manifest."""
+        payload = manifest.get("runtime_contract")
+        if payload is None:
+            return []
+        if not isinstance(payload, dict):
+            return ["runtime_contract must be object"]
+
+        errors: list[str] = []
+        intent = payload.get("intent")
+        if not isinstance(intent, str) or not intent.strip():
+            errors.append("runtime_contract.intent must be non-empty string")
+
+        intent_mode = payload.get("intent_mode")
+        if intent_mode is not None:
+            if not isinstance(intent_mode, str) or intent_mode.strip().lower() not in {
+                "router_first",
+                "skill_first",
+                "hybrid",
+            }:
+                errors.append(
+                    "runtime_contract.intent_mode must be one of ['router_first', 'skill_first', 'hybrid']"
+                )
+
+        response_mode = payload.get("response_mode")
+        if response_mode is not None:
+            if not isinstance(response_mode, str) or response_mode.strip().lower() not in {
+                "direct",
+                "llm_assisted",
+            }:
+                errors.append(
+                    "runtime_contract.response_mode must be one of ['direct', 'llm_assisted']"
+                )
+
+        failure_mode = payload.get("failure_mode")
+        if failure_mode is not None:
+            if not isinstance(failure_mode, str) or failure_mode.strip().lower() not in {
+                "runtime_direct",
+                "runtime_fact_llm_format",
+            }:
+                errors.append(
+                    "runtime_contract.failure_mode must be one of ['runtime_direct', 'runtime_fact_llm_format']"
+                )
+
+        for field in ("preferred_tools", "allowed_tools", "denied_tools"):
+            value = payload.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                errors.append(f"runtime_contract.{field} must be list[str]")
+                continue
+            normalized = [item.strip().lower() for item in value]
+            if any(not item for item in normalized):
+                errors.append(f"runtime_contract.{field} entries must be non-empty strings")
+            invalid = sorted({item for item in normalized if item and item not in self._allowed_permissions})
+            if invalid:
+                errors.append(f"runtime_contract.{field} contains unknown tools: {invalid}")
+
+        allowed_tools = payload.get("allowed_tools")
+        if isinstance(allowed_tools, list) and all(isinstance(item, str) for item in allowed_tools):
+            allowed_set = {item.strip().lower() for item in allowed_tools if item.strip()}
+            preferred_tools = payload.get("preferred_tools")
+            if isinstance(preferred_tools, list) and all(isinstance(item, str) for item in preferred_tools):
+                preferred_set = {item.strip().lower() for item in preferred_tools if item.strip()}
+                if not preferred_set.issubset(allowed_set):
+                    errors.append(
+                        "runtime_contract.preferred_tools must be a subset of runtime_contract.allowed_tools"
+                    )
+            permissions = manifest.get("permissions")
+            if isinstance(permissions, list) and all(isinstance(item, str) for item in permissions):
+                permission_set = {item.strip().lower() for item in permissions if item.strip()}
+                if not allowed_set.issubset(permission_set):
+                    errors.append(
+                        "runtime_contract.allowed_tools must be a subset of manifest permissions"
+                    )
+
+        fact_payload_schema = payload.get("fact_payload_schema")
+        if fact_payload_schema is not None and not isinstance(fact_payload_schema, dict):
+            errors.append("runtime_contract.fact_payload_schema must be object")
+
+        return errors
 
     def _validate_permissions(self, permissions: object) -> list[str]:
         """Validate permissions field in skill manifest."""
