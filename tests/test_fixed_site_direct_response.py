@@ -84,6 +84,13 @@ def test_process_direct_falls_back_to_secondary_wikipedia_site(tmp_path: Path, m
         ):
             payload = {"query": {"pages": [{"title": "Alan Turing"}]}}
             return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
+        if (
+            params["url"]
+            == "https://en.wikipedia.org/w/api.php?action=query&list=search&srwhat=text&srlimit=1"
+            "&format=json&formatversion=2&srsearch=Alan%20Turing"
+        ):
+            payload = {"query": {"search": [{"title": "Alan Turing"}]}}
+            return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
         if params["url"] == "https://zh.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing":
             payload = {
                 "title": "Alan Turing",
@@ -101,6 +108,7 @@ def test_process_direct_falls_back_to_secondary_wikipedia_site(tmp_path: Path, m
     assert calls == [
         "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing",
         "https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&redirects=1&format=json&formatversion=2&titles=Alan%20Turing",
+        "https://en.wikipedia.org/w/api.php?action=query&list=search&srwhat=text&srlimit=1&format=json&formatversion=2&srsearch=Alan%20Turing",
         "https://zh.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing",
     ]
 
@@ -126,7 +134,7 @@ def test_process_direct_returns_deterministic_failure_when_wikipedia_sources_fai
 
     assert "暂时无法从维基百科获取“Alan Turing”的摘要" in out
     assert "不是权限或审批问题" in out
-    assert calls["count"] == 8
+    assert calls["count"] == 12
 
 
 def test_process_direct_falls_back_to_wikipedia_query_api_when_summary_endpoint_fails(
@@ -172,4 +180,51 @@ def test_process_direct_falls_back_to_wikipedia_query_api_when_summary_endpoint_
         "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing",
         "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing",
         "https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&redirects=1&format=json&formatversion=2&titles=Alan%20Turing",
+    ]
+
+
+def test_process_direct_falls_back_to_wikipedia_search_then_summary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = _make_loop(tmp_path)
+    calls: list[str] = []
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        assert name == "web_fetch"
+        url = params["url"]
+        calls.append(url)
+        if url == "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Mathison%20Turring":
+            return ToolResult.success(json.dumps({"text": json.dumps({"title": "Alan Mathison Turring"})}))
+        if (
+            url
+            == "https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1"
+            "&explaintext=1&redirects=1&format=json&formatversion=2&titles=Alan%20Mathison%20Turring"
+        ):
+            return ToolResult.success(json.dumps({"text": json.dumps({"query": {"pages": [{"title": "Alan Mathison Turring"}]}})}))
+        if (
+            url
+            == "https://en.wikipedia.org/w/api.php?action=query&list=search&srwhat=text&srlimit=1"
+            "&format=json&formatversion=2&srsearch=Alan%20Mathison%20Turring"
+        ):
+            payload = {"query": {"search": [{"title": "Alan Turing"}]}}
+            return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
+        if url == "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing":
+            payload = {
+                "title": "Alan Turing",
+                "extract": "Alan Turing was a British mathematician and computing pioneer.",
+            }
+            return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+
+    out = asyncio.run(loop.process_direct("wiki Alan Mathison Turring"))
+
+    assert out.startswith("维基百科英文摘要（Alan Turing）：")
+    assert "computing pioneer" in out
+    assert calls == [
+        "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Mathison%20Turring",
+        "https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&redirects=1&format=json&formatversion=2&titles=Alan%20Mathison%20Turring",
+        "https://en.wikipedia.org/w/api.php?action=query&list=search&srwhat=text&srlimit=1&format=json&formatversion=2&srsearch=Alan%20Mathison%20Turring",
+        "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing",
     ]

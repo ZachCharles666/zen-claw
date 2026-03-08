@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -455,9 +456,70 @@ def test_process_direct_reports_weather_limit_when_requested_days_exceed_support
 
     monkeypatch.setattr(loop.tools, "execute", _fail_execute)
 
-    out = asyncio.run(loop.process_direct("告诉我成都最近70天的天气，需要给我的结果是日期+天气的样式"))
+    out = asyncio.run(loop.process_direct("告诉我成都未来70天的天气，需要给我的结果是日期+天气的样式"))
 
     assert "最多支持未来16天天气预报" in out
-    assert "暂时无法直接提供成都最近70天的天气" in out
-    assert "先给你最近16天的真实天气" in out
+    assert "暂时无法直接提供成都最近70天的天气" in out or "暂时无法直接提供成都未来70天的天气" in out
+    assert "当前卡点不是权限或审批问题" in out
+    assert "缺的是超过16天的可信长周期天气数据" in out
+    assert "先返回成都最近16天的真实天气" in out
     assert "标注为估算的70天天气趋势版" in out
+
+
+def test_process_direct_routes_recent_long_range_weather_to_history_archive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FailIfCalledProvider(),
+        workspace=tmp_path,
+        model="fake-model",
+        enable_planning=True,
+    )
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop._extract_and_store_memory = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 8, 12, 0, 0, tzinfo=UTC)),
+    )
+
+    calls: list[str] = []
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        assert name == "web_fetch"
+        url = params["url"]
+        calls.append(url)
+        if "geocoding-api.open-meteo.com" in url:
+            payload = {
+                "results": [
+                    {
+                        "name": "成都市",
+                        "latitude": 30.66667,
+                        "longitude": 104.06667,
+                        "timezone": "Asia/Shanghai",
+                    }
+                ]
+            }
+            return ToolResult.success(json.dumps({"text": json.dumps(payload, ensure_ascii=False)}))
+        if "archive-api.open-meteo.com" in url:
+            payload = {
+                "daily": {
+                    "time": ["2026-01-29", "2026-01-30", "2026-01-31"],
+                    "weather_code": [1, 63, 3],
+                    "temperature_2m_max": [18.0, 16.0, 14.0],
+                    "temperature_2m_min": [10.0, 9.0, 8.0],
+                }
+            }
+            return ToolResult.success(json.dumps({"text": json.dumps(payload, ensure_ascii=False)}))
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+
+    out = asyncio.run(loop.process_direct("告诉我成都最近70天的天气，需要给我的结果是日期+天气的样式"))
+
+    assert out.startswith("成都最近70天天气记录：")
+    assert "2026-01-29 大部晴朗 10~18°C" in out
+    assert "2026-01-30 中雨 9~16°C" in out
+    assert any("archive-api.open-meteo.com" in url for url in calls)

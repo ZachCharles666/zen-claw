@@ -121,6 +121,61 @@ def test_process_direct_accepts_english_city_alias_without_llm(
     assert "2026-03-07 07:00:00 EST" in out
 
 
+def test_process_direct_fuzzy_matches_slightly_misspelled_english_city_alias(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 7, 12, 0, 0, tzinfo=UTC)),
+    )
+
+    out = asyncio.run(loop.process_direct("time in Nwe York"))
+
+    assert out.startswith("Nwe York当前时间：")
+    assert "2026-03-07 07:00:00 EST" in out
+
+
+def test_process_direct_falls_back_when_zoneinfo_database_is_unavailable_for_new_york(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 8, 10, 0, 0, tzinfo=UTC)),
+    )
+    def _raise_zoneinfo(*_args, **_kwargs):
+        raise Exception("no tzdata")
+
+    monkeypatch.setattr("zen_claw.agent.intent_router.ZoneInfo", _raise_zoneinfo)
+
+    out = asyncio.run(loop.process_direct("请告诉我纽约现在几点"))
+
+    assert out.startswith("纽约当前时间：")
+    assert "2026-03-08 06:00:00 EDT" in out
+
+
+def test_process_direct_falls_back_when_zoneinfo_database_is_unavailable_for_tokyo(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 7, 12, 0, 0, tzinfo=UTC)),
+    )
+    def _raise_zoneinfo(*_args, **_kwargs):
+        raise Exception("no tzdata")
+
+    monkeypatch.setattr("zen_claw.agent.intent_router.ZoneInfo", _raise_zoneinfo)
+
+    out = asyncio.run(loop.process_direct("请告诉我东京现在日期"))
+
+    assert out == "东京当前日期：2026-03-07"
+
+
 def test_process_direct_returns_deterministic_failure_for_unknown_timezone(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -134,5 +189,7 @@ def test_process_direct_returns_deterministic_failure_for_unknown_timezone(
     out = asyncio.run(loop.process_direct("请告诉我火星基地现在几点"))
 
     assert "暂时无法识别" in out
-    assert "不是权限或审批问题" in out
+    assert "当前卡点不是权限或审批问题" in out
     assert "火星基地" in out
+    assert "缺的是可确认的城市、地区或标准时区名" in out
+    assert "America/New_York" in out

@@ -108,4 +108,42 @@ def test_process_direct_returns_deterministic_failure_when_exchange_sources_fail
 
     assert "暂时无法获取USD->CNY的汇率数据" in out
     assert "不是权限或审批问题" in out
-    assert calls["count"] == 4
+    assert calls["count"] == 6
+
+
+def test_process_direct_falls_back_to_reverse_frankfurter_rate(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = _make_loop(tmp_path)
+    calls: list[str] = []
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        assert name == "web_fetch"
+        url = params["url"]
+        calls.append(url)
+        if "open.er-api.com" in url:
+            return ToolResult.failure(
+                kind=ToolErrorKind.RETRYABLE,
+                message="timed out",
+                code="web_fetch_timeout",
+            )
+        if url == "https://api.frankfurter.app/latest?from=USD&to=CNY":
+            payload = {"amount": 1.0, "base": "USD", "rates": {}}
+            return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
+        if url == "https://api.frankfurter.app/latest?from=CNY&to=USD":
+            payload = {"amount": 1.0, "base": "CNY", "rates": {"USD": 0.1388888889}}
+            return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+
+    out = asyncio.run(loop.process_direct("100美元兑换人民币汇率是多少"))
+
+    assert out.startswith("100美元 ≈ 720人民币。")
+    assert "1 USD = 7.2 CNY" in out
+    assert calls == [
+        "https://open.er-api.com/v6/latest/USD",
+        "https://open.er-api.com/v6/latest/USD",
+        "https://api.frankfurter.app/latest?from=USD&to=CNY",
+        "https://api.frankfurter.app/latest?from=CNY&to=USD",
+    ]
