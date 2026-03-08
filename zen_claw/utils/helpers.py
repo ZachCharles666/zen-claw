@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
-from tempfile import gettempdir
+from tempfile import NamedTemporaryFile, gettempdir
 
 
 def ensure_dir(path: Path) -> Path:
@@ -50,12 +50,23 @@ def get_sessions_path(workspace: Path | None = None) -> Path:
             continue
         seen.add(candidate)
         try:
-            return ensure_dir(candidate)
+            ensured = ensure_dir(candidate)
+            if _is_writable_dir(ensured):
+                return ensured
         except Exception as exc:
             last_error = exc
     if last_error is not None:
         raise last_error
     raise RuntimeError("failed to resolve sessions directory")
+
+
+def _is_writable_dir(path: Path) -> bool:
+    """Return whether a directory accepts file creation and deletion."""
+    try:
+        with NamedTemporaryFile(dir=path, prefix=".zen-claw-write-", delete=True):
+            return True
+    except Exception:
+        return False
 
 
 def get_memory_path(workspace: Path | None = None) -> Path:

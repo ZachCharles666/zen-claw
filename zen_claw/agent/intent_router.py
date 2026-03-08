@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from calendar import SUNDAY, monthrange
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
+from difflib import get_close_matches
 from typing import Any, Literal
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -120,6 +122,17 @@ class RetryPolicy:
     max_attempts: int = 2
 
 
+@dataclass(frozen=True)
+class RecoveryGuidance:
+    """Structured guidance for deterministic-but-helpful direct failures."""
+
+    blocker: str
+    missing_requirement: str
+    checked_scope: list[str]
+    next_steps: list[str]
+    fallback_options: list[str]
+
+
 class IntentRouter:
     """Handle a narrow set of deterministic, low-risk intents before LLM planning."""
 
@@ -223,6 +236,14 @@ class IntentRouter:
         "singapore": "Asia/Singapore",
         "hong kong": "Asia/Hong_Kong",
         "seoul": "Asia/Seoul",
+    }
+    _FALLBACK_FIXED_TIMEZONES = {
+        "UTC": (0, "UTC"),
+        "Asia/Shanghai": (8, "CST"),
+        "Asia/Tokyo": (9, "JST"),
+        "Asia/Seoul": (9, "KST"),
+        "Asia/Singapore": (8, "SGT"),
+        "Asia/Hong_Kong": (8, "HKT"),
     }
     _WEATHER_CONTRACT = IntentToolContract(
         intent_name="weather",
@@ -378,14 +399,46 @@ class IntentRouter:
         label = request.get("label") or ""
 
         if zone_key:
+            candidate = self._resolve_timezone_candidate(zone_key)
             zone = self._resolve_timezone(zone_key)
+            if zone is None and candidate is not None:
+                fallback_now = self._fallback_now_in_timezone(self._utc_now(), candidate)
+                if fallback_now is not None:
+                    return IntentRouteResult(
+                        handled=True,
+                        intent_name="time",
+                        content=self._format_time_response(
+                            mode=mode,
+                            now=fallback_now,
+                            label=label or candidate,
+                        ),
+                        contract=self._TIME_CONTRACT,
+                        route_status="direct_success",
+                    )
             if zone is None:
                 display = label or zone_key
                 return self._direct_failed(
                     intent_name="time",
-                    content=(
-                        f"暂时无法识别“{display}”对应的时区，因此不能直接给出时间结果。"
-                        "这不是权限或审批问题，请改用明确城市或标准时区名再试一次。"
+                    content=self._build_recovery_guidance_message(
+                        summary=(
+                            f"暂时无法识别“{display}”对应的时区，因此不能直接给出时间结果。"
+                        ),
+                        guidance=RecoveryGuidance(
+                            blocker="时区映射无法确认",
+                            missing_requirement="可确认的城市、地区或标准时区名",
+                            checked_scope=[
+                                "当前直达时间路由已尝试按内置城市别名解析",
+                                "当前直达时间路由已尝试按标准时区名解析",
+                            ],
+                            next_steps=[
+                                "你可以直接给我标准时区名，例如 America/New_York",
+                                "你也可以换成更明确的城市表达，例如纽约市、东京时间",
+                            ],
+                            fallback_options=[
+                                "如果你只想知道现在几点，我也可以先告诉你当前时区时间",
+                                "如果你补充国家或城市全名，我可以继续帮你判断",
+                            ],
+                        ),
                     ),
                     contract=self._TIME_CONTRACT,
                     diagnostic=f"timezone_unrecognized:{display}",
@@ -460,6 +513,21 @@ class IntentRouter:
         trace_id: str,
     ) -> IntentRouteResult:
         days = self._extract_weather_days(content)
+        if days > self._MAX_FORECAST_DAYS and self._should_route_recent_weather_to_history(content):
+            history_lines = await self._fetch_open_meteo_historical_weather_lines(
+                location=location,
+                days=days,
+                tools=tools,
+                trace_id=trace_id,
+            )
+            if history_lines:
+                return IntentRouteResult(
+                    handled=True,
+                    intent_name="weather",
+                    content=f"{location}最近{days}天天气记录：\n" + "\n".join(history_lines),
+                    contract=self._WEATHER_CONTRACT,
+                    route_status="direct_success",
+                )
         if days > self._MAX_FORECAST_DAYS:
             return self._direct_failed(
                 intent_name="weather",
@@ -558,6 +626,17 @@ class IntentRouter:
         if any(token in text for token in ("最近一周", "未来一周", "这一周", "本周", "7天", "7-day", "week")):
             return 7
         return 3
+
+    @staticmethod
+    def _should_route_recent_weather_to_history(content: str) -> bool:
+        text = str(content or "").strip().lower()
+        if not text:
+            return False
+        recent_tokens = ("最近", "过去", "近", "last", "past", "recent")
+        future_tokens = ("未来", "接下来", "后面", "forecast", "预报", "将来")
+        has_recent = any(token in text for token in recent_tokens)
+        has_future = any(token in text for token in future_tokens)
+        return has_recent and not has_future
 
     @classmethod
     def _extract_exchange_request(cls, content: str) -> dict[str, Any] | None:
@@ -713,7 +792,7 @@ class IntentRouter:
         return None
 
     @classmethod
-    def _resolve_timezone(cls, value: str) -> ZoneInfo | None:
+    def _resolve_timezone_candidate(cls, value: str) -> str | None:
         raw = str(value or "").strip()
         if not raw:
             return None
@@ -729,7 +808,32 @@ class IntentRouter:
                 if alias_key and cls._normalize_timezone_alias_key(alias_key) in normalized_key:
                     alias = cls._TIMEZONE_ALIASES[alias_key]
                     break
-        candidate = alias or normalized
+        if alias is None:
+            alias = cls._fuzzy_timezone_alias_lookup(normalized)
+        return alias or normalized
+
+    @classmethod
+    def _fuzzy_timezone_alias_lookup(cls, value: str) -> str | None:
+        normalized = cls._normalize_timezone_alias_key(value)
+        if not normalized or not re.fullmatch(r"[a-z/+-]+", normalized):
+            return None
+        alias_map: dict[str, str] = {}
+        for alias_key, candidate in cls._TIMEZONE_ALIASES.items():
+            normalized_key = cls._normalize_timezone_alias_key(alias_key)
+            if not normalized_key or not re.fullmatch(r"[a-z/+-]+", normalized_key):
+                continue
+            alias_map.setdefault(normalized_key, candidate)
+        matches = get_close_matches(normalized, list(alias_map.keys()), n=1, cutoff=0.8)
+        if not matches:
+            return None
+        return alias_map.get(matches[0])
+
+    @classmethod
+    def _resolve_timezone(cls, value: str) -> ZoneInfo | None:
+        normalized = str(value or "").strip()
+        candidate = cls._resolve_timezone_candidate(value)
+        if not candidate:
+            return None
         utc_offset = re.fullmatch(r"UTC(?P<sign>[+-])(?P<hours>\d{1,2})(?::(?P<minutes>\d{2}))?", candidate, re.IGNORECASE)
         if utc_offset:
             sign = 1 if utc_offset.group("sign") == "+" else -1
@@ -746,6 +850,107 @@ class IntentRouter:
                 except Exception:
                     return None
         return None
+
+    @classmethod
+    def _fallback_now_in_timezone(cls, utc_now: datetime, candidate: str) -> datetime | None:
+        if not isinstance(utc_now, datetime):
+            return None
+        now_utc = utc_now.astimezone(UTC)
+        if candidate in cls._FALLBACK_FIXED_TIMEZONES:
+            offset_hours, abbr = cls._FALLBACK_FIXED_TIMEZONES[candidate]
+            tz = timezone(timedelta(hours=offset_hours), name=abbr)
+            return now_utc.astimezone(tz)
+        offset_hours, abbr = cls._fallback_dynamic_timezone(now_utc, candidate)
+        if offset_hours is None or abbr is None:
+            return None
+        return now_utc.astimezone(timezone(timedelta(hours=offset_hours), name=abbr))
+
+    @classmethod
+    def _fallback_dynamic_timezone(
+        cls, now_utc: datetime, candidate: str
+    ) -> tuple[int | None, str | None]:
+        year = now_utc.year
+        if candidate == "America/New_York":
+            dst = cls._is_between_utc(
+                now_utc,
+                cls._nth_weekday_utc(year, 3, SUNDAY, 2, 7),
+                cls._nth_weekday_utc(year, 11, SUNDAY, 1, 6),
+            )
+            return (-4, "EDT") if dst else (-5, "EST")
+        if candidate == "America/Chicago":
+            dst = cls._is_between_utc(
+                now_utc,
+                cls._nth_weekday_utc(year, 3, SUNDAY, 2, 8),
+                cls._nth_weekday_utc(year, 11, SUNDAY, 1, 7),
+            )
+            return (-5, "CDT") if dst else (-6, "CST")
+        if candidate == "America/Los_Angeles":
+            dst = cls._is_between_utc(
+                now_utc,
+                cls._nth_weekday_utc(year, 3, SUNDAY, 2, 10),
+                cls._nth_weekday_utc(year, 11, SUNDAY, 1, 9),
+            )
+            return (-7, "PDT") if dst else (-8, "PST")
+        if candidate == "Europe/London":
+            dst = cls._is_between_utc(
+                now_utc,
+                cls._last_weekday_utc(year, 3, SUNDAY, 1),
+                cls._last_weekday_utc(year, 10, SUNDAY, 1),
+            )
+            return (1, "BST") if dst else (0, "GMT")
+        if candidate == "Europe/Paris":
+            dst = cls._is_between_utc(
+                now_utc,
+                cls._last_weekday_utc(year, 3, SUNDAY, 1),
+                cls._last_weekday_utc(year, 10, SUNDAY, 1),
+            )
+            return (2, "CEST") if dst else (1, "CET")
+        if candidate == "Europe/Berlin":
+            dst = cls._is_between_utc(
+                now_utc,
+                cls._last_weekday_utc(year, 3, SUNDAY, 1),
+                cls._last_weekday_utc(year, 10, SUNDAY, 1),
+            )
+            return (2, "CEST") if dst else (1, "CET")
+        if candidate == "Australia/Sydney":
+            start = cls._nth_weekday_utc(year, 10, SUNDAY, 1, 16, day_offset=-1)
+            end = cls._nth_weekday_utc(year, 4, SUNDAY, 1, 16, day_offset=-1)
+            dst = now_utc >= start or now_utc < end
+            return (11, "AEDT") if dst else (10, "AEST")
+        return (None, None)
+
+    @staticmethod
+    def _is_between_utc(now_utc: datetime, start_utc: datetime, end_utc: datetime) -> bool:
+        return start_utc <= now_utc < end_utc
+
+    @staticmethod
+    def _nth_weekday_utc(
+        year: int,
+        month: int,
+        weekday: int,
+        occurrence: int,
+        hour_utc: int,
+        *,
+        day_offset: int = 0,
+    ) -> datetime:
+        day = 1
+        hits = 0
+        while True:
+            current = datetime(year, month, day, tzinfo=UTC)
+            if current.weekday() == weekday:
+                hits += 1
+                if hits == occurrence:
+                    return current.replace(hour=hour_utc) + timedelta(days=day_offset)
+            day += 1
+
+    @staticmethod
+    def _last_weekday_utc(year: int, month: int, weekday: int, hour_utc: int) -> datetime:
+        last_day = monthrange(year, month)[1]
+        for day in range(last_day, 0, -1):
+            current = datetime(year, month, day, tzinfo=UTC)
+            if current.weekday() == weekday:
+                return current.replace(hour=hour_utc)
+        raise ValueError("failed to locate weekday")
 
     @staticmethod
     def _normalize_timezone_alias_key(value: str) -> str:
@@ -915,31 +1120,14 @@ class IntentRouter:
         tools: ToolRegistry,
         trace_id: str,
     ) -> list[str]:
-        geo_result = await self._fetch_with_retry(
+        location_meta = await self._fetch_open_meteo_location_meta(
+            location=location,
             tools=tools,
-            params={
-                "url": (
-                    "https://geocoding-api.open-meteo.com/v1/search"
-                    f"?name={quote(location)}&count=1&language=zh&format=json"
-                ),
-                "extractMode": "text",
-                "maxChars": 12000,
-            },
             trace_id=trace_id,
         )
-        if not geo_result.ok:
+        if location_meta is None:
             return []
-
-        geo_payload = self._extract_json_object(geo_result.content)
-        results = geo_payload.get("results")
-        if not isinstance(results, list) or not results:
-            return []
-        first = results[0] if isinstance(results[0], dict) else {}
-        latitude = first.get("latitude")
-        longitude = first.get("longitude")
-        if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
-            return []
-        timezone = str(first.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+        latitude, longitude, timezone_name = location_meta
 
         forecast_result = await self._fetch_with_retry(
             tools=tools,
@@ -948,7 +1136,7 @@ class IntentRouter:
                     "https://api.open-meteo.com/v1/forecast"
                     f"?latitude={latitude}&longitude={longitude}"
                     "&daily=weather_code,temperature_2m_max,temperature_2m_min"
-                    f"&forecast_days={days}&timezone={quote(timezone)}"
+                    f"&forecast_days={days}&timezone={quote(timezone_name)}"
                 ),
                 "extractMode": "text",
                 "maxChars": 12000,
@@ -962,6 +1150,84 @@ class IntentRouter:
         daily = forecast_payload.get("daily")
         if not isinstance(daily, dict):
             return []
+        return self._build_open_meteo_daily_lines(daily, days=days)
+
+    async def _fetch_open_meteo_historical_weather_lines(
+        self,
+        *,
+        location: str,
+        days: int,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> list[str]:
+        location_meta = await self._fetch_open_meteo_location_meta(
+            location=location,
+            tools=tools,
+            trace_id=trace_id,
+        )
+        if location_meta is None:
+            return []
+        latitude, longitude, timezone_name = location_meta
+        end_date = self._utc_now().date()
+        start_date = end_date - timedelta(days=max(0, days - 1))
+        history_result = await self._fetch_with_retry(
+            tools=tools,
+            params={
+                "url": (
+                    "https://archive-api.open-meteo.com/v1/archive"
+                    f"?latitude={latitude}&longitude={longitude}"
+                    "&daily=weather_code,temperature_2m_max,temperature_2m_min"
+                    f"&start_date={start_date.isoformat()}"
+                    f"&end_date={end_date.isoformat()}"
+                    f"&timezone={quote(timezone_name)}"
+                ),
+                "extractMode": "text",
+                "maxChars": 16000,
+            },
+            trace_id=trace_id,
+        )
+        if not history_result.ok:
+            return []
+        history_payload = self._extract_json_object(history_result.content)
+        daily = history_payload.get("daily")
+        if not isinstance(daily, dict):
+            return []
+        return self._build_open_meteo_daily_lines(daily, days=days)
+
+    async def _fetch_open_meteo_location_meta(
+        self,
+        *,
+        location: str,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> tuple[float, float, str] | None:
+        geo_result = await self._fetch_with_retry(
+            tools=tools,
+            params={
+                "url": (
+                    "https://geocoding-api.open-meteo.com/v1/search"
+                    f"?name={quote(location)}&count=1&language=zh&format=json"
+                ),
+                "extractMode": "text",
+                "maxChars": 12000,
+            },
+            trace_id=trace_id,
+        )
+        if not geo_result.ok:
+            return None
+        geo_payload = self._extract_json_object(geo_result.content)
+        results = geo_payload.get("results")
+        if not isinstance(results, list) or not results:
+            return None
+        first = results[0] if isinstance(results[0], dict) else {}
+        latitude = first.get("latitude")
+        longitude = first.get("longitude")
+        if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+            return None
+        timezone = str(first.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+        return (float(latitude), float(longitude), timezone)
+
+    def _build_open_meteo_daily_lines(self, daily: dict[str, Any], *, days: int) -> list[str]:
         dates = daily.get("time")
         codes = daily.get("weather_code")
         highs = daily.get("temperature_2m_max")
@@ -1062,6 +1328,32 @@ class IntentRouter:
         return float(value)
 
     async def _fetch_exchange_rate_fallback(
+        self,
+        *,
+        source: str,
+        target: str,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> float | None:
+        direct_value = await self._fetch_frankfurter_rate(
+            source=source,
+            target=target,
+            tools=tools,
+            trace_id=trace_id,
+        )
+        if direct_value is not None:
+            return direct_value
+        reverse_value = await self._fetch_frankfurter_rate(
+            source=target,
+            target=source,
+            tools=tools,
+            trace_id=trace_id,
+        )
+        if isinstance(reverse_value, (int, float)) and reverse_value not in {0, 0.0}:
+            return 1.0 / float(reverse_value)
+        return None
+
+    async def _fetch_frankfurter_rate(
         self,
         *,
         source: str,
@@ -1170,6 +1462,37 @@ class IntentRouter:
         tools: ToolRegistry,
         trace_id: str,
     ) -> dict[str, str] | None:
+        direct = await self._fetch_wikipedia_summary_once(
+            language=language,
+            topic=topic,
+            tools=tools,
+            trace_id=trace_id,
+        )
+        if direct is not None:
+            return direct
+        resolved_topic = await self._search_wikipedia_topic(
+            language=language,
+            topic=topic,
+            tools=tools,
+            trace_id=trace_id,
+        )
+        if resolved_topic and resolved_topic != topic:
+            return await self._fetch_wikipedia_summary_once(
+                language=language,
+                topic=resolved_topic,
+                tools=tools,
+                trace_id=trace_id,
+            )
+        return None
+
+    async def _fetch_wikipedia_summary_once(
+        self,
+        *,
+        language: str,
+        topic: str,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> dict[str, str] | None:
         result = await self._fetch_with_retry(
             tools=tools,
             params={
@@ -1193,6 +1516,47 @@ class IntentRouter:
             tools=tools,
             trace_id=trace_id,
         )
+
+    async def _search_wikipedia_topic(
+        self,
+        *,
+        language: str,
+        topic: str,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> str | None:
+        result = await self._fetch_with_retry(
+            tools=tools,
+            params={
+                "url": (
+                    f"https://{language}.wikipedia.org/w/api.php"
+                    "?action=query"
+                    "&list=search"
+                    "&srwhat=text"
+                    "&srlimit=1"
+                    "&format=json"
+                    "&formatversion=2"
+                    f"&srsearch={quote(topic)}"
+                ),
+                "extractMode": "text",
+                "maxChars": 16000,
+            },
+            trace_id=trace_id,
+        )
+        if not result.ok:
+            return None
+        payload = self._extract_json_object(result.content)
+        query = payload.get("query")
+        if not isinstance(query, dict):
+            return None
+        search = query.get("search")
+        if not isinstance(search, list) or not search:
+            return None
+        first = next((item for item in search if isinstance(item, dict)), None)
+        if not isinstance(first, dict):
+            return None
+        title = str(first.get("title") or "").strip()
+        return title or None
 
     async def _fetch_wikipedia_summary_via_query_api(
         self,
@@ -1296,9 +1660,42 @@ class IntentRouter:
         requested_days: int,
         max_supported_days: int,
     ) -> str:
-        return (
-            f"当前内置天气数据源最多支持未来{max_supported_days}天天气预报，"
-            f"暂时无法直接提供{location}最近{requested_days}天的天气。"
-            f"如果你愿意，我可以先给你最近{max_supported_days}天的真实天气，"
-            f"或者继续按季节趋势补一份标注为估算的{requested_days}天天气趋势版。"
+        return cls._build_recovery_guidance_message(
+            summary=(
+                f"当前内置天气数据源最多支持未来{max_supported_days}天天气预报，"
+                f"暂时无法直接提供{location}最近{requested_days}天的天气。"
+            ),
+            guidance=RecoveryGuidance(
+                blocker="内置天气源的时间范围上限",
+                missing_requirement=f"超过{max_supported_days}天的可信长周期天气数据",
+                checked_scope=[
+                    "当前直达天气路由已评估主天气源的覆盖范围",
+                    "当前直达天气路由已评估备用天气源的覆盖范围",
+                ],
+                next_steps=[
+                    f"我现在可以先返回{location}最近{max_supported_days}天的真实天气",
+                    "如果后续补上更长周期的可信天气源，这一步应优先继续扩展求解",
+                ],
+                fallback_options=[
+                    f"我也可以继续按季节趋势补一份标注为估算的{requested_days}天天气趋势版",
+                    "如果你只需要更短时间范围，也可以直接改问 16 天以内的天气",
+                ],
+            ),
         )
+
+    @staticmethod
+    def _build_recovery_guidance_message(*, summary: str, guidance: RecoveryGuidance) -> str:
+        parts = [summary.strip()]
+        checked = "；".join(item.strip("；。 ") for item in guidance.checked_scope if item.strip())
+        next_steps = "；".join(item.strip("；。 ") for item in guidance.next_steps if item.strip())
+        fallbacks = "；".join(item.strip("；。 ") for item in guidance.fallback_options if item.strip())
+        parts.append(
+            f"当前卡点不是权限或审批问题，而是{guidance.blocker}，缺的是{guidance.missing_requirement}。"
+        )
+        if checked:
+            parts.append(f"我已经先检查了：{checked}。")
+        if next_steps:
+            parts.append(f"下一步可继续这样处理：{next_steps}。")
+        if fallbacks:
+            parts.append(f"如果你接受替代方案，我也可以这样继续：{fallbacks}。")
+        return "".join(parts)
