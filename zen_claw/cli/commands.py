@@ -17,18 +17,29 @@ from rich.table import Table
 from zen_claw import __logo__, __version__
 from zen_claw.utils.netguard import is_public_ip, resolve_safe_ip
 
+console = Console()
+
+
+def _display_logo() -> str:
+    """Return a console-safe logo for the active terminal encoding."""
+    encoding = getattr(console.file, "encoding", None) or os.device_encoding(1) or "utf-8"
+    try:
+        __logo__.encode(encoding)
+    except Exception:
+        return "[zen-claw]"
+    return __logo__
+
+
 app = typer.Typer(
     name="zen-claw",
-    help=f"{__logo__} zen-claw - Personal AI Assistant",
+    help=f"{_display_logo()} zen-claw - Personal AI Assistant",
     no_args_is_help=True,
 )
-
-console = Console()
 
 
 def version_callback(value: bool):
     if value:
-        console.print(f"{__logo__} zen-claw v{__version__}")
+        Console().print(f"{_display_logo()} zen-claw v{__version__}")
         raise typer.Exit()
 
 
@@ -37,7 +48,8 @@ def main(
     version: bool = typer.Option(None, "--version", "-v", callback=version_callback, is_eager=True),
 ):
     """zen-claw - Personal AI Assistant."""
-    pass
+    global console
+    console = Console()
 
 
 # ============================================================================
@@ -71,7 +83,7 @@ def onboard():
     # Create default bootstrap files
     _create_workspace_templates(workspace)
 
-    console.print(f"\n{__logo__} zen-claw is ready!")
+    console.print(f"\n{_display_logo()} zen-claw is ready!")
     console.print("\nNext steps:")
     console.print("  1. Add your API key to [cyan]~/.zen-claw/config.json[/cyan]")
     console.print("     Get one at: https://openrouter.ai/keys")
@@ -453,7 +465,7 @@ def dashboard(
 
     config = load_config()
     refresh = max(1, int(refresh_sec))
-    console.print(f"{__logo__} Starting dashboard at http://{host}:{port} (refresh={refresh}s)")
+    console.print(f"{_display_logo()} Starting dashboard at http://{host}:{port} (refresh={refresh}s)")
     try:
         run_dashboard_server(config, host=host, port=port, refresh_sec=refresh)
     except KeyboardInterrupt:
@@ -497,7 +509,7 @@ def gateway(
 
         logging.basicConfig(level=logging.DEBUG)
 
-    console.print(f"{__logo__} Starting zen-claw gateway on port {port}...")
+    console.print(f"{_display_logo()} Starting zen-claw gateway on port {port}...")
 
     config = load_config()
     bus = MessageBus()
@@ -789,7 +801,7 @@ def agent(
                     session_id,
                     media=media or None,
                 )
-                console.print(f"\n{__logo__} {response}")
+                console.print(f"\n{_display_logo()} {response}")
             finally:
                 if sidecar_supervisor:
                     await sidecar_supervisor.stop()
@@ -797,7 +809,7 @@ def agent(
         asyncio.run(run_once())
     else:
         # Interactive mode
-        console.print(f"{__logo__} Interactive mode (Ctrl+C to exit)\n")
+        console.print(f"{_display_logo()} Interactive mode (Ctrl+C to exit)\n")
 
         async def run_interactive():
             try:
@@ -814,7 +826,7 @@ def agent(
                             session_id,
                             media=media or None,
                         )
-                        console.print(f"\n{__logo__} {response}\n")
+                        console.print(f"\n{_display_logo()} {response}\n")
                     except KeyboardInterrupt:
                         console.print("\nGoodbye!")
                         break
@@ -2312,7 +2324,7 @@ def _get_bridge_dir() -> Path:
         console.print("Try reinstalling: pip install --force-reinstall zen-claw")
         raise typer.Exit(1)
 
-    console.print(f"{__logo__} Setting up bridge...")
+    console.print(f"{_display_logo()} Setting up bridge...")
 
     # Copy to user directory
     user_bridge.parent.mkdir(parents=True, exist_ok=True)
@@ -2345,7 +2357,7 @@ def channels_login():
 
     bridge_dir = _get_bridge_dir()
 
-    console.print(f"{__logo__} Starting bridge...")
+    console.print(f"{_display_logo()} Starting bridge...")
     console.print("Scan the QR code to connect.\n")
 
     try:
@@ -4010,7 +4022,7 @@ def status(
     config = load_config()
     workspace = config.workspace_path
 
-    console.print(f"{__logo__} zen-claw Status\n")
+    console.print(f"{_display_logo()} zen-claw Status\n")
 
     console.print(
         f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}"

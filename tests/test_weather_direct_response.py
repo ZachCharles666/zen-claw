@@ -459,3 +459,5 @@ def test_process_direct_reports_weather_limit_when_requested_days_exceed_support
 
     assert "最多支持未来16天天气预报" in out
     assert "暂时无法直接提供成都最近70天的天气" in out
+    assert "先给你最近16天的真实天气" in out
+    assert "标注为估算的70天天气趋势版" in out

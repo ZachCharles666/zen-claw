@@ -208,6 +208,21 @@ class IntentRouter:
         "柏林时间": "Europe/Berlin",
         "悉尼": "Australia/Sydney",
         "悉尼时间": "Australia/Sydney",
+        "纽约市": "America/New_York",
+        "tokyo": "Asia/Tokyo",
+        "new york": "America/New_York",
+        "newyork": "America/New_York",
+        "los angeles": "America/Los_Angeles",
+        "san francisco": "America/Los_Angeles",
+        "seattle": "America/Los_Angeles",
+        "chicago": "America/Chicago",
+        "london": "Europe/London",
+        "paris": "Europe/Paris",
+        "berlin": "Europe/Berlin",
+        "sydney": "Australia/Sydney",
+        "singapore": "Asia/Singapore",
+        "hong kong": "Asia/Hong_Kong",
+        "seoul": "Asia/Seoul",
     }
     _WEATHER_CONTRACT = IntentToolContract(
         intent_name="weather",
@@ -448,7 +463,11 @@ class IntentRouter:
         if days > self._MAX_FORECAST_DAYS:
             return self._direct_failed(
                 intent_name="weather",
-                content=self._build_weather_days_limit_message(location, requested_days=days),
+                content=self._build_weather_days_limit_message(
+                    location,
+                    requested_days=days,
+                    max_supported_days=self._MAX_FORECAST_DAYS,
+                ),
                 contract=self._WEATHER_CONTRACT,
                 diagnostic=f"weather_days_exceed_limit:{days}",
             )
@@ -699,9 +718,17 @@ class IntentRouter:
         if not raw:
             return None
         normalized = raw.strip()
-        alias = cls._TIMEZONE_ALIASES.get(normalized) or cls._TIMEZONE_ALIASES.get(
-            normalized.lower()
+        alias = (
+            cls._TIMEZONE_ALIASES.get(normalized)
+            or cls._TIMEZONE_ALIASES.get(normalized.lower())
+            or cls._TIMEZONE_ALIASES.get(cls._normalize_timezone_alias_key(normalized))
         )
+        if alias is None:
+            normalized_key = cls._normalize_timezone_alias_key(normalized)
+            for alias_key in sorted(cls._TIMEZONE_ALIASES, key=len, reverse=True):
+                if alias_key and cls._normalize_timezone_alias_key(alias_key) in normalized_key:
+                    alias = cls._TIMEZONE_ALIASES[alias_key]
+                    break
         candidate = alias or normalized
         utc_offset = re.fullmatch(r"UTC(?P<sign>[+-])(?P<hours>\d{1,2})(?::(?P<minutes>\d{2}))?", candidate, re.IGNORECASE)
         if utc_offset:
@@ -719,6 +746,17 @@ class IntentRouter:
                 except Exception:
                     return None
         return None
+
+    @staticmethod
+    def _normalize_timezone_alias_key(value: str) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        text = re.sub(r"[，,。.!?？；;：:\s]+", "", text)
+        for suffix in ("timezone", "time", "date", "日期", "时间", "时区", "现在", "当前", "市"):
+            if text.endswith(suffix):
+                text = text[: -len(suffix)]
+        return text.strip()
 
     @staticmethod
     def _utc_now() -> datetime:
@@ -1143,11 +1181,60 @@ class IntentRouter:
             },
             trace_id=trace_id,
         )
+        if result.ok:
+            payload = self._extract_json_object(result.content)
+            extract = str(payload.get("extract") or "").strip()
+            title = str(payload.get("title") or topic).strip() or topic
+            if extract:
+                return {"site": "wikipedia", "language": language, "title": title, "extract": extract}
+        return await self._fetch_wikipedia_summary_via_query_api(
+            language=language,
+            topic=topic,
+            tools=tools,
+            trace_id=trace_id,
+        )
+
+    async def _fetch_wikipedia_summary_via_query_api(
+        self,
+        *,
+        language: str,
+        topic: str,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> dict[str, str] | None:
+        result = await self._fetch_with_retry(
+            tools=tools,
+            params={
+                "url": (
+                    f"https://{language}.wikipedia.org/w/api.php"
+                    "?action=query"
+                    "&prop=extracts"
+                    "&exintro=1"
+                    "&explaintext=1"
+                    "&redirects=1"
+                    "&format=json"
+                    "&formatversion=2"
+                    f"&titles={quote(topic)}"
+                ),
+                "extractMode": "text",
+                "maxChars": 24000,
+            },
+            trace_id=trace_id,
+        )
         if not result.ok:
             return None
         payload = self._extract_json_object(result.content)
-        extract = str(payload.get("extract") or "").strip()
-        title = str(payload.get("title") or topic).strip() or topic
+        query = payload.get("query")
+        if not isinstance(query, dict):
+            return None
+        pages = query.get("pages")
+        if not isinstance(pages, list) or not pages:
+            return None
+        first = next((page for page in pages if isinstance(page, dict)), None)
+        if not isinstance(first, dict):
+            return None
+        extract = str(first.get("extract") or "").strip()
+        title = str(first.get("title") or topic).strip() or topic
         if not extract:
             return None
         return {"site": "wikipedia", "language": language, "title": title, "extract": extract}
@@ -1202,9 +1289,16 @@ class IntentRouter:
         return text
 
     @classmethod
-    def _build_weather_days_limit_message(cls, location: str, *, requested_days: int) -> str:
+    def _build_weather_days_limit_message(
+        cls,
+        location: str,
+        *,
+        requested_days: int,
+        max_supported_days: int,
+    ) -> str:
         return (
-            f"当前内置天气数据源最多支持未来{cls._MAX_FORECAST_DAYS}天天气预报，"
+            f"当前内置天气数据源最多支持未来{max_supported_days}天天气预报，"
             f"暂时无法直接提供{location}最近{requested_days}天的天气。"
-            f"你可以改问最近{cls._MAX_FORECAST_DAYS}天以内的天气。"
+            f"如果你愿意，我可以先给你最近{max_supported_days}天的真实天气，"
+            f"或者继续按季节趋势补一份标注为估算的{requested_days}天天气趋势版。"
         )

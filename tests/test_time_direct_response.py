@@ -89,6 +89,38 @@ def test_process_direct_returns_target_timezone_date_without_llm(
     assert out == "东京当前日期：2026-03-07"
 
 
+def test_process_direct_accepts_city_alias_with_suffix_without_llm(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 7, 12, 0, 0, tzinfo=UTC)),
+    )
+
+    out = asyncio.run(loop.process_direct("请告诉我纽约市现在几点"))
+
+    assert out.startswith("纽约市当前时间：")
+    assert "2026-03-07 07:00:00 EST" in out
+
+
+def test_process_direct_accepts_english_city_alias_without_llm(
+    tmp_path: Path, monkeypatch
+) -> None:
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 7, 12, 0, 0, tzinfo=UTC)),
+    )
+
+    out = asyncio.run(loop.process_direct("time in New York"))
+
+    assert out.startswith("New York当前时间：")
+    assert "2026-03-07 07:00:00 EST" in out
+
+
 def test_process_direct_returns_deterministic_failure_for_unknown_timezone(
     tmp_path: Path, monkeypatch
 ) -> None:

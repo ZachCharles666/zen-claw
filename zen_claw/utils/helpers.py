@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from pathlib import Path
+from tempfile import gettempdir
 
 
 def ensure_dir(path: Path) -> Path:
@@ -32,9 +33,29 @@ def get_workspace_path(workspace: str | None = None) -> Path:
     return ensure_dir(path)
 
 
-def get_sessions_path() -> Path:
-    """Get the sessions storage directory."""
-    return ensure_dir(get_data_path() / "sessions")
+def get_sessions_path(workspace: Path | None = None) -> Path:
+    """Get the sessions storage directory with a writable fallback chain."""
+    candidates: list[Path] = []
+    if workspace is not None:
+        candidates.append(Path(workspace) / ".zen-claw" / "sessions")
+    candidates.append(Path.cwd() / ".zen-claw" / "sessions")
+    candidates.append(get_data_path() / "sessions")
+    candidates.append(Path(gettempdir()) / "zen-claw" / "sessions")
+
+    last_error: Exception | None = None
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            return ensure_dir(candidate)
+        except Exception as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("failed to resolve sessions directory")
 
 
 def get_memory_path(workspace: Path | None = None) -> Path:

@@ -8,7 +8,7 @@ from typing import Any
 
 from loguru import logger
 
-from zen_claw.utils.helpers import ensure_dir, safe_filename
+from zen_claw.utils.helpers import get_sessions_path, safe_filename
 
 
 @dataclass
@@ -64,7 +64,7 @@ class SessionManager:
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
-        self.sessions_dir = ensure_dir(Path.home() / ".zen-claw" / "sessions")
+        self.sessions_dir = get_sessions_path(workspace)
         self._cache: dict[str, Session] = {}
 
     def _get_session_path(self, key: str) -> Path:
