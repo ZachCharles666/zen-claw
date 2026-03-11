@@ -67,4 +67,5 @@ tasks/
 /*.txt
 !/README.md
 !/SECURITY.md
+!/AUDIT.md
 
