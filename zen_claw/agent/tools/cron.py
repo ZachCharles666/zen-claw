@@ -81,6 +81,14 @@ class CronTool(Tool):
                     "enum": ["POST", "PUT"],
                     "description": "HTTP method used when target_url is set",
                 },
+                "knowledge_source": {
+                    "type": "string",
+                    "description": "Optional local file or directory path to ingest on each run",
+                },
+                "knowledge_notebook": {
+                    "type": "string",
+                    "description": "Notebook name used with knowledge_source ingestion",
+                },
             },
             "required": ["action"],
         }
@@ -95,6 +103,8 @@ class CronTool(Tool):
         confirm: bool = False,
         target_url: str | None = None,
         target_method: str = "POST",
+        knowledge_source: str | None = None,
+        knowledge_notebook: str | None = None,
         **kwargs: Any,
     ) -> ToolResult:
         if not self._is_action_allowed(action):
@@ -104,7 +114,15 @@ class CronTool(Tool):
                 code="cron_action_not_allowed",
             )
         if action == "add":
-            return self._add_job(message, every_seconds, cron_expr, target_url, target_method)
+            return self._add_job(
+                message,
+                every_seconds,
+                cron_expr,
+                target_url,
+                target_method,
+                knowledge_source,
+                knowledge_notebook,
+            )
         elif action == "list":
             return self._list_jobs()
         elif action == "remove":
@@ -128,6 +146,8 @@ class CronTool(Tool):
         cron_expr: str | None,
         target_url: str | None,
         target_method: str,
+        knowledge_source: str | None,
+        knowledge_notebook: str | None,
     ) -> ToolResult:
         if not message:
             return ToolResult.failure(
@@ -170,6 +190,8 @@ class CronTool(Tool):
                 to=self._chat_id,
                 target_url=target_url,
                 target_method=target_method,
+                knowledge_source=knowledge_source,
+                knowledge_notebook=knowledge_notebook,
                 max_jobs=self._max_jobs_per_session,
             )
             return ToolResult.success(f"Created job '{job.name}' (id: {job.id})")

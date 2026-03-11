@@ -89,6 +89,8 @@ class CronService:
                                 target_timeout_sec=int(
                                     j["payload"].get("targetTimeoutSec", 10) or 10
                                 ),
+                                knowledge_source=j["payload"].get("knowledgeSource"),
+                                knowledge_notebook=j["payload"].get("knowledgeNotebook"),
                             ),
                             state=CronJobState(
                                 next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -141,6 +143,8 @@ class CronService:
                         "targetMethod": j.payload.target_method,
                         "targetHeaders": dict(j.payload.target_headers or {}),
                         "targetTimeoutSec": int(j.payload.target_timeout_sec or 10),
+                        "knowledgeSource": j.payload.knowledge_source,
+                        "knowledgeNotebook": j.payload.knowledge_notebook,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -300,6 +304,8 @@ class CronService:
         target_method: str = "POST",
         target_headers: dict[str, str] | None = None,
         target_timeout_sec: int = 10,
+        knowledge_source: str | None = None,
+        knowledge_notebook: str | None = None,
         delete_after_run: bool = False,
         max_jobs: int = 10,
     ) -> CronJob:
@@ -331,6 +337,8 @@ class CronService:
                 target_method=str(target_method or "POST").upper(),
                 target_headers={str(k): str(v) for k, v in (target_headers or {}).items()},
                 target_timeout_sec=max(1, int(target_timeout_sec or 10)),
+                knowledge_source=str(knowledge_source).strip() if knowledge_source else None,
+                knowledge_notebook=str(knowledge_notebook).strip() if knowledge_notebook else None,
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
             created_at_ms=now,

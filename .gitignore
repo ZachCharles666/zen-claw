@@ -1,6 +1,7 @@
 .assets/
 .gemini/
 .claude/
+.zen-claw/
 
 # Environment and secrets
 .env
@@ -66,5 +67,4 @@ tasks/
 /*.txt
 !/README.md
 !/SECURITY.md
-
 

@@ -16,6 +16,10 @@ class Document:
 
 
 class Ingestor:
+    SUPPORTED_TEXT_SUFFIXES = {".txt", ".md", ".rst"}
+    SUPPORTED_HTML_SUFFIXES = {".html", ".htm"}
+    SUPPORTED_SUFFIXES = {".pdf", ".docx", *SUPPORTED_TEXT_SUFFIXES, *SUPPORTED_HTML_SUFFIXES}
+
     def __init__(
         self,
         max_url_chars: int = 200_000,
@@ -30,16 +34,31 @@ class Ingestor:
         if source.startswith(("http://", "https://")):
             return await self._ingest_url(source)
         path = Path(source)
+        if path.is_dir():
+            return self._ingest_directory(path)
+        return self._ingest_path(path)
+
+    def _ingest_path(self, path: Path) -> list[Document]:
         suffix = path.suffix.lower()
         if suffix == ".pdf":
             return self._ingest_pdf(path)
         if suffix == ".docx":
             return self._ingest_docx(path)
-        if suffix in {".txt", ".md", ".rst"}:
+        if suffix in self.SUPPORTED_TEXT_SUFFIXES:
             return self._ingest_text(path)
-        if suffix in {".html", ".htm"}:
+        if suffix in self.SUPPORTED_HTML_SUFFIXES:
             return self._ingest_html(path)
         raise ValueError(f"Unsupported file type: {suffix}")
+
+    def _ingest_directory(self, path: Path) -> list[Document]:
+        docs: list[Document] = []
+        for child in sorted(x for x in path.rglob("*") if x.is_file()):
+            if child.suffix.lower() not in self.SUPPORTED_SUFFIXES:
+                continue
+            docs.extend(self._ingest_path(child))
+        if docs:
+            return docs
+        raise ValueError(f"No supported files found in directory: {path}")
 
     def _ingest_pdf(self, path: Path) -> list[Document]:
         try:

@@ -33,6 +33,8 @@ class CronPayload:
     target_method: Literal["POST", "PUT"] = "POST"
     target_headers: dict[str, str] = field(default_factory=dict)
     target_timeout_sec: int = 10
+    knowledge_source: str | None = None
+    knowledge_notebook: str | None = None
 
 
 @dataclass

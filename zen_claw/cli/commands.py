@@ -8,7 +8,7 @@ import os
 import secrets
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import typer
 from rich.console import Console
@@ -35,6 +35,63 @@ app = typer.Typer(
     help=f"{_display_logo()} zen-claw - Personal AI Assistant",
     no_args_is_help=True,
 )
+
+
+async def _execute_knowledge_cron_job(job: Any, *, data_dir: Path) -> str:
+    from zen_claw.agent.tools.knowledge import KnowledgeAddTool
+
+    dashboard_dir = Path(data_dir) / "dashboard"
+    dashboard_dir.mkdir(parents=True, exist_ok=True)
+    log_path = dashboard_dir / "knowledge_cron.log.jsonl"
+    source = str(getattr(job.payload, "knowledge_source", "") or "").strip()
+    if not source:
+        raise ValueError("knowledge_source is required")
+    notebook = str(getattr(job.payload, "knowledge_notebook", "") or "").strip() or "default"
+
+    tool = KnowledgeAddTool(data_dir=data_dir)
+    result = await tool.execute(source=source, notebook_id=notebook)
+    if not result.ok:
+        message = result.error.message if result.error else "knowledge cron ingest failed"
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "at_ms": int(time.time() * 1000),
+                        "job_id": str(getattr(job, "id", "") or ""),
+                        "job_name": str(getattr(job, "name", "") or ""),
+                        "knowledge_source": source,
+                        "knowledge_notebook": notebook,
+                        "status": "error",
+                        "error": message,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+        raise RuntimeError(message)
+    payload = json.loads(result.content)
+    with log_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "at_ms": int(time.time() * 1000),
+                    "job_id": str(getattr(job, "id", "") or ""),
+                    "job_name": str(getattr(job, "name", "") or ""),
+                    "knowledge_source": source,
+                    "knowledge_notebook": notebook,
+                    "status": "ok",
+                    "documents": int(payload.get("documents", 0) or 0),
+                    "chunks_added": int(payload.get("chunks_added", 0) or 0),
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+    return result.content
+
+
+def _cron_job_has_knowledge_ingest(job: Any) -> bool:
+    return bool(str(getattr(job.payload, "knowledge_source", "") or "").strip())
 
 
 def version_callback(value: bool):
@@ -549,12 +606,18 @@ def gateway(
         compression_trigger_ratio=config.agents.defaults.compression_trigger_ratio,
         compression_hysteresis_ratio=config.agents.defaults.compression_hysteresis_ratio,
         compression_cooldown_turns=config.agents.defaults.compression_cooldown_turns,
+        thinking_model=config.agents.defaults.thinking_model or None,
+        fallback_model=config.agents.defaults.fallback_model or None,
+        intent_model_overrides=config.agents.defaults.intent_model_overrides,
     )
     agent_pool = AgentPool(config=config, bus=bus, provider=provider)
 
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
+        if _cron_job_has_knowledge_ingest(job):
+            return await _execute_knowledge_cron_job(job, data_dir=get_data_dir())
+
         target_url = (
             job.payload.target_url or config.channels.webhook_trigger.cron_target_url or ""
         ).strip()
@@ -778,6 +841,9 @@ def agent(
         compression_trigger_ratio=config.agents.defaults.compression_trigger_ratio,
         compression_hysteresis_ratio=config.agents.defaults.compression_hysteresis_ratio,
         compression_cooldown_turns=config.agents.defaults.compression_cooldown_turns,
+        thinking_model=config.agents.defaults.thinking_model or None,
+        fallback_model=config.agents.defaults.fallback_model or None,
+        intent_model_overrides=config.agents.defaults.intent_model_overrides,
         skill_names=skill,
         skill_permissions_mode=skill_perms or config.agents.defaults.skill_permissions_mode,
         allowed_models=config.agents.defaults.allowed_models,
@@ -2442,6 +2508,12 @@ def cron_add(
         None, "--target-url", help="Webhook target URL for callback trigger"
     ),
     target_method: str = typer.Option("POST", "--target-method", help="HTTP method: POST or PUT"),
+    knowledge_source: str = typer.Option(
+        None, "--knowledge-source", help="Local file or directory to ingest on each run"
+    ),
+    knowledge_notebook: str = typer.Option(
+        "default", "--knowledge-notebook", help="Notebook used for knowledge ingest jobs"
+    ),
 ):
     """Add a scheduled job."""
     from zen_claw.config.loader import get_data_dir
@@ -2474,6 +2546,8 @@ def cron_add(
         channel=channel,
         target_url=target_url,
         target_method=target_method,
+        knowledge_source=knowledge_source,
+        knowledge_notebook=knowledge_notebook,
     )
 
     console.print(f"[green]✓[/green] Added job '{job.name}' ({job.id})")

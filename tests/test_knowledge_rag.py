@@ -84,6 +84,36 @@ async def test_ingestor_txt_file(tmp_path: Path):
     assert "Hello" in docs[0].content
 
 
+async def test_ingestor_directory_collects_supported_files(tmp_path: Path):
+    from zen_claw.knowledge.ingestor import Ingestor
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "a.txt").write_text("Alpha", encoding="utf-8")
+    (docs_dir / "b.md").write_text("# Beta", encoding="utf-8")
+    (docs_dir / "skip.xyz").write_text("ignored", encoding="utf-8")
+    nested = docs_dir / "nested"
+    nested.mkdir()
+    (nested / "c.html").write_text("<html><body>Gamma</body></html>", encoding="utf-8")
+
+    docs = await Ingestor().ingest(str(docs_dir))
+
+    assert len(docs) == 3
+    sources = {Path(doc.source).name for doc in docs}
+    assert sources == {"a.txt", "b.md", "c.html"}
+
+
+async def test_ingestor_directory_without_supported_files_fails(tmp_path: Path):
+    from zen_claw.knowledge.ingestor import Ingestor
+
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "skip.xyz").write_text("ignored", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="No supported files found in directory"):
+        await Ingestor().ingest(str(docs_dir))
+
+
 async def test_ingestor_unsupported_extension():
     from zen_claw.knowledge.ingestor import Ingestor
 
