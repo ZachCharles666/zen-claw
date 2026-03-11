@@ -132,6 +132,67 @@ class RecoveryGuidance:
     next_steps: list[str]
     fallback_options: list[str]
 
+    @classmethod
+    def from_plan(cls, plan: "RecoveryPlan") -> "RecoveryGuidance":
+        """Flatten a structured recovery plan into user-facing guidance."""
+        return cls(
+            blocker=plan.blocker.description,
+            missing_requirement=plan.blocker.missing_requirement,
+            checked_scope=list(plan.checked_scope),
+            next_steps=list(plan.next_steps),
+            fallback_options=list(plan.fallback_options),
+        )
+
+
+@dataclass(frozen=True)
+class RecoveryBlocker:
+    """Normalized blocker classification for direct-intent recovery."""
+
+    kind: Literal[
+        "input_ambiguous",
+        "source_scope_insufficient",
+        "upstream_unavailable",
+        "environment_missing",
+        "locally_correctable",
+    ]
+    description: str
+    missing_requirement: str
+
+
+@dataclass(frozen=True)
+class RecoveryStrategy:
+    """A concrete strategy the router can use or suggest."""
+
+    kind: Literal[
+        "fallback_source",
+        "same_site_search",
+        "reverse_solve",
+        "semantic_reroute",
+        "local_correction",
+        "guidance_only",
+    ]
+    detail: str
+
+
+@dataclass(frozen=True)
+class RecoveryPlan:
+    """Minimal structured recovery plan for Phase 1 framework extraction."""
+
+    blocker: RecoveryBlocker
+    strategies: list[RecoveryStrategy]
+    checked_scope: list[str]
+    next_steps: list[str]
+    fallback_options: list[str]
+
+
+@dataclass(frozen=True)
+class RecoveryOutcome:
+    """Normalized recovery result shape for future framework expansion."""
+
+    mode: Literal["resolved", "guided", "failed"]
+    content: str
+    plan: RecoveryPlan | None = None
+
 
 class IntentRouter:
     """Handle a narrow set of deterministic, low-risk intents before LLM planning."""
@@ -419,13 +480,26 @@ class IntentRouter:
                 display = label or zone_key
                 return self._direct_failed(
                     intent_name="time",
-                    content=self._build_recovery_guidance_message(
+                    content=self._build_recovery_guidance_from_plan(
                         summary=(
                             f"暂时无法识别“{display}”对应的时区，因此不能直接给出时间结果。"
                         ),
-                        guidance=RecoveryGuidance(
-                            blocker="时区映射无法确认",
-                            missing_requirement="可确认的城市、地区或标准时区名",
+                        plan=RecoveryPlan(
+                            blocker=RecoveryBlocker(
+                                kind="input_ambiguous",
+                                description="时区映射无法确认",
+                                missing_requirement="可确认的城市、地区或标准时区名",
+                            ),
+                            strategies=[
+                                RecoveryStrategy(
+                                    kind="local_correction",
+                                    detail="继续按更明确的城市或标准时区名重试解析",
+                                ),
+                                RecoveryStrategy(
+                                    kind="guidance_only",
+                                    detail="先给出可继续推进的补充输入建议",
+                                ),
+                            ],
                             checked_scope=[
                                 "当前直达时间路由已尝试按内置城市别名解析",
                                 "当前直达时间路由已尝试按标准时区名解析",
@@ -535,6 +609,7 @@ class IntentRouter:
                     location,
                     requested_days=days,
                     max_supported_days=self._MAX_FORECAST_DAYS,
+                    request_scope="future" if "未来" in content else "recent",
                 ),
                 contract=self._WEATHER_CONTRACT,
                 diagnostic=f"weather_days_exceed_limit:{days}",
@@ -1549,6 +1624,11 @@ class IntentRouter:
         query = payload.get("query")
         if not isinstance(query, dict):
             return None
+        searchinfo = query.get("searchinfo")
+        if isinstance(searchinfo, dict):
+            suggestion = str(searchinfo.get("suggestion") or "").strip()
+            if suggestion:
+                return self._normalize_wikipedia_title_candidate(suggestion)
         search = query.get("search")
         if not isinstance(search, list) or not search:
             return None
@@ -1556,7 +1636,16 @@ class IntentRouter:
         if not isinstance(first, dict):
             return None
         title = str(first.get("title") or "").strip()
-        return title or None
+        return self._normalize_wikipedia_title_candidate(title) or None
+
+    @staticmethod
+    def _normalize_wikipedia_title_candidate(title: str) -> str:
+        text = str(title or "").strip()
+        if not text:
+            return ""
+        if re.fullmatch(r"[a-z0-9'().,_ -]+", text):
+            return " ".join(part.capitalize() for part in text.split())
+        return text
 
     async def _fetch_wikipedia_summary_via_query_api(
         self,
@@ -1618,9 +1707,43 @@ class IntentRouter:
     @staticmethod
     def _build_fixed_site_failure_message(*, site: str, topic: str) -> str:
         site_label = "维基百科" if site == "wikipedia" else site
-        return (
-            f"暂时无法从{site_label}获取“{topic}”的摘要。主站点和备用站点都未成功返回可用内容，"
-            "可能是网络波动、词条不存在或上游服务异常，不是权限或审批问题。请稍后重试或换个更明确的词条名。"
+        return IntentRouter._build_recovery_guidance_from_plan(
+            summary=(
+                f"暂时无法从{site_label}获取“{topic}”的摘要。"
+                "主站点和备用站点都未成功返回可用内容。"
+            ),
+            plan=RecoveryPlan(
+                blocker=RecoveryBlocker(
+                    kind="upstream_unavailable",
+                    description=f"{site_label}上游站点未返回可用摘要",
+                    missing_requirement="可访问且返回有效摘要的站点内容",
+                ),
+                strategies=[
+                    RecoveryStrategy(
+                        kind="fallback_source",
+                        detail="继续尝试不同语言站点与 query API 备用链路",
+                    ),
+                    RecoveryStrategy(
+                        kind="same_site_search",
+                        detail="词条不精确时先站内搜索，再重新抓取摘要",
+                    ),
+                    RecoveryStrategy(
+                        kind="guidance_only",
+                        detail="在上游仍不可用时提示更明确词条名或稍后重试",
+                    ),
+                ],
+                checked_scope=[
+                    f"当前直达{site_label}路由已尝试主站点摘要接口",
+                    f"当前直达{site_label}路由已尝试备用语言站点与 query API",
+                ],
+                next_steps=[
+                    "你可以换一个更明确的词条名，我继续帮你重试",
+                    "如果只是站点临时异常，稍后再试通常就能恢复",
+                ],
+                fallback_options=[
+                    "如果你愿意，也可以改成更具体的问题，我先基于已知常识给你一个简述方向",
+                ],
+            ),
         )
 
     @classmethod
@@ -1640,9 +1763,42 @@ class IntentRouter:
 
     @classmethod
     def _build_exchange_failure_message(cls, source: str, target: str) -> str:
-        return (
-            f"暂时无法获取{source}->{target}的汇率数据。主汇率源和备用汇率源都未成功响应，"
-            "可能是网络波动或上游服务异常，不是权限或审批问题。请稍后重试。"
+        return cls._build_recovery_guidance_from_plan(
+            summary=(
+                f"暂时无法获取{source}->{target}的汇率数据。"
+                "主汇率源和备用汇率源都未成功响应。"
+            ),
+            plan=RecoveryPlan(
+                blocker=RecoveryBlocker(
+                    kind="upstream_unavailable",
+                    description="汇率上游服务未返回可用结果",
+                    missing_requirement="至少一个可访问且返回目标货币对的汇率源",
+                ),
+                strategies=[
+                    RecoveryStrategy(
+                        kind="fallback_source",
+                        detail="继续尝试备用汇率源",
+                    ),
+                    RecoveryStrategy(
+                        kind="reverse_solve",
+                        detail="当正向货币对缺失时尝试反向货币对后求倒数",
+                    ),
+                    RecoveryStrategy(
+                        kind="guidance_only",
+                        detail="在上游均失败时建议稍后重试",
+                    ),
+                ],
+                checked_scope=[
+                    "当前直达汇率路由已尝试主汇率源",
+                    "当前直达汇率路由已尝试备用汇率源与反向货币对求解",
+                ],
+                next_steps=[
+                    "你可以稍后重试，我会再次检查主汇率源和备用汇率源",
+                ],
+                fallback_options=[
+                    "如果你只需要大致换算，我也可以按最近常见区间先给你一个明确标注为估算的近似值",
+                ],
+            ),
         )
 
     @staticmethod
@@ -1659,15 +1815,30 @@ class IntentRouter:
         *,
         requested_days: int,
         max_supported_days: int,
+        request_scope: Literal["recent", "future"] = "recent",
     ) -> str:
-        return cls._build_recovery_guidance_message(
+        scope_label = "未来" if request_scope == "future" else "最近"
+        return cls._build_recovery_guidance_from_plan(
             summary=(
                 f"当前内置天气数据源最多支持未来{max_supported_days}天天气预报，"
-                f"暂时无法直接提供{location}最近{requested_days}天的天气。"
+                f"暂时无法直接提供{location}{scope_label}{requested_days}天的天气。"
             ),
-            guidance=RecoveryGuidance(
-                blocker="内置天气源的时间范围上限",
-                missing_requirement=f"超过{max_supported_days}天的可信长周期天气数据",
+            plan=RecoveryPlan(
+                blocker=RecoveryBlocker(
+                    kind="source_scope_insufficient",
+                    description="内置天气源的时间范围上限",
+                    missing_requirement=f"超过{max_supported_days}天的可信长周期天气数据",
+                ),
+                strategies=[
+                    RecoveryStrategy(
+                        kind="semantic_reroute",
+                        detail="对明显的最近/过去 N 天请求优先改走历史天气路径",
+                    ),
+                    RecoveryStrategy(
+                        kind="guidance_only",
+                        detail="在无法继续扩展时给出更短周期或估算趋势替代方案",
+                    ),
+                ],
                 checked_scope=[
                     "当前直达天气路由已评估主天气源的覆盖范围",
                     "当前直达天气路由已评估备用天气源的覆盖范围",
@@ -1683,10 +1854,17 @@ class IntentRouter:
             ),
         )
 
+    @classmethod
+    def _build_recovery_guidance_from_plan(cls, *, summary: str, plan: RecoveryPlan) -> str:
+        return cls._build_recovery_guidance_message(
+            summary=summary,
+            guidance=RecoveryGuidance.from_plan(plan),
+        )
+
     @staticmethod
     def _build_recovery_guidance_message(*, summary: str, guidance: RecoveryGuidance) -> str:
         parts = [summary.strip()]
-        checked = "；".join(item.strip("；。 ") for item in guidance.checked_scope if item.strip())
+        checked = IntentRouter._humanize_checked_scope(guidance.checked_scope)
         next_steps = "；".join(item.strip("；。 ") for item in guidance.next_steps if item.strip())
         fallbacks = "；".join(item.strip("；。 ") for item in guidance.fallback_options if item.strip())
         parts.append(
@@ -1699,3 +1877,29 @@ class IntentRouter:
         if fallbacks:
             parts.append(f"如果你接受替代方案，我也可以这样继续：{fallbacks}。")
         return "".join(parts)
+
+    @staticmethod
+    def _humanize_checked_scope(items: list[str]) -> str:
+        seen: set[str] = set()
+        simplified: list[str] = []
+        for raw in items:
+            item = raw.strip("；。 ")
+            if not item:
+                continue
+            lower = item.lower()
+            if "天气" in item and ("覆盖范围" in item or "天气源" in item):
+                label = "我先检查了当前可用天气数据的范围"
+            elif "维基百科" in item and (
+                "摘要接口" in item or "query api" in lower or "备用语言站点" in item or "主站点" in item
+            ):
+                label = "我先尝试了当前可用的百科摘要来源和词条匹配方式"
+            elif "汇率" in item and ("汇率源" in item or "货币对" in item):
+                label = "我先检查了当前可用的汇率来源和货币对匹配方式"
+            elif "时区" in item or "城市别名" in item:
+                label = "我先按城市名称和标准时区名做了识别"
+            else:
+                label = item
+            if label not in seen:
+                seen.add(label)
+                simplified.append(label)
+        return "；".join(simplified)

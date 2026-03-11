@@ -2,7 +2,8 @@
 
 from datetime import datetime
 from pathlib import Path
-from tempfile import NamedTemporaryFile, gettempdir
+from tempfile import gettempdir
+from uuid import uuid4
 
 
 def ensure_dir(path: Path) -> Path:
@@ -62,10 +63,17 @@ def get_sessions_path(workspace: Path | None = None) -> Path:
 
 def _is_writable_dir(path: Path) -> bool:
     """Return whether a directory accepts file creation and deletion."""
+    probe = path / f".zen-claw-write-{uuid4().hex}.tmp"
     try:
-        with NamedTemporaryFile(dir=path, prefix=".zen-claw-write-", delete=True):
-            return True
+        with open(probe, "w", encoding="utf-8") as handle:
+            handle.write("ok")
+        probe.unlink(missing_ok=True)
+        return True
     except Exception:
+        try:
+            probe.unlink(missing_ok=True)
+        except Exception:
+            pass
         return False
 
 

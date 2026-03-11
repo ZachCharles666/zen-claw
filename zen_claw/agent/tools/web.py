@@ -15,7 +15,11 @@ from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 
 # Shared constants
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
+USER_AGENT = "zen-claw/1.0 (+https://github.com/ZachCharles666/zen-claw; local acceptance testing)"
+DEFAULT_FETCH_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json, text/plain;q=0.9, text/html;q=0.8, */*;q=0.7",
+}
 MAX_REDIRECTS = 5  # Limit redirects to prevent DoS attacks
 
 # Private / reserved IP networks blocked to prevent SSRF
@@ -324,7 +328,7 @@ class WebFetchTool(Tool):
             async with httpx.AsyncClient(
                 follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=30.0
             ) as client:
-                r = await client.get(url, headers={"User-Agent": USER_AGENT})
+                r = await client.get(url, headers=DEFAULT_FETCH_HEADERS)
                 r.raise_for_status()
 
             ctype = r.headers.get("content-type", "")
@@ -375,6 +379,22 @@ class WebFetchTool(Tool):
                 ToolErrorKind.RETRYABLE,
                 str(e),
                 code="web_fetch_request_failed",
+            )
+        except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            body = (e.response.text or "").strip()
+            message = body[:240] if body else str(e)
+            if status == 403:
+                kind = ToolErrorKind.PERMISSION
+            elif status in {408, 409, 425, 429} or status >= 500:
+                kind = ToolErrorKind.RETRYABLE
+            else:
+                kind = ToolErrorKind.RUNTIME
+            return ToolResult.failure(
+                kind,
+                message,
+                code=f"web_fetch_http_{status}",
+                http_status=status,
             )
         except Exception as e:
             return ToolResult.failure(

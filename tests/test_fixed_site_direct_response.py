@@ -206,7 +206,7 @@ def test_process_direct_falls_back_to_wikipedia_search_then_summary(
             == "https://en.wikipedia.org/w/api.php?action=query&list=search&srwhat=text&srlimit=1"
             "&format=json&formatversion=2&srsearch=Alan%20Mathison%20Turring"
         ):
-            payload = {"query": {"search": [{"title": "Alan Turing"}]}}
+            payload = {"query": {"searchinfo": {"suggestion": "Alan Turing"}, "search": []}}
             return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
         if url == "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing":
             payload = {
@@ -228,3 +228,12 @@ def test_process_direct_falls_back_to_wikipedia_search_then_summary(
         "https://en.wikipedia.org/w/api.php?action=query&list=search&srwhat=text&srlimit=1&format=json&formatversion=2&srsearch=Alan%20Mathison%20Turring",
         "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing",
     ]
+
+
+def test_normalize_wikipedia_title_candidate_title_cases_ascii_suggestion() -> None:
+    from zen_claw.agent.intent_router import IntentRouter
+
+    assert (
+        IntentRouter._normalize_wikipedia_title_candidate("alan mathison turing")
+        == "Alan Mathison Turing"
+    )

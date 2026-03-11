@@ -459,9 +459,11 @@ def test_process_direct_reports_weather_limit_when_requested_days_exceed_support
     out = asyncio.run(loop.process_direct("告诉我成都未来70天的天气，需要给我的结果是日期+天气的样式"))
 
     assert "最多支持未来16天天气预报" in out
-    assert "暂时无法直接提供成都最近70天的天气" in out or "暂时无法直接提供成都未来70天的天气" in out
+    assert "暂时无法直接提供成都未来70天的天气" in out
     assert "当前卡点不是权限或审批问题" in out
     assert "缺的是超过16天的可信长周期天气数据" in out
+    assert "天气路由" not in out
+    assert "主天气源" not in out
     assert "先返回成都最近16天的真实天气" in out
     assert "标注为估算的70天天气趋势版" in out
 

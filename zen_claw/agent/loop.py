@@ -72,7 +72,7 @@ from zen_claw.bus.events import InboundMessage, OutboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.errors import AgentMidTurnReloadException
 from zen_claw.observability.trace import TraceContext
-from zen_claw.providers.base import LLMProvider
+from zen_claw.providers.base import LLMProvider, LLMResponse
 from zen_claw.session.manager import SessionManager
 
 
@@ -112,6 +112,9 @@ class AgentLoop:
         compression_hysteresis_ratio: float = 0.5,
         compression_cooldown_turns: int = 5,
         vision_model: str | None = None,
+        thinking_model: str | None = None,
+        fallback_model: str | None = None,
+        intent_model_overrides: dict[str, str] | None = None,
         skill_names: list[str] | None = None,
         skill_permissions_mode: str = "off",  # off|warn|enforce
         allowed_models: list[str] | None = None,
@@ -150,6 +153,13 @@ class AgentLoop:
         self.compression_cooldown_turns = max(0, int(compression_cooldown_turns))
         self.allowed_models: list[str] = [m.lower().strip() for m in (allowed_models or [])]
         self.vision_model = (vision_model or "").strip()
+        self.thinking_model = (thinking_model or "").strip()
+        self.fallback_model = (fallback_model or "").strip()
+        self.intent_model_overrides = {
+            str(key or "").strip().lower(): str(value or "").strip()
+            for key, value in (intent_model_overrides or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
         self.skill_names = skill_names or []
         mode = (skill_permissions_mode or "off").strip().lower()
         if (
@@ -217,6 +227,8 @@ class AgentLoop:
         self._running = False
         self._deferred_retry_delay_sec = 2.0
         self._deferred_retry_tasks: set[asyncio.Task[Any]] = set()
+        self._last_run_model_used: str | None = None
+        self._last_run_model_reason: str | None = None
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
@@ -783,6 +795,11 @@ class AgentLoop:
             tools=self.tools,
             trace_id=trace_id,
         )
+        self._append_intent_router_event(
+            trace_id=trace_id,
+            msg=msg,
+            route_result=route_result,
+        )
         explicit_approved_tools: set[str] = set()
         if route_result.route_status == "needs_explicit_approval":
             explicit_approved_tools, approval_reply = await self._resolve_one_shot_explicit_approval(
@@ -860,8 +877,31 @@ class AgentLoop:
                 }
             )
 
-        preferred_model = str(session.metadata.get("override_model") or "").strip() or self.model
-        run_model = self._resolve_run_model(messages, preferred_model=preferred_model)
+        session_override_model = str(session.metadata.get("override_model") or "").strip()
+        preferred_model = session_override_model or self.model
+        allow_model_fallback = not bool(session_override_model)
+        run_model_reason = self._resolve_run_model_reason(
+            messages,
+            intent_name=route_result.intent_name,
+            think_enabled=bool(session.metadata.get("think_enabled", False)),
+            allow_dynamic_override=allow_model_fallback,
+        )
+        run_model = self._resolve_run_model(
+            messages,
+            preferred_model=preferred_model,
+            intent_name=route_result.intent_name,
+            think_enabled=bool(session.metadata.get("think_enabled", False)),
+            allow_dynamic_override=allow_model_fallback,
+        )
+        self._append_model_selection_event(
+            trace_id=trace_id,
+            msg=msg,
+            selected_model=run_model,
+            reason=run_model_reason,
+            intent_name=route_result.intent_name or "",
+        )
+        self._last_run_model_used = run_model
+        self._last_run_model_reason = run_model_reason
         try:
             if not route_result.skip_planning:
                 messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
@@ -877,6 +917,7 @@ class AgentLoop:
                 tool_definitions=constrained_tools,
                 approved_one_shot_tools=explicit_approved_tools,
                 active_intent_contract=route_result.contract,
+                allow_model_fallback=allow_model_fallback,
             )
         finally:
             self.tools.clear_policy_scope("intent_contract")
@@ -906,10 +947,24 @@ class AgentLoop:
 
         if usage:
             session.metadata["last_usage"] = usage
-        session.metadata["last_model"] = run_model
+        session.metadata["last_model"] = str(self._last_run_model_used or run_model)
+        if (
+            self._last_run_model_used
+            and self._last_run_model_used != run_model
+            and self._last_run_model_reason
+        ):
+            self._append_model_selection_event(
+                trace_id=trace_id,
+                msg=msg,
+                selected_model=self._last_run_model_used,
+                reason=self._last_run_model_reason,
+                intent_name=route_result.intent_name or "",
+            )
         if bool(session.metadata.get("verbose", False)) and usage:
             usage_text = ", ".join(f"{k}={v}" for k, v in sorted(usage.items()))
-            final_content += f"\n\n[verbose] model={run_model}; usage: {usage_text}"
+            final_content += (
+                f"\n\n[verbose] model={str(self._last_run_model_used or run_model)}; usage: {usage_text}"
+            )
 
         # Save to session
         session.add_message("user", msg.content)
@@ -1049,8 +1104,28 @@ class AgentLoop:
                 }
             )
 
-        preferred_model = str(session.metadata.get("override_model") or "").strip() or self.model
-        run_model = self._resolve_run_model(messages, preferred_model=preferred_model)
+        session_override_model = str(session.metadata.get("override_model") or "").strip()
+        preferred_model = session_override_model or self.model
+        allow_model_fallback = not bool(session_override_model)
+        run_model_reason = self._resolve_run_model_reason(
+            messages,
+            think_enabled=bool(session.metadata.get("think_enabled", False)),
+            allow_dynamic_override=allow_model_fallback,
+        )
+        run_model = self._resolve_run_model(
+            messages,
+            preferred_model=preferred_model,
+            think_enabled=bool(session.metadata.get("think_enabled", False)),
+            allow_dynamic_override=allow_model_fallback,
+        )
+        self._append_model_selection_event(
+            trace_id=trace_id,
+            msg=msg,
+            selected_model=run_model,
+            reason=run_model_reason,
+        )
+        self._last_run_model_used = run_model
+        self._last_run_model_reason = run_model_reason
         messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
         final_content, _ = await self._run_execute_reflect_loop(
             messages,
@@ -1112,6 +1187,61 @@ class AgentLoop:
 
         response = await self._process_message(msg)
         return response.content if response else ""
+
+    def _append_intent_router_event(
+        self,
+        *,
+        trace_id: str,
+        msg: InboundMessage,
+        route_result: IntentRouteResult,
+    ) -> None:
+        try:
+            from zen_claw.config.loader import get_data_dir
+
+            dashboard_dir = get_data_dir() / "dashboard"
+            dashboard_dir.mkdir(parents=True, exist_ok=True)
+            event = {
+                "at_ms": int(datetime.now(UTC).timestamp() * 1000),
+                "trace_id": trace_id,
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "intent_name": route_result.intent_name or "",
+                "route_status": route_result.route_status,
+                "handled": bool(route_result.handled),
+                "diagnostic": str(route_result.diagnostic or ""),
+            }
+            with (dashboard_dir / "intent_router.log.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except Exception:
+            return
+
+    def _append_model_selection_event(
+        self,
+        *,
+        trace_id: str,
+        msg: InboundMessage,
+        selected_model: str,
+        reason: str,
+        intent_name: str = "",
+    ) -> None:
+        try:
+            from zen_claw.config.loader import get_data_dir
+
+            dashboard_dir = get_data_dir() / "dashboard"
+            dashboard_dir.mkdir(parents=True, exist_ok=True)
+            event = {
+                "at_ms": int(datetime.now(UTC).timestamp() * 1000),
+                "trace_id": trace_id,
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "intent_name": intent_name,
+                "selected_model": selected_model,
+                "reason": reason,
+            }
+            with (dashboard_dir / "model_routing.log.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except Exception:
+            return
 
     async def _resolve_one_shot_explicit_approval(
         self,
@@ -1605,17 +1735,29 @@ class AgentLoop:
         if not extracted.should_write:
             return
 
-        if extracted.memory_type == "long_term":
-            current = self.context.memory.read_long_term()
-            if extracted.content in current:
-                return
-            prefix = current.rstrip() + ("\n" if current.strip() else "")
-            self.context.memory.write_long_term(prefix + f"- {extracted.content}\n")
-        else:
-            today = self.context.memory.read_today()
-            if extracted.content in today:
-                return
-            self.context.memory.append_today(f"- {extracted.content}")
+        try:
+            if extracted.memory_type == "long_term":
+                current = self.context.memory.read_long_term()
+                if extracted.content in current:
+                    return
+                prefix = current.rstrip() + ("\n" if current.strip() else "")
+                self.context.memory.write_long_term(prefix + f"- {extracted.content}\n")
+            else:
+                today = self.context.memory.read_today()
+                if extracted.content in today:
+                    return
+                self.context.memory.append_today(f"- {extracted.content}")
+        except Exception as e:
+            logger.warning(
+                f"Memory persistence failed: {e} "
+                + TraceContext.event_text(
+                    "memory.store.error",
+                    trace_id,
+                    error_kind="runtime",
+                    retryable=False,
+                )
+            )
+            return
 
         logger.info(
             "Memory extracted and stored "
@@ -1641,10 +1783,12 @@ class AgentLoop:
         prompt = self.execution.build_plan_prompt(user_goal)
         plan_input = messages + [{"role": "user", "content": prompt}]
         try:
-            plan = await self.provider.chat(
+            plan, _used_model, _fallback_state = await self._chat_with_optional_fallback(
                 messages=plan_input,
                 tools=None,
                 model=active_model,
+                allow_fallback=bool(self.fallback_model and active_model != self.fallback_model),
+                trace_id=trace_id,
             )
         except Exception as e:
             logger.warning(
@@ -1666,6 +1810,48 @@ class AgentLoop:
             return self.context.add_assistant_message(messages, f"[Plan]\n{plan.content}")
         return messages
 
+    async def _chat_with_optional_fallback(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str,
+        allow_fallback: bool,
+        trace_id: str,
+    ) -> tuple[LLMResponse, str, str]:
+        response = await self.provider.chat(
+            messages=messages,
+            tools=tools,
+            model=model,
+        )
+        if (
+            response.finish_reason != "error"
+            or not allow_fallback
+            or not self.fallback_model
+            or self.fallback_model == model
+        ):
+            return response, model, "primary"
+
+        logger.warning(
+            "Primary model returned error; retrying once with fallback model "
+            + TraceContext.event_text(
+                "agent.model.fallback",
+                trace_id,
+                error_kind="runtime",
+                retryable=True,
+                from_model=model,
+                to_model=self.fallback_model,
+            )
+        )
+        fallback_response = await self.provider.chat(
+            messages=messages,
+            tools=tools,
+            model=self.fallback_model,
+        )
+        if fallback_response.finish_reason == "error":
+            return fallback_response, self.fallback_model, f"fallback_error:{model}"
+        return fallback_response, self.fallback_model, f"fallback_model:{model}"
+
     async def _run_execute_reflect_loop(
         self,
         messages: list[dict[str, Any]],
@@ -1678,6 +1864,7 @@ class AgentLoop:
         tool_definitions: list[dict[str, Any]] | None = None,
         approved_one_shot_tools: set[str] | None = None,
         active_intent_contract: IntentToolContract | None = None,
+        allow_model_fallback: bool = False,
     ) -> tuple[str | None, list[dict[str, Any]]]:
         """Run execute loop with bounded reflection retries and mid-turn hot-swapping."""
         iteration = 0
@@ -1689,11 +1876,16 @@ class AgentLoop:
         while iteration < self.max_iterations:
             iteration += 1
             try:
-                response = await self.provider.chat(
+                response, used_model, fallback_state = await self._chat_with_optional_fallback(
                     messages=messages,
                     tools=tool_definitions if tool_definitions is not None else self.tools.get_definitions(),
                     model=active_model,
+                    allow_fallback=allow_model_fallback,
+                    trace_id=trace_id,
                 )
+                active_model = used_model
+                self._last_run_model_used = active_model
+                self._last_run_model_reason = fallback_state
                 self._accumulate_usage(usage_collector, response.usage)
 
                 if not response.has_tool_calls:
@@ -1952,12 +2144,46 @@ class AgentLoop:
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
     def _resolve_run_model(
-        self, messages: list[dict[str, Any]], preferred_model: str | None = None
+        self,
+        messages: list[dict[str, Any]],
+        preferred_model: str | None = None,
+        *,
+        intent_name: str | None = None,
+        think_enabled: bool = False,
+        allow_dynamic_override: bool = True,
     ) -> str:
         """Use vision model when current message payload includes image blocks."""
         if self.vision_model and self._contains_image_payload(messages):
             return self.vision_model
+        if not allow_dynamic_override:
+            return str(preferred_model or self.model)
+        normalized_intent = str(intent_name or "").strip().lower()
+        if normalized_intent:
+            override = str(self.intent_model_overrides.get(normalized_intent) or "").strip()
+            if override:
+                return override
+        if think_enabled and self.thinking_model:
+            return self.thinking_model
         return str(preferred_model or self.model)
+
+    def _resolve_run_model_reason(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        intent_name: str | None = None,
+        think_enabled: bool = False,
+        allow_dynamic_override: bool = True,
+    ) -> str:
+        if self.vision_model and self._contains_image_payload(messages):
+            return "vision_model"
+        if not allow_dynamic_override:
+            return "session_override_model"
+        normalized_intent = str(intent_name or "").strip().lower()
+        if normalized_intent and str(self.intent_model_overrides.get(normalized_intent) or "").strip():
+            return f"intent_override:{normalized_intent}"
+        if think_enabled and self.thinking_model:
+            return "thinking_model"
+        return "default_model"
 
     @staticmethod
     def _accumulate_usage(target: dict[str, int] | None, usage: dict[str, Any] | None) -> None:

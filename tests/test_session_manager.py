@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from zen_claw.session.manager import SessionManager
-from zen_claw.utils.helpers import get_sessions_path
+from zen_claw.utils.helpers import _is_writable_dir, get_sessions_path
 
 
 def test_session_manager_prefers_workspace_sessions_dir(tmp_path: Path) -> None:
@@ -60,3 +60,11 @@ def test_get_sessions_path_uses_tempdir_as_last_resort(tmp_path: Path, monkeypat
     monkeypatch.setattr("zen_claw.utils.helpers.gettempdir", lambda: str(tmp_path / "temp"))
 
     assert get_sessions_path(workspace) == temp_sessions
+
+
+def test_is_writable_dir_creates_and_cleans_probe_file(tmp_path: Path) -> None:
+    target = tmp_path / "sessions"
+    target.mkdir()
+
+    assert _is_writable_dir(target) is True
+    assert list(target.iterdir()) == []

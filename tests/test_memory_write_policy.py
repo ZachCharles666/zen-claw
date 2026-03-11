@@ -134,3 +134,31 @@ def test_memory_write_policy_skips_when_should_write_false(tmp_path: Path, monke
 
     assert loop.context.memory.read_long_term() == ""
     assert loop.context.memory.read_today() == ""
+
+
+def test_memory_write_policy_degrades_when_persistence_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
+    provider = _QueueProvider(
+        [
+            LLMResponse(
+                content='{"should_write": true, "memory_type": "long_term", "content": "Keep this if writable."}'
+            )
+        ]
+    )
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        enable_planning=False,
+        max_reflections=1,
+    )
+    loop.memory_extractor.should_extract = lambda user_text, assistant_text: True  # type: ignore[assignment]
+    monkeypatch.setattr(
+        loop.context.memory,
+        "write_long_term",
+        lambda content: (_ for _ in ()).throw(PermissionError("blocked")),
+    )
+
+    asyncio.run(loop._extract_and_store_memory("u", "a", "trace-5"))
+
+    assert loop.context.memory.read_long_term() == ""
