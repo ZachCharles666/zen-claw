@@ -231,6 +231,9 @@ class AgentDefaults(BaseModel):
     workspace: str = "~/.zen-claw/workspace"
     model: str = "anthropic/claude-opus-4-5"
     vision_model: str = ""
+    thinking_model: str = ""
+    fallback_model: str = ""
+    intent_model_overrides: dict[str, str] = Field(default_factory=dict)
     memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "none"] = "sqlite"
     enable_planning: bool = True
     max_reflections: int = 1

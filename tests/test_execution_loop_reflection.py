@@ -397,6 +397,87 @@ def test_run_execute_reflect_loop_uses_vision_model_for_media_image_references(
     assert provider.models[-1] == "fake-vision-model"
 
 
+def test_resolve_run_model_prefers_intent_override_over_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    provider = FakeProvider([LLMResponse(content="ok")])
+    loop = _build_loop(tmp_path, provider, monkeypatch)
+    loop.intent_model_overrides = {"weather": "fast-weather-model"}
+
+    model = loop._resolve_run_model(
+        [{"role": "user", "content": "weather please"}],
+        preferred_model="fake-model",
+        intent_name="weather",
+    )
+
+    assert model == "fast-weather-model"
+
+
+def test_resolve_run_model_uses_thinking_model_when_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    provider = FakeProvider([LLMResponse(content="ok")])
+    loop = _build_loop(tmp_path, provider, monkeypatch)
+    loop.thinking_model = "deep-think-model"
+
+    model = loop._resolve_run_model(
+        [{"role": "user", "content": "reason carefully"}],
+        preferred_model="fake-model",
+        think_enabled=True,
+    )
+
+    assert model == "deep-think-model"
+
+
+def test_run_execute_reflect_loop_retries_once_with_fallback_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    provider = FakeProvider(
+        [
+            LLMResponse(content="Error calling LLM: temporary failure", finish_reason="error"),
+            LLMResponse(content="fallback final"),
+        ]
+    )
+    loop = _build_loop(tmp_path, provider, monkeypatch)
+    loop.fallback_model = "fallback-model"
+    messages = [{"role": "user", "content": "hello"}]
+
+    final, _ = asyncio.run(
+        loop._run_execute_reflect_loop(
+            messages,
+            "trace-fallback",
+            model="primary-model",
+            allow_model_fallback=True,
+        )
+    )
+
+    assert final == "fallback final"
+    assert provider.models == ["primary-model", "fallback-model"]
+
+
+def test_run_execute_reflect_loop_skips_fallback_when_disabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    provider = FakeProvider(
+        [LLMResponse(content="Error calling LLM: temporary failure", finish_reason="error")]
+    )
+    loop = _build_loop(tmp_path, provider, monkeypatch)
+    loop.fallback_model = "fallback-model"
+    messages = [{"role": "user", "content": "hello"}]
+
+    final, _ = asyncio.run(
+        loop._run_execute_reflect_loop(
+            messages,
+            "trace-no-fallback",
+            model="primary-model",
+            allow_model_fallback=False,
+        )
+    )
+
+    assert "temporary failure" in str(final)
+    assert provider.models == ["primary-model"]
+
+
 def test_record_tool_learning_dedupes_same_signature(tmp_path: Path, monkeypatch) -> None:
     provider = FakeProvider([LLMResponse(content="ok")])
     loop = _build_loop(tmp_path, provider, monkeypatch)

@@ -17,6 +17,7 @@ from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.base import BaseChannel
 from zen_claw.config.loader import get_data_dir
 from zen_claw.config.schema import WebhookTriggerConfig
+from zen_claw.observability.trace import TraceContext
 
 
 class _NonceStore:
@@ -163,16 +164,90 @@ class WebhookTriggerChannel(BaseChannel):
             return payload.strip()
         return ""
 
+    @staticmethod
+    def _pick_workflow_value(
+        payload: Any,
+        query: dict[str, str],
+        headers: dict[str, str],
+        *,
+        payload_keys: tuple[str, ...],
+        query_keys: tuple[str, ...],
+        header_keys: tuple[str, ...],
+    ) -> str:
+        if isinstance(payload, dict):
+            for key in payload_keys:
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        for key in header_keys:
+            value = headers.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for key in query_keys:
+            value = query.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @classmethod
+    def _extract_workflow_context(
+        cls, payload: Any, query: dict[str, str], headers: dict[str, str]
+    ) -> dict[str, Any]:
+        workflow_source = cls._pick_workflow_value(
+            payload,
+            query,
+            headers,
+            payload_keys=("workflow_source", "workflow", "source", "platform"),
+            query_keys=("workflow_source", "workflow", "source", "platform"),
+            header_keys=("x-workflow-source", "x-workflow-platform", "x-source-platform"),
+        )
+        workflow_run_id = cls._pick_workflow_value(
+            payload,
+            query,
+            headers,
+            payload_keys=("workflow_run_id", "run_id", "execution_id"),
+            query_keys=("workflow_run_id", "run_id", "execution_id"),
+            header_keys=("x-workflow-run-id", "x-run-id", "x-execution-id"),
+        )
+        workflow_step = cls._pick_workflow_value(
+            payload,
+            query,
+            headers,
+            payload_keys=("workflow_step", "step", "node"),
+            query_keys=("workflow_step", "step", "node"),
+            header_keys=("x-workflow-step", "x-step-name", "x-node-name"),
+        )
+        external_request_id = cls._pick_workflow_value(
+            payload,
+            query,
+            headers,
+            payload_keys=("request_id", "external_request_id"),
+            query_keys=("request_id", "external_request_id"),
+            header_keys=("x-request-id", "x-correlation-id"),
+        )
+        metadata: dict[str, Any] = {}
+        if workflow_source:
+            metadata["workflow_source"] = workflow_source
+        if workflow_run_id:
+            metadata["workflow_run_id"] = workflow_run_id
+        if workflow_step:
+            metadata["workflow_step"] = workflow_step
+        if external_request_id:
+            metadata["external_request_id"] = external_request_id
+        return metadata
+
     async def ingest_trigger(
         self,
         *,
         agent_id: str,
         payload: Any,
+        headers: dict[str, str] | None = None,
         query: dict[str, str] | None = None,
         client_ip: str = "",
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         """Publish webhook trigger payload as an inbound message."""
+        headers = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
         query = query or {}
         content = self._payload_to_content(payload) or self._payload_to_content(query)
         if not content:
@@ -187,9 +262,17 @@ class WebhookTriggerChannel(BaseChannel):
         meta["trigger_agent_id"] = str(agent_id)
         if client_ip:
             meta["client_ip"] = client_ip
+        meta.update(self._extract_workflow_context(payload, query, headers))
+        trace_id, meta = TraceContext.ensure_trace_id(meta)
         await self._handle_message(
             sender_id=sender_id,
             chat_id=chat_id,
             content=content,
             metadata=meta,
         )
+        return {
+            "trace_id": trace_id,
+            "workflow_source": str(meta.get("workflow_source") or ""),
+            "workflow_run_id": str(meta.get("workflow_run_id") or ""),
+            "workflow_step": str(meta.get("workflow_step") or ""),
+        }

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from zen_claw.config.schema import Config
-from zen_claw.dashboard.server import build_dashboard_snapshot, run_dashboard_server
+from zen_claw.dashboard.server import _render_html, build_dashboard_snapshot, run_dashboard_server
 
 
 def _free_port() -> int:
@@ -84,6 +84,7 @@ def test_build_dashboard_snapshot_structure(monkeypatch, tmp_path: Path) -> None
     snap = build_dashboard_snapshot(Config())
     assert "agent" in snap
     assert "cron" in snap
+    assert "knowledge" in snap
     assert "node" in snap
     assert "channels" in snap
     assert "sidecars" in snap
@@ -112,6 +113,65 @@ def test_dashboard_status_endpoint(monkeypatch, tmp_path: Path) -> None:
     assert status == 200
     assert isinstance(body, dict)
     assert body.get("cron", {}).get("total_jobs") == 0
+
+
+def test_render_html_includes_observability_cards() -> None:
+    html = _render_html(
+        {
+            "agent": {
+                "model": "m",
+                "planning_enabled": True,
+                "memory_recall_mode": "sqlite",
+                "compression_trigger_ratio": 0.8,
+                "compression_hysteresis_ratio": 0.5,
+                "compression_cooldown_turns": 5,
+                "compression_events": [],
+                "model_routing_events": [],
+                "model_routing_summary": {},
+                "intent_router_events": [],
+                "intent_router_summary": {},
+                "workflow_webhook_events": [],
+                "workflow_webhook_summary": {"source_counts": []},
+                "recent_observability_events": [],
+            },
+            "cron": {"total_jobs": 0, "enabled_jobs": 0, "failed_jobs": 0},
+            "knowledge": {
+                "total_notebooks": 0,
+                "total_documents": 0,
+                "non_empty_notebooks": 0,
+                "chroma_store_present": False,
+                "notebooks": [],
+            },
+            "security": {
+                "production_hardening": False,
+                "subagent_hard_guardrail": True,
+                "skill_permissions_mode": "off",
+            },
+            "sidecars": [],
+            "node": {
+                "active_nodes": 0,
+                "total_nodes": 0,
+                "queue_pending": 0,
+                "queue_running": 0,
+                "queue_failed": 0,
+                "pending_approval": 0,
+                "pending_approval_overdue": 0,
+                "approval_timeout_rejected": 0,
+                "approval_chain_ok": True,
+                "approval_chain_checked": 0,
+                "approval_chain_error": "",
+                "nodes": [],
+                "approval_timeline": [],
+            },
+        },
+        refresh_sec=1,
+    )
+
+    assert "Intent Router" in html
+    assert "Workflow Webhooks" in html
+    assert "Knowledge" in html
+    assert "Compression Timeline" in html
+    assert "Recent Observability" in html
 
 
 def test_post_cron_without_token_env_is_backward_compatible(monkeypatch, tmp_path: Path) -> None:

@@ -1,4 +1,5 @@
 import asyncio
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,65 @@ def test_runtime_model_switch_is_session_local(tmp_path: Path, monkeypatch) -> N
     asyncio.run(loop.process_direct("hello s2", session_key="cli:s2"))
     assert provider.called_models[0] == "model-a"
     assert provider.called_models[1] == "default-model"
+
+
+def test_runtime_model_switch_overrides_dynamic_intent_model(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_loop_module, "SessionManager", _InMemorySessionManager)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: tmp_path / "data")
+    loop, provider = _make_loop(tmp_path)
+    loop.intent_model_overrides = {"weather": "weather-model"}
+
+    async def _fake_route(_content, *, tools, trace_id=None):
+        from zen_claw.agent.intent_router import IntentRouteResult
+
+        _ = tools, trace_id
+        return IntentRouteResult(handled=False, intent_name="weather", route_status="miss")
+
+    monkeypatch.setattr(loop.intent_router, "route", _fake_route)
+
+    out1 = asyncio.run(loop.process_direct("/model model-a", session_key="cli:s1"))
+    assert "model-a" in out1
+
+    asyncio.run(loop.process_direct("weather in chengdu", session_key="cli:s1"))
+    assert provider.called_models[-1] == "model-a"
+
+
+def test_dynamic_intent_model_writes_model_routing_event(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_loop_module, "SessionManager", _InMemorySessionManager)
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    loop, provider = _make_loop(tmp_path)
+    loop.intent_model_overrides = {"weather": "weather-model"}
+
+    async def _fake_route(_content, *, tools, trace_id=None):
+        from zen_claw.agent.intent_router import IntentRouteResult
+
+        _ = tools, trace_id
+        return IntentRouteResult(handled=False, intent_name="weather", route_status="miss")
+
+    monkeypatch.setattr(loop.intent_router, "route", _fake_route)
+
+    asyncio.run(loop.process_direct("weather in chengdu", session_key="cli:s1"))
+    assert provider.called_models[-1] == "weather-model"
+    log_path = data_dir / "dashboard" / "model_routing.log.jsonl"
+    assert log_path.exists()
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    assert rows[-1]["selected_model"] == "weather-model"
+    assert rows[-1]["reason"] == "intent_override:weather"
+
+
+def test_runtime_model_override_prevents_fallback_model(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_loop_module, "SessionManager", _InMemorySessionManager)
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    loop, provider = _make_loop(tmp_path)
+    loop.fallback_model = "fallback-model"
+
+    out1 = asyncio.run(loop.process_direct("/model model-a", session_key="cli:s1"))
+    assert "model-a" in out1
+
+    asyncio.run(loop.process_direct("hello", session_key="cli:s1"))
+    assert provider.called_models[-1] == "model-a"
 
 
 def test_runtime_usage_verbose_and_clear(tmp_path: Path, monkeypatch) -> None:

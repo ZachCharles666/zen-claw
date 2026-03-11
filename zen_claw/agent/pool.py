@@ -78,4 +78,7 @@ class AgentPool:
             compression_trigger_ratio=self.config.agents.defaults.compression_trigger_ratio,
             compression_hysteresis_ratio=self.config.agents.defaults.compression_hysteresis_ratio,
             compression_cooldown_turns=self.config.agents.defaults.compression_cooldown_turns,
+            thinking_model=self.config.agents.defaults.thinking_model or None,
+            fallback_model=self.config.agents.defaults.fallback_model or None,
+            intent_model_overrides=self.config.agents.defaults.intent_model_overrides,
         )

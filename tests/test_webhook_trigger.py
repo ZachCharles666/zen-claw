@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import time
 
 import pytest
@@ -74,6 +75,7 @@ def test_webhook_trigger_ingest_publishes_inbound(monkeypatch, tmp_path) -> None
 @pytest.mark.skipif(TestClient is None or api_app is None, reason="fastapi not available")
 def test_webhook_trigger_route_accepts_signed_request(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("zen_claw.channels.webhook_trigger.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: tmp_path)
     bus = MessageBus()
     channel = WebhookTriggerChannel(WebhookTriggerConfig(enabled=True, secret="s1"), bus)
     channel.access_checker = lambda *_args, **_kwargs: True
@@ -95,3 +97,71 @@ def test_webhook_trigger_route_accepts_signed_request(monkeypatch, tmp_path) -> 
     assert resp.status_code == 202
     inbound = asyncio.run(bus.consume_inbound())
     assert inbound.content == "trigger now"
+
+
+def test_webhook_trigger_ingest_extracts_workflow_context(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("zen_claw.channels.webhook_trigger.get_data_dir", lambda: tmp_path)
+    bus = MessageBus()
+    channel = WebhookTriggerChannel(
+        WebhookTriggerConfig(enabled=True, ip_allowlist=["127.0.0.1"]), bus
+    )
+    channel.access_checker = lambda *_args, **_kwargs: True
+
+    async def _run():
+        accepted = await channel.ingest_trigger(
+            agent_id="agent-flow",
+            payload={"content": "run workflow", "workflow_source": "n8n", "run_id": "run-9"},
+            headers={"x-workflow-step": "fetch_weather", "x-request-id": "req-7"},
+            query={"step": "ignored-query-step"},
+            client_ip="127.0.0.1",
+        )
+        inbound = await bus.consume_inbound()
+        assert accepted["trace_id"]
+        assert accepted["workflow_source"] == "n8n"
+        assert accepted["workflow_run_id"] == "run-9"
+        assert accepted["workflow_step"] == "fetch_weather"
+        assert inbound.metadata["workflow_source"] == "n8n"
+        assert inbound.metadata["workflow_run_id"] == "run-9"
+        assert inbound.metadata["workflow_step"] == "fetch_weather"
+        assert inbound.metadata["external_request_id"] == "req-7"
+        assert inbound.metadata["trace_id"] == accepted["trace_id"]
+
+    asyncio.run(_run())
+
+
+@pytest.mark.skipif(TestClient is None or api_app is None, reason="fastapi not available")
+def test_webhook_trigger_route_returns_trace_and_workflow_context(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("zen_claw.channels.webhook_trigger.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: tmp_path)
+    bus = MessageBus()
+    channel = WebhookTriggerChannel(WebhookTriggerConfig(enabled=True, secret="s1"), bus)
+    channel.access_checker = lambda *_args, **_kwargs: True
+    register_channels(webhook_trigger=channel)
+    client = TestClient(api_app)
+    body = b'{"content":"trigger workflow","workflow_source":"coze","run_id":"job-1"}'
+    ts = int(time.time())
+    nonce = "n-3"
+    resp = client.post(
+        "/webhook/trigger/agent-flow",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-signature": _sign("s1", body, ts, nonce),
+            "x-timestamp": str(ts),
+            "x-nonce": nonce,
+            "x-workflow-step": "node-a",
+        },
+    )
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["success"] is True
+    assert data["trace_id"]
+    assert data["workflow_source"] == "coze"
+    assert data["workflow_run_id"] == "job-1"
+    assert data["workflow_step"] == "node-a"
+    inbound = asyncio.run(bus.consume_inbound())
+    assert inbound.metadata["trace_id"] == data["trace_id"]
+    log_path = tmp_path / "dashboard" / "workflow_webhook.log.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    assert rows[-1]["trace_id"] == data["trace_id"]
+    assert rows[-1]["workflow_source"] == "coze"

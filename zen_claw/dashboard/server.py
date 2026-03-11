@@ -8,6 +8,7 @@ import json
 import os
 import time
 import uuid
+from collections import Counter
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +38,23 @@ def _read_json(path: Path) -> dict[str, Any]:
     except (OSError, ValueError, json.JSONDecodeError):
         pass
     return {}
+
+
+def _read_jsonl(path: Path, *, limit: int = 100) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            raw = json.loads(line)
+            if isinstance(raw, dict):
+                rows.append(raw)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
+    return rows[-limit:]
 
 
 def _verify_approval_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
@@ -84,6 +102,94 @@ def _verify_approval_chain(events: list[dict[str, Any]]) -> dict[str, Any]:
     return {"ok": True, "checked": checked, "error_index": None, "error": ""}
 
 
+def _build_recent_observability_events(
+    approval_timeline: list[dict[str, Any]],
+    compression_events: list[dict[str, Any]],
+    intent_router_events: list[dict[str, Any]],
+    workflow_webhook_events: list[dict[str, Any]],
+    model_routing_events: list[dict[str, Any]],
+    knowledge_cron_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for event in approval_timeline[:20]:
+        rows.append(
+            {
+                "kind": "approval",
+                "at_ms": event.get("at_ms"),
+                "title": str(event.get("action") or "approval"),
+                "status": str(event.get("action") or ""),
+                "trace_id": "",
+                "detail": (
+                    f"node={str(event.get('node_id') or '-')}; "
+                    f"task={str(event.get('task_id') or '-')}; "
+                    f"actor={str(event.get('actor') or '-')}"
+                ),
+            }
+        )
+    for event in compression_events[:20]:
+        rows.append(
+            {
+                "kind": "compression",
+                "at_ms": event.get("at_ms"),
+                "title": str(event.get("session") or "compression"),
+                "status": str(event.get("reason") or ""),
+                "trace_id": "",
+                "detail": f"turn={str(event.get('at_turn') or '-')}",
+            }
+        )
+    for event in intent_router_events[:20]:
+        rows.append(
+            {
+                "kind": "intent_router",
+                "at_ms": event.get("at_ms"),
+                "title": str(event.get("intent_name") or "intent"),
+                "status": str(event.get("route_status") or ""),
+                "trace_id": str(event.get("trace_id") or ""),
+                "detail": str(event.get("diagnostic") or ""),
+            }
+        )
+    for event in workflow_webhook_events[:20]:
+        rows.append(
+            {
+                "kind": "workflow_webhook",
+                "at_ms": event.get("at_ms"),
+                "title": str(event.get("workflow_source") or event.get("agent_id") or "workflow"),
+                "status": str(event.get("workflow_step") or ""),
+                "trace_id": str(event.get("trace_id") or ""),
+                "detail": (
+                    f"agent={str(event.get('agent_id') or '-')}; "
+                    f"run={str(event.get('workflow_run_id') or '-')}"
+                ),
+            }
+        )
+    for event in model_routing_events[:20]:
+        rows.append(
+            {
+                "kind": "model_routing",
+                "at_ms": event.get("at_ms"),
+                "title": str(event.get("selected_model") or "model"),
+                "status": str(event.get("reason") or ""),
+                "trace_id": str(event.get("trace_id") or ""),
+                "detail": str(event.get("intent_name") or ""),
+            }
+        )
+    for event in knowledge_cron_events[:20]:
+        rows.append(
+            {
+                "kind": "knowledge_cron",
+                "at_ms": event.get("at_ms"),
+                "title": str(event.get("job_name") or event.get("knowledge_notebook") or "knowledge"),
+                "status": str(event.get("status") or ""),
+                "trace_id": "",
+                "detail": (
+                    f"notebook={str(event.get('knowledge_notebook') or '-')}; "
+                    f"chunks={str(event.get('chunks_added') or 0)}"
+                ),
+            }
+        )
+    return sorted(rows, key=lambda x: int(x.get("at_ms") or 0), reverse=True)[:15]
+
+
 def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
     """Build dashboard status payload from config and runtime state files."""
     from zen_claw.config.loader import get_data_dir
@@ -105,6 +211,25 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         ]
     )
 
+    def _is_knowledge_related_cron(job: dict[str, Any]) -> bool:
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        if str(payload.get("knowledgeSource") or "").strip():
+            return True
+        name = str(job.get("name") or "").lower()
+        message = str(payload.get("message") or "").lower()
+        target_url = str(payload.get("targetUrl") or "").lower()
+        haystack = " ".join([name, message, target_url])
+        keywords = ("knowledge", "rag", "ingest", "notebook", "chat/upload")
+        return any(keyword in haystack for keyword in keywords)
+
+    def _cron_target_kind(job: dict[str, Any]) -> str:
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        if str(payload.get("targetUrl") or "").strip():
+            return "webhook"
+        if bool(payload.get("deliver", False)):
+            return "channel_delivery"
+        return "agent_turn"
+
     def _cron_job_row(job: dict[str, Any]) -> dict[str, Any]:
         state = job.get("state") if isinstance(job.get("state"), dict) else {}
         sched = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
@@ -113,12 +238,60 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "name": str(job.get("name") or ""),
             "enabled": bool(job.get("enabled", True)),
             "schedule_kind": str(sched.get("kind") or ""),
+            "target_kind": _cron_target_kind(job),
+            "knowledge_related": _is_knowledge_related_cron(job),
             "next_run_at_ms": state.get("nextRunAtMs"),
             "last_status": state.get("lastStatus"),
             "last_error": state.get("lastError"),
         }
 
     cron_rows = [_cron_job_row(j) for j in cron_jobs][:50]
+
+    knowledge_index = _read_json(data_dir / "knowledge" / "notebooks.json")
+    knowledge_notebooks_raw = (
+        knowledge_index.get("notebooks", [])
+        if isinstance(knowledge_index.get("notebooks"), list)
+        else []
+    )
+    knowledge_notebooks = [row for row in knowledge_notebooks_raw if isinstance(row, dict)]
+    knowledge_rows = sorted(
+        [
+            {
+                "id": str(row.get("id") or ""),
+                "name": str(row.get("name") or ""),
+                "doc_count": int(row.get("doc_count") or 0),
+                "created_at": str(row.get("created_at") or ""),
+            }
+            for row in knowledge_notebooks
+        ],
+        key=lambda row: (row["name"].lower(), row["id"]),
+    )[:20]
+    knowledge_summary = {
+        "total_notebooks": len(knowledge_notebooks),
+        "total_documents": sum(max(0, int(row.get("doc_count") or 0)) for row in knowledge_notebooks),
+        "non_empty_notebooks": len(
+            [row for row in knowledge_notebooks if int(row.get("doc_count") or 0) > 0]
+        ),
+        "chroma_store_present": (data_dir / "knowledge" / "chroma").exists(),
+        "notebooks": knowledge_rows,
+    }
+    knowledge_cron_rows = sorted(
+        [
+            row
+            for row in _read_jsonl(data_dir / "dashboard" / "knowledge_cron.log.jsonl", limit=50)
+            if isinstance(row, dict)
+        ],
+        key=lambda x: int(x.get("at_ms") or 0),
+        reverse=True,
+    )[:10]
+    knowledge_summary["recent_cron_runs"] = knowledge_cron_rows[:5]
+    knowledge_summary["cron_runs_total"] = len(knowledge_cron_rows)
+    knowledge_summary["cron_runs_ok"] = len(
+        [row for row in knowledge_cron_rows if str(row.get("status") or "") == "ok"]
+    )
+    knowledge_summary["cron_runs_error"] = len(
+        [row for row in knowledge_cron_rows if str(row.get("status") or "") == "error"]
+    )
 
     rate_stats = _read_json(data_dir / "channels" / "rate_limit_stats.json")
     runtime_channels = rate_stats.get("channels", {}) if isinstance(rate_stats, dict) else {}
@@ -252,6 +425,28 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
 
     provider_rows: list[dict[str, Any]] = []
     compression_events: list[dict[str, Any]] = []
+    router_events = _read_jsonl(data_dir / "dashboard" / "intent_router.log.jsonl", limit=50)
+    intent_router_events = sorted(
+        [row for row in router_events if isinstance(row, dict)],
+        key=lambda x: int(x.get("at_ms") or 0),
+        reverse=True,
+    )[:20]
+    router_summary = {
+        "total": len(intent_router_events),
+        "direct_success": len(
+            [row for row in intent_router_events if str(row.get("route_status") or "") == "direct_success"]
+        ),
+        "direct_failed": len(
+            [row for row in intent_router_events if str(row.get("route_status") or "") == "direct_failed"]
+        ),
+        "replan": len(
+            [
+                row
+                for row in intent_router_events
+                if str(row.get("route_status") or "") == "needs_constrained_replan"
+            ]
+        ),
+    }
     try:
         sessions_dir = Path.home() / ".zen-claw" / "sessions"
         for sp in sorted(
@@ -282,6 +477,51 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         key=lambda x: int(x.get("at_ms") or 0),
         reverse=True,
     )[:30]
+    workflow_events = _read_jsonl(data_dir / "dashboard" / "workflow_webhook.log.jsonl", limit=50)
+    workflow_webhook_events = sorted(
+        [row for row in workflow_events if isinstance(row, dict)],
+        key=lambda x: int(x.get("at_ms") or 0),
+        reverse=True,
+    )[:20]
+    workflow_webhook_summary = {
+        "total": len(workflow_webhook_events),
+        "with_trace": len(
+            [row for row in workflow_webhook_events if str(row.get("trace_id") or "").strip()]
+        ),
+        "with_source": len(
+            [row for row in workflow_webhook_events if str(row.get("workflow_source") or "").strip()]
+        ),
+        "source_counts": [
+            {"source": source, "count": count}
+            for source, count in Counter(
+                str(row.get("workflow_source") or "").strip() or "unknown"
+                for row in workflow_webhook_events
+            ).most_common(5)
+        ],
+    }
+    model_events = _read_jsonl(data_dir / "dashboard" / "model_routing.log.jsonl", limit=50)
+    model_routing_events = sorted(
+        [row for row in model_events if isinstance(row, dict)],
+        key=lambda x: int(x.get("at_ms") or 0),
+        reverse=True,
+    )[:20]
+    model_routing_summary = {
+        "total": len(model_routing_events),
+        "latest_model": str((model_routing_events[0] or {}).get("selected_model") or "")
+        if model_routing_events
+        else "",
+        "latest_reason": str((model_routing_events[0] or {}).get("reason") or "")
+        if model_routing_events
+        else "",
+    }
+    recent_observability_events = _build_recent_observability_events(
+        approval_timeline,
+        compression_events,
+        intent_router_events,
+        workflow_webhook_events,
+        model_routing_events,
+        knowledge_cron_rows,
+    )
 
     for name in [
         "openrouter",
@@ -318,6 +558,13 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             ),
             "compression_cooldown_turns": int(config.agents.defaults.compression_cooldown_turns),
             "compression_events": compression_events,
+            "model_routing_events": model_routing_events,
+            "model_routing_summary": model_routing_summary,
+            "intent_router_events": intent_router_events,
+            "intent_router_summary": router_summary,
+            "workflow_webhook_events": workflow_webhook_events,
+            "workflow_webhook_summary": workflow_webhook_summary,
+            "recent_observability_events": recent_observability_events,
         },
         "security": {
             "production_hardening": bool(config.tools.policy.production_hardening),
@@ -330,8 +577,11 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "total_jobs": cron_total,
             "enabled_jobs": cron_enabled,
             "failed_jobs": cron_failures,
+            "webhook_jobs": len([j for j in cron_jobs if _cron_target_kind(j) == "webhook"]),
+            "knowledge_related_jobs": len([j for j in cron_jobs if _is_knowledge_related_cron(j)]),
             "jobs": cron_rows,
         },
+        "knowledge": knowledge_summary,
         "channels": channel_rows,
         "rate_limit": {
             "default": {
@@ -468,6 +718,9 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             compression_hysteresis_ratio=cfg.agents.defaults.compression_hysteresis_ratio,
             compression_cooldown_turns=cfg.agents.defaults.compression_cooldown_turns,
             vision_model=cfg.agents.defaults.vision_model or None,
+            thinking_model=cfg.agents.defaults.thinking_model or None,
+            fallback_model=cfg.agents.defaults.fallback_model or None,
+            intent_model_overrides=cfg.agents.defaults.intent_model_overrides,
             skill_permissions_mode=cfg.agents.defaults.skill_permissions_mode,
             allowed_models=cfg.agents.defaults.allowed_models,
         )
@@ -518,6 +771,9 @@ class _WebChatRuntime:
             compression_hysteresis_ratio=cfg.agents.defaults.compression_hysteresis_ratio,
             compression_cooldown_turns=cfg.agents.defaults.compression_cooldown_turns,
             vision_model=cfg.agents.defaults.vision_model or None,
+            thinking_model=cfg.agents.defaults.thinking_model or None,
+            fallback_model=cfg.agents.defaults.fallback_model or None,
+            intent_model_overrides=cfg.agents.defaults.intent_model_overrides,
             skill_permissions_mode=cfg.agents.defaults.skill_permissions_mode,
             allowed_models=cfg.agents.defaults.allowed_models,
         )
@@ -1066,14 +1322,19 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
     </div>
     <div class="grid">
       <div class="card"><h2>Agent</h2><div id="agent"></div></div>
+      <div class="card"><h2>Intent Router</h2><div id="intentRouter"></div></div>
+      <div class="card"><h2>Workflow Webhooks</h2><div id="workflowWebhooks"></div></div>
       <div class="card"><h2>Cron</h2><div id="cron"></div></div>
+      <div class="card"><h2>Knowledge</h2><div id="knowledge"></div></div>
       <div class="card"><h2>Security</h2><div id="security"></div></div>
       <div class="card"><h2>Sidecars</h2><div id="sidecars"></div></div>
       <div class="card"><h2>Node Queue</h2><div id="node"></div></div>
     </div>
     <div class="grid-wide">
+      <div class="card"><h2>Recent Observability</h2><div id="recentObservability"></div></div>
       <div class="card"><h2>Node Details</h2><div id="nodeDetails"></div></div>
       <div class="card"><h2>Approval Timeline</h2><div id="approvalTimeline"></div></div>
+      <div class="card"><h2>Compression Timeline</h2><div id="compressionTimeline"></div></div>
     </div>
     <div class="card" style="margin-top: 12px;">
       <h2>Raw Snapshot</h2>
@@ -1129,20 +1390,119 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
         <tbody>${{rows || '<tr><td colspan="6" class="muted">No approval events</td></tr>'}}</tbody>
       </table>`);
     }}
+    function renderCompressionTimeline(data) {{
+      const now = Date.now();
+      const rows = (data.agent.compression_events || []).slice(0, 10).map(e => `
+        <tr>
+          <td>${{fmtAgo(e.at_ms, now)}}</td>
+          <td>${{e.session || '-'}}</td>
+          <td>${{e.at_turn || '-'}}</td>
+          <td>${{e.reason || '-'}}</td>
+        </tr>`).join('');
+      p("compressionTimeline", `<table>
+        <thead><tr><th>When</th><th>Session</th><th>Turn</th><th>Reason</th></tr></thead>
+        <tbody>${{rows || '<tr><td colspan="4" class="muted">No compression events</td></tr>'}}</tbody>
+      </table>`);
+    }}
+    function renderRecentObservability(data) {{
+      const now = Date.now();
+      const rows = (data.agent.recent_observability_events || []).slice(0, 15).map(e => `
+        <tr>
+          <td>${{fmtAgo(e.at_ms, now)}}</td>
+          <td>${{e.kind || '-'}}</td>
+          <td>${{e.title || '-'}}</td>
+          <td>${{e.status || '-'}}</td>
+          <td><code>${{e.trace_id || '-'}}</code></td>
+          <td>${{e.detail || ''}}</td>
+        </tr>`).join('');
+      p("recentObservability", `<table>
+        <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Status</th><th>Trace</th><th>Detail</th></tr></thead>
+        <tbody>${{rows || '<tr><td colspan="6" class="muted">No recent observability events</td></tr>'}}</tbody>
+      </table>`);
+    }}
+    function renderWorkflowWebhooks(data) {{
+      const now = Date.now();
+      const summary = data.agent.workflow_webhook_summary || {{}};
+      const sourceCounts = (summary.source_counts || []).map(item =>
+        `${{item.source || 'unknown'}}:${{item.count || 0}}`
+      ).join(' / ');
+      const rows = (data.agent.workflow_webhook_events || []).slice(0, 5).map(e => `
+        <tr>
+          <td>${{fmtAgo(e.at_ms, now)}}</td>
+          <td>${{e.agent_id || '-'}}</td>
+          <td>${{e.workflow_source || '-'}}</td>
+          <td>${{e.workflow_run_id || '-'}}</td>
+          <td>${{e.workflow_step || '-'}}</td>
+          <td><code>${{e.trace_id || '-'}}</code></td>
+        </tr>`).join('');
+      p(
+        "workflowWebhooks",
+        `events: <b>${{summary.total || 0}}</b><br/>with trace / source: <b>${{summary.with_trace || 0}}</b> / <b>${{summary.with_source || 0}}</b><br/>sources: <b>${{sourceCounts || '-'}}</b><br/><br/><table><thead><tr><th>When</th><th>Agent</th><th>Source</th><th>Run</th><th>Step</th><th>Trace</th></tr></thead><tbody>${{rows || '<tr><td colspan="6" class="muted">No workflow webhook events</td></tr>'}}</tbody></table>`
+      );
+    }}
+    function renderKnowledge(data) {{
+      const summary = data.knowledge || {{}};
+      const rows = (summary.notebooks || []).slice(0, 5).map(nb => `
+        <tr>
+          <td>${{nb.name || '-'}}</td>
+          <td>${{nb.id || '-'}}</td>
+          <td>${{nb.doc_count || 0}}</td>
+        </tr>`).join('');
+      const cronRows = (summary.recent_cron_runs || []).slice(0, 5).map(run => `
+        <tr>
+          <td>${{run.job_name || '-'}}</td>
+          <td>${{run.knowledge_notebook || '-'}}</td>
+          <td>${{run.status || '-'}}</td>
+          <td>${{run.chunks_added || 0}}</td>
+        </tr>`).join('');
+      p(
+        "knowledge",
+        `notebooks: <b>${{summary.total_notebooks || 0}}</b><br/>documents: <b>${{summary.total_documents || 0}}</b><br/>non-empty: <b>${{summary.non_empty_notebooks || 0}}</b><br/>chroma store: <b>${{summary.chroma_store_present ? 'present' : 'missing'}}</b><br/>knowledge cron runs ok/error: <b>${{summary.cron_runs_ok || 0}}</b> / <b>${{summary.cron_runs_error || 0}}</b><br/><br/><table><thead><tr><th>Name</th><th>ID</th><th>Docs</th></tr></thead><tbody>${{rows || '<tr><td colspan="3" class="muted">No notebooks</td></tr>'}}</tbody></table><br/><table><thead><tr><th>Cron Job</th><th>Notebook</th><th>Status</th><th>Chunks</th></tr></thead><tbody>${{cronRows || '<tr><td colspan="4" class="muted">No knowledge cron runs</td></tr>'}}</tbody></table>`
+      );
+    }}
     function render(data) {{
+      const routerEvents = data.agent.intent_router_events || [];
+      const latestRoute = routerEvents[0] || null;
+      const compressionEvents = data.agent.compression_events || [];
+      const latestCompression = compressionEvents[0] || null;
       p(
         "agent",
-        `model: <b>${{data.agent.model}}</b><br/>planning: ${{badge(data.agent.planning_enabled)}}<br/>memory: ${{data.agent.memory_recall_mode}}<br/>compress: trigger=${{data.agent.compression_trigger_ratio}} / hysteresis=${{data.agent.compression_hysteresis_ratio}} / cooldown=${{data.agent.compression_cooldown_turns}}<br/>compress events: <b>${{(data.agent.compression_events || []).length}}</b>`
+        `model: <b>${{data.agent.model}}</b><br/>planning: ${{badge(data.agent.planning_enabled)}}<br/>memory: ${{data.agent.memory_recall_mode}}<br/>compress: trigger=${{data.agent.compression_trigger_ratio}} / hysteresis=${{data.agent.compression_hysteresis_ratio}} / cooldown=${{data.agent.compression_cooldown_turns}}<br/>compress events: <b>${{compressionEvents.length}}</b><br/>latest compression: <b>${{latestCompression ? (latestCompression.reason || '-') : '-'}}</b><br/>latest model route: <b>${{(data.agent.model_routing_summary || {{}}).latest_model || '-'}}</b> (${{(data.agent.model_routing_summary || {{}}).latest_reason || '-'}})`
       );
-      p("cron", `total: <b>${{data.cron.total_jobs}}</b><br/>enabled: <b>${{data.cron.enabled_jobs}}</b><br/>failed: <span class="${{data.cron.failed_jobs > 0 ? 'bad' : 'ok'}}">${{data.cron.failed_jobs}}</span>`);
+      const routerSummary = data.agent.intent_router_summary || {{}};
+      const routerRows = routerEvents.slice(0, 5).map(e => `
+        <tr>
+          <td>${{fmtAgo(e.at_ms, Date.now())}}</td>
+          <td>${{e.intent_name || '-'}}</td>
+          <td>${{e.route_status || '-'}}</td>
+          <td><code>${{e.trace_id || '-'}}</code></td>
+          <td>${{e.diagnostic || ''}}</td>
+        </tr>`).join('');
+      p(
+        "intentRouter",
+        `events: <b>${{routerSummary.total || 0}}</b><br/>direct success / failed / replan: <b>${{routerSummary.direct_success || 0}}</b> / <b>${{routerSummary.direct_failed || 0}}</b> / <b>${{routerSummary.replan || 0}}</b><br/>latest intent: <b>${{latestRoute ? (latestRoute.intent_name || '-') : '-'}}</b><br/>latest status: <b>${{latestRoute ? (latestRoute.route_status || '-') : '-'}}</b><br/>latest trace: <code>${{latestRoute ? (latestRoute.trace_id || '-') : '-'}}</code><br/><br/><table><thead><tr><th>When</th><th>Intent</th><th>Status</th><th>Trace</th><th>Diagnostic</th></tr></thead><tbody>${{routerRows || '<tr><td colspan="5" class="muted">No intent router events</td></tr>'}}</tbody></table>`
+      );
+      renderWorkflowWebhooks(data);
+      const cronRows = (data.cron.jobs || []).slice(0, 5).map(j => `
+        <tr>
+          <td>${{j.name || '-'}}</td>
+          <td>${{j.schedule_kind || '-'}}</td>
+          <td>${{j.target_kind || '-'}}</td>
+          <td>${{j.knowledge_related ? 'yes' : 'no'}}</td>
+          <td>${{j.last_status || '-'}}</td>
+        </tr>`).join('');
+      p("cron", `total: <b>${{data.cron.total_jobs}}</b><br/>enabled: <b>${{data.cron.enabled_jobs}}</b><br/>failed: <span class="${{data.cron.failed_jobs > 0 ? 'bad' : 'ok'}}">${{data.cron.failed_jobs}}</span><br/>webhook jobs: <b>${{data.cron.webhook_jobs || 0}}</b><br/>knowledge-related: <b>${{data.cron.knowledge_related_jobs || 0}}</b><br/><br/><table><thead><tr><th>Name</th><th>Schedule</th><th>Target</th><th>Knowledge</th><th>Last</th></tr></thead><tbody>${{cronRows || '<tr><td colspan="5" class="muted">No cron jobs</td></tr>'}}</tbody></table>`);
+      renderKnowledge(data);
       p("security", `hardening: ${{badge(data.security.production_hardening)}}<br/>subagent guardrail: ${{badge(data.security.subagent_hard_guardrail)}}<br/>skill perms: <b>${{data.security.skill_permissions_mode}}</b>`);
       const running = (data.sidecars || []).filter(x => x.status === "running").length;
       p("sidecars", `running: <b>${{running}}</b> / ${{(data.sidecars || []).length}}<br/>details in raw snapshot`);
       const chainClass = data.node.approval_chain_ok ? 'ok' : 'bad';
       const chainText = data.node.approval_chain_ok ? 'ok' : (data.node.approval_chain_error || 'failed');
       p("node", `nodes: <b>${{data.node.active_nodes}}</b>/${{data.node.total_nodes}}<br/>queue pending/running/failed: <b>${{data.node.queue_pending}}</b> / <b>${{data.node.queue_running}}</b> / <b>${{data.node.queue_failed}}</b><br/>approvals pending/overdue: <b>${{data.node.pending_approval}}</b> / <span class="${{data.node.pending_approval_overdue > 0 ? 'bad' : 'ok'}}">${{data.node.pending_approval_overdue}}</span><br/>approval timeout rejected: <b>${{data.node.approval_timeout_rejected}}</b><br/>approval chain: <span class="${{chainClass}}">${{chainText}}</span> (checked=${{data.node.approval_chain_checked}})`);
+      renderRecentObservability(data);
       renderNodeDetails(data);
       renderApprovalTimeline(data);
+      renderCompressionTimeline(data);
       document.getElementById("raw").textContent = JSON.stringify(data, null, 2);
     }}
     async function tick() {{

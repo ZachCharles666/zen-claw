@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
 try:
@@ -39,6 +41,25 @@ def register_channels(wechat=None, wecom=None, dingtalk=None, webhook_trigger=No
     _dingtalk_channel = dingtalk
     _webhook_trigger_channel = webhook_trigger
     _slack_channel = slack
+
+
+def _append_workflow_webhook_event(agent_id: str, accepted: dict[str, Any], client_ip: str) -> None:
+    from zen_claw.config.loader import get_data_dir
+
+    dashboard_dir = get_data_dir() / "dashboard"
+    dashboard_dir.mkdir(parents=True, exist_ok=True)
+    row = {
+        "at_ms": int(time.time() * 1000),
+        "agent_id": str(agent_id),
+        "trace_id": str(accepted.get("trace_id") or ""),
+        "workflow_source": str(accepted.get("workflow_source") or ""),
+        "workflow_run_id": str(accepted.get("workflow_run_id") or ""),
+        "workflow_step": str(accepted.get("workflow_step") or ""),
+        "client_ip": str(client_ip or ""),
+        "source": "dashboard.webhooks.trigger",
+    }
+    with (dashboard_dir / "workflow_webhook.log.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 if _HAS_FASTAPI:
@@ -172,13 +193,25 @@ if _HAS_FASTAPI:
             except Exception:
                 payload = {"content": body_bytes.decode("utf-8", errors="ignore")}
         query_map = {str(k): str(v) for k, v in request.query_params.items()}
-        await _webhook_trigger_channel.ingest_trigger(
+        accepted = await _webhook_trigger_channel.ingest_trigger(
             agent_id=agent_id,
             payload=payload,
+            headers=headers,
             query=query_map,
             client_ip=client_ip,
             metadata={"source": "dashboard.webhooks.trigger"},
         )
-        return JSONResponse(status_code=202, content={"success": True, "agent_id": agent_id})
+        _append_workflow_webhook_event(agent_id, accepted, client_ip)
+        return JSONResponse(
+            status_code=202,
+            content={
+                "success": True,
+                "agent_id": agent_id,
+                "trace_id": accepted.get("trace_id", ""),
+                "workflow_source": accepted.get("workflow_source", ""),
+                "workflow_run_id": accepted.get("workflow_run_id", ""),
+                "workflow_step": accepted.get("workflow_step", ""),
+            },
+        )
 else:
     webhook_router = None
