@@ -38,7 +38,7 @@ def test_relevant_memory_context_supports_custom_strategy(tmp_path: Path) -> Non
 
 
 def test_context_builder_uses_query_relevant_memory_first(tmp_path: Path) -> None:
-    ctx = ContextBuilder(tmp_path)
+    ctx = ContextBuilder(tmp_path, memory_recall_mode="keyword")
     _disable_skills(ctx)
     ctx.memory.write_long_term(
         "- Project codename is zen_claw.\n- Favorite editor theme is ocean.\n"
@@ -106,7 +106,7 @@ def test_context_builder_with_recall_mode_recent_prefers_recent_memory(
 
 
 def test_context_builder_includes_tool_learning_section(tmp_path: Path) -> None:
-    ctx = ContextBuilder(tmp_path)
+    ctx = ContextBuilder(tmp_path, memory_recall_mode="keyword")
     _disable_skills(ctx)
     learning_file = tmp_path / "memory" / "TOOLS_LEARNING.md"
     learning_file.parent.mkdir(parents=True, exist_ok=True)

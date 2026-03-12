@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -155,6 +156,40 @@ def test_process_direct_falls_back_when_zoneinfo_database_is_unavailable_for_new
 
     assert out.startswith("纽约当前时间：")
     assert "2026-03-08 06:00:00 EDT" in out
+
+
+def test_process_direct_logs_resolved_recovery_when_timezone_fallback_succeeds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 8, 10, 0, 0, tzinfo=UTC)),
+    )
+
+    def _raise_zoneinfo(*_args, **_kwargs):
+        raise Exception("no tzdata")
+
+    monkeypatch.setattr("zen_claw.agent.intent_router.ZoneInfo", _raise_zoneinfo)
+
+    out = asyncio.run(loop.process_direct("请告诉我纽约现在几点"))
+
+    assert out.startswith("纽约当前时间：")
+    rows = [
+        json.loads(line)
+        for line in (data_dir / "dashboard" / "intent_router.log.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line
+    ]
+    assert rows[-1]["route_status"] == "direct_success"
+    assert rows[-1]["recovery_mode"] == "resolved"
+    assert rows[-1]["recovery_blocker_kind"] == "environment_missing"
 
 
 def test_process_direct_falls_back_when_zoneinfo_database_is_unavailable_for_tokyo(

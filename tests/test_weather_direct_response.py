@@ -219,7 +219,8 @@ def test_process_direct_returns_deterministic_failure_when_weather_fetch_retries
 
     assert "不是权限或审批问题" in out
     assert "暂时无法获取成都的天气数据" in out
-    assert "主天气源和备用天气源都未成功响应" in out
+    assert "当前可用天气来源暂时没有返回稳定结果" in out
+    assert "主天气源" not in out
     assert calls["count"] == 4
 
 
@@ -525,3 +526,70 @@ def test_process_direct_routes_recent_long_range_weather_to_history_archive(
     assert "2026-01-29 大部晴朗 10~18°C" in out
     assert "2026-01-30 中雨 9~16°C" in out
     assert any("archive-api.open-meteo.com" in url for url in calls)
+
+
+def test_process_direct_logs_resolved_recovery_when_recent_long_range_weather_reroutes_to_history(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FailIfCalledProvider(),
+        workspace=tmp_path,
+        model="fake-model",
+        enable_planning=True,
+    )
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop._extract_and_store_memory = AsyncMock()  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 8, 12, 0, 0, tzinfo=UTC)),
+    )
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        assert name == "web_fetch"
+        url = params["url"]
+        if "geocoding-api.open-meteo.com" in url:
+            payload = {
+                "results": [
+                    {
+                        "name": "成都市",
+                        "latitude": 30.66667,
+                        "longitude": 104.06667,
+                        "timezone": "Asia/Shanghai",
+                    }
+                ]
+            }
+            return ToolResult.success(json.dumps({"text": json.dumps(payload, ensure_ascii=False)}))
+        if "archive-api.open-meteo.com" in url:
+            payload = {
+                "daily": {
+                    "time": ["2026-01-29"],
+                    "weather_code": [1],
+                    "temperature_2m_max": [18.0],
+                    "temperature_2m_min": [10.0],
+                }
+            }
+            return ToolResult.success(json.dumps({"text": json.dumps(payload, ensure_ascii=False)}))
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+
+    out = asyncio.run(loop.process_direct("告诉我成都最近70天的天气，需要给我的结果是日期+天气的样式"))
+
+    assert out.startswith("成都最近70天天气记录：")
+    rows = [
+        json.loads(line)
+        for line in (data_dir / "dashboard" / "intent_router.log.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line
+    ]
+    assert rows[-1]["route_status"] == "direct_success"
+    assert rows[-1]["recovery_mode"] == "resolved"
+    assert rows[-1]["recovery_blocker_kind"] == "source_scope_insufficient"

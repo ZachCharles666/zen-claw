@@ -1209,6 +1209,17 @@ class AgentLoop:
                 "route_status": route_result.route_status,
                 "handled": bool(route_result.handled),
                 "diagnostic": str(route_result.diagnostic or ""),
+                "recovery_mode": (
+                    str(route_result.recovery_outcome.mode)
+                    if route_result.recovery_outcome is not None
+                    else ""
+                ),
+                "recovery_blocker_kind": (
+                    str(route_result.recovery_outcome.plan.blocker.kind)
+                    if route_result.recovery_outcome is not None
+                    and route_result.recovery_outcome.plan is not None
+                    else ""
+                ),
             }
             with (dashboard_dir / "intent_router.log.jsonl").open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, ensure_ascii=False) + "\n")

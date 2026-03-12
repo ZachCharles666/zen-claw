@@ -104,6 +104,7 @@ class IntentRouteResult:
     ] = "miss"
     diagnostic: str | None = None
     skip_planning: bool = False
+    recovery_outcome: RecoveryOutcome | None = None
 
 
 @dataclass
@@ -384,6 +385,7 @@ class IntentRouter:
         content: str,
         contract: IntentToolContract,
         diagnostic: str,
+        recovery_outcome: RecoveryOutcome | None = None,
     ) -> IntentRouteResult:
         return IntentRouteResult(
             handled=True,
@@ -391,6 +393,98 @@ class IntentRouter:
             content=content,
             contract=contract,
             route_status="direct_failed",
+            diagnostic=diagnostic,
+            recovery_outcome=recovery_outcome,
+        )
+
+    @staticmethod
+    def _direct_success(
+        *,
+        intent_name: str,
+        content: str,
+        contract: IntentToolContract,
+        diagnostic: str | None = None,
+        recovery_outcome: RecoveryOutcome | None = None,
+    ) -> IntentRouteResult:
+        return IntentRouteResult(
+            handled=True,
+            intent_name=intent_name,
+            content=content,
+            contract=contract,
+            route_status="direct_success",
+            diagnostic=diagnostic,
+            recovery_outcome=recovery_outcome,
+        )
+
+    @classmethod
+    def _recovery_outcome_from_plan(
+        cls,
+        *,
+        summary: str,
+        plan: RecoveryPlan,
+        mode: Literal["guided", "failed"] = "guided",
+    ) -> RecoveryOutcome:
+        return RecoveryOutcome(
+            mode=mode,
+            content=cls._build_recovery_guidance_from_plan(summary=summary, plan=plan),
+            plan=plan,
+        )
+
+    @classmethod
+    def _direct_failed_with_plan(
+        cls,
+        *,
+        intent_name: str,
+        summary: str,
+        plan: RecoveryPlan,
+        contract: IntentToolContract,
+        diagnostic: str,
+        mode: Literal["guided", "failed"] = "guided",
+    ) -> IntentRouteResult:
+        outcome = cls._recovery_outcome_from_plan(summary=summary, plan=plan, mode=mode)
+        return cls._direct_failed(
+            intent_name=intent_name,
+            content=outcome.content,
+            contract=contract,
+            diagnostic=diagnostic,
+            recovery_outcome=outcome,
+        )
+
+    @staticmethod
+    def _resolved_outcome(*, content: str, plan: RecoveryPlan) -> RecoveryOutcome:
+        return RecoveryOutcome(mode="resolved", content=content, plan=plan)
+
+    @classmethod
+    def _direct_success_with_plan(
+        cls,
+        *,
+        intent_name: str,
+        content: str,
+        plan: RecoveryPlan,
+        contract: IntentToolContract,
+        diagnostic: str,
+    ) -> IntentRouteResult:
+        return cls._direct_success(
+            intent_name=intent_name,
+            content=content,
+            contract=contract,
+            diagnostic=diagnostic,
+            recovery_outcome=cls._resolved_outcome(content=content, plan=plan),
+        )
+
+    @classmethod
+    def _direct_failed_with_outcome(
+        cls,
+        *,
+        intent_name: str,
+        outcome: RecoveryOutcome,
+        contract: IntentToolContract,
+        diagnostic: str,
+    ) -> IntentRouteResult:
+        return cls._direct_failed(
+            intent_name=intent_name,
+            content=outcome.content,
+            contract=contract,
             diagnostic=diagnostic,
         )
 
@@ -444,9 +538,9 @@ class IntentRouter:
                 route_status="direct_success",
             )
 
-        return self._direct_failed(
+        return self._direct_failed_with_outcome(
             intent_name="exchange_rate",
-            content=self._build_exchange_failure_message(source, target),
+            outcome=self._build_exchange_failure_outcome(source, target),
             contract=self._EXCHANGE_CONTRACT,
             diagnostic=(
                 f"exchange_sources_failed:{source}_{target}:"
@@ -465,74 +559,67 @@ class IntentRouter:
             if zone is None and candidate is not None:
                 fallback_now = self._fallback_now_in_timezone(self._utc_now(), candidate)
                 if fallback_now is not None:
-                    return IntentRouteResult(
-                        handled=True,
+                    content = self._format_time_response(
+                        mode=mode,
+                        now=fallback_now,
+                        label=label or candidate,
+                    )
+                    return self._direct_success_with_plan(
                         intent_name="time",
-                        content=self._format_time_response(
-                            mode=mode,
-                            now=fallback_now,
-                            label=label or candidate,
-                        ),
+                        content=content,
+                        plan=self._build_timezone_fallback_resolution_plan(),
                         contract=self._TIME_CONTRACT,
-                        route_status="direct_success",
+                        diagnostic=f"timezone_fallback_resolved:{candidate}",
                     )
             if zone is None:
                 display = label or zone_key
-                return self._direct_failed(
+                return self._direct_failed_with_plan(
                     intent_name="time",
-                    content=self._build_recovery_guidance_from_plan(
-                        summary=(
-                            f"暂时无法识别“{display}”对应的时区，因此不能直接给出时间结果。"
+                    summary=f"暂时无法识别“{display}”对应的时区，因此不能直接给出时间结果。",
+                    plan=RecoveryPlan(
+                        blocker=RecoveryBlocker(
+                            kind="input_ambiguous",
+                            description="时区映射无法确认",
+                            missing_requirement="可确认的城市、地区或标准时区名",
                         ),
-                        plan=RecoveryPlan(
-                            blocker=RecoveryBlocker(
-                                kind="input_ambiguous",
-                                description="时区映射无法确认",
-                                missing_requirement="可确认的城市、地区或标准时区名",
+                        strategies=[
+                            RecoveryStrategy(
+                                kind="local_correction",
+                                detail="继续按更明确的城市或标准时区名重试解析",
                             ),
-                            strategies=[
-                                RecoveryStrategy(
-                                    kind="local_correction",
-                                    detail="继续按更明确的城市或标准时区名重试解析",
-                                ),
-                                RecoveryStrategy(
-                                    kind="guidance_only",
-                                    detail="先给出可继续推进的补充输入建议",
-                                ),
-                            ],
-                            checked_scope=[
-                                "当前直达时间路由已尝试按内置城市别名解析",
-                                "当前直达时间路由已尝试按标准时区名解析",
-                            ],
-                            next_steps=[
-                                "你可以直接给我标准时区名，例如 America/New_York",
-                                "你也可以换成更明确的城市表达，例如纽约市、东京时间",
-                            ],
-                            fallback_options=[
-                                "如果你只想知道现在几点，我也可以先告诉你当前时区时间",
-                                "如果你补充国家或城市全名，我可以继续帮你判断",
-                            ],
-                        ),
+                            RecoveryStrategy(
+                                kind="guidance_only",
+                                detail="先给出可继续推进的补充输入建议",
+                            ),
+                        ],
+                        checked_scope=[
+                            "当前直达时间路由已尝试按内置城市别名解析",
+                            "当前直达时间路由已尝试按标准时区名解析",
+                        ],
+                        next_steps=[
+                            "你可以直接给我标准时区名，例如 America/New_York",
+                            "你也可以换成更明确的城市表达，例如纽约市、东京时间",
+                        ],
+                        fallback_options=[
+                            "如果你只想知道现在几点，我也可以先告诉你当前时区时间",
+                            "如果你补充国家或城市全名，我可以继续帮你判断",
+                        ],
                     ),
                     contract=self._TIME_CONTRACT,
                     diagnostic=f"timezone_unrecognized:{display}",
                 )
             now = self._utc_now().astimezone(zone)
-            return IntentRouteResult(
-                handled=True,
+            return self._direct_success(
                 intent_name="time",
                 content=self._format_time_response(mode=mode, now=now, label=label or zone.key),
                 contract=self._TIME_CONTRACT,
-                route_status="direct_success",
             )
 
         now = self._utc_now().astimezone()
-        return IntentRouteResult(
-            handled=True,
+        return self._direct_success(
             intent_name="time",
             content=self._format_time_response(mode=mode, now=now, label="当前时区"),
             contract=self._TIME_CONTRACT,
-            route_status="direct_success",
         )
 
     async def _route_fixed_site(
@@ -563,17 +650,15 @@ class IntentRouter:
             ]
         )
         if isinstance(resolution.value, dict):
-            return IntentRouteResult(
-                handled=True,
+            return self._direct_success(
                 intent_name="fixed_site_fetch",
                 content=self._build_fixed_site_success_message(site=site, payload=resolution.value),
                 contract=self._FIXED_SITE_CONTRACT,
-                route_status="direct_success",
             )
 
-        return self._direct_failed(
+        return self._direct_failed_with_outcome(
             intent_name="fixed_site_fetch",
-            content=self._build_fixed_site_failure_message(site=site, topic=topic),
+            outcome=self._build_fixed_site_failure_outcome(site=site, topic=topic),
             contract=self._FIXED_SITE_CONTRACT,
             diagnostic=f"fixed_site_failed:{site}:{topic}:{','.join(resolution.attempts or [])}",
         )
@@ -595,17 +680,18 @@ class IntentRouter:
                 trace_id=trace_id,
             )
             if history_lines:
-                return IntentRouteResult(
-                    handled=True,
+                content = f"{location}最近{days}天天气记录：\n" + "\n".join(history_lines)
+                return self._direct_success_with_plan(
                     intent_name="weather",
-                    content=f"{location}最近{days}天天气记录：\n" + "\n".join(history_lines),
+                    content=content,
+                    plan=self._build_weather_history_resolution_plan(days=days),
                     contract=self._WEATHER_CONTRACT,
-                    route_status="direct_success",
+                    diagnostic=f"weather_history_resolved:{days}",
                 )
         if days > self._MAX_FORECAST_DAYS:
-            return self._direct_failed(
+            return self._direct_failed_with_outcome(
                 intent_name="weather",
-                content=self._build_weather_days_limit_message(
+                outcome=self._build_weather_days_limit_outcome(
                     location,
                     requested_days=days,
                     max_supported_days=self._MAX_FORECAST_DAYS,
@@ -638,17 +724,43 @@ class IntentRouter:
             ]
         )
         if isinstance(resolution.value, list) and resolution.value:
-            return IntentRouteResult(
-                handled=True,
+            return self._direct_success(
                 intent_name="weather",
                 content=f"{location}天气预报：\n" + "\n".join(resolution.value),
                 contract=self._WEATHER_CONTRACT,
-                route_status="direct_success",
             )
 
-        return self._direct_failed(
+        return self._direct_failed_with_plan(
             intent_name="weather",
-            content=self._build_weather_failure_message(location),
+            summary=f"暂时无法获取{location}的天气数据。",
+            plan=RecoveryPlan(
+                blocker=RecoveryBlocker(
+                    kind="upstream_unavailable",
+                    description="当前可用天气来源暂时没有返回稳定结果",
+                    missing_requirement="至少一个可访问且返回有效天气结果的数据来源",
+                ),
+                strategies=[
+                    RecoveryStrategy(
+                        kind="fallback_source",
+                        detail="继续尝试其他可用天气来源",
+                    ),
+                    RecoveryStrategy(
+                        kind="guidance_only",
+                        detail="在当前来源都失败时提示稍后重试或缩短时间范围",
+                    ),
+                ],
+                checked_scope=[
+                    "当前直达天气路由已尝试多个可用天气来源",
+                    "当前直达天气路由已检查返回内容是否能生成有效天气结果",
+                ],
+                next_steps=[
+                    f"你可以稍后重试，我会重新检查{location}的天气数据",
+                    "如果你只需要更短时间范围，我也可以先尝试缩短查询范围",
+                ],
+                fallback_options=[
+                    "如果你愿意，也可以先改问更短时间范围，或只查询今天/未来几天的天气",
+                ],
+            ),
             contract=self._WEATHER_CONTRACT,
             diagnostic=f"weather_sources_failed:{','.join(resolution.attempts or [])}",
         )
@@ -1517,13 +1629,6 @@ class IntentRouter:
         return mapping.get(code_int, f"天气代码{code_int}")
 
     @staticmethod
-    def _build_weather_failure_message(location: str) -> str:
-        return (
-            f"暂时无法获取{location}的天气数据。主天气源和备用天气源都未成功响应，可能是网络波动或上游服务异常，"
-            "不是权限或审批问题。请稍后重试。"
-        )
-
-    @staticmethod
     def _fixed_site_language_order(topic: str) -> list[str]:
         if re.search(r"[\u4e00-\u9fff]", topic):
             return ["zh", "en"]
@@ -1705,45 +1810,46 @@ class IntentRouter:
         return f"{prefix}：{extract}"
 
     @staticmethod
-    def _build_fixed_site_failure_message(*, site: str, topic: str) -> str:
+    def _build_fixed_site_failure_outcome(*, site: str, topic: str) -> RecoveryOutcome:
         site_label = "维基百科" if site == "wikipedia" else site
-        return IntentRouter._build_recovery_guidance_from_plan(
+        plan = RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="upstream_unavailable",
+                description=f"{site_label}上游站点未返回可用摘要",
+                missing_requirement="可访问且返回有效摘要的站点内容",
+            ),
+            strategies=[
+                RecoveryStrategy(
+                    kind="fallback_source",
+                    detail="继续尝试不同语言站点与 query API 备用链路",
+                ),
+                RecoveryStrategy(
+                    kind="same_site_search",
+                    detail="词条不精确时先站内搜索，再重新抓取摘要",
+                ),
+                RecoveryStrategy(
+                    kind="guidance_only",
+                    detail="在上游仍不可用时提示更明确词条名或稍后重试",
+                ),
+            ],
+            checked_scope=[
+                f"当前直达{site_label}路由已尝试主站点摘要接口",
+                f"当前直达{site_label}路由已尝试备用语言站点与 query API",
+            ],
+            next_steps=[
+                "你可以换一个更明确的词条名，我继续帮你重试",
+                "如果只是站点临时异常，稍后再试通常就能恢复",
+            ],
+            fallback_options=[
+                "如果你愿意，也可以改成更具体的问题，我先基于已知常识给你一个简述方向",
+            ],
+        )
+        return IntentRouter._recovery_outcome_from_plan(
             summary=(
                 f"暂时无法从{site_label}获取“{topic}”的摘要。"
                 "主站点和备用站点都未成功返回可用内容。"
             ),
-            plan=RecoveryPlan(
-                blocker=RecoveryBlocker(
-                    kind="upstream_unavailable",
-                    description=f"{site_label}上游站点未返回可用摘要",
-                    missing_requirement="可访问且返回有效摘要的站点内容",
-                ),
-                strategies=[
-                    RecoveryStrategy(
-                        kind="fallback_source",
-                        detail="继续尝试不同语言站点与 query API 备用链路",
-                    ),
-                    RecoveryStrategy(
-                        kind="same_site_search",
-                        detail="词条不精确时先站内搜索，再重新抓取摘要",
-                    ),
-                    RecoveryStrategy(
-                        kind="guidance_only",
-                        detail="在上游仍不可用时提示更明确词条名或稍后重试",
-                    ),
-                ],
-                checked_scope=[
-                    f"当前直达{site_label}路由已尝试主站点摘要接口",
-                    f"当前直达{site_label}路由已尝试备用语言站点与 query API",
-                ],
-                next_steps=[
-                    "你可以换一个更明确的词条名，我继续帮你重试",
-                    "如果只是站点临时异常，稍后再试通常就能恢复",
-                ],
-                fallback_options=[
-                    "如果你愿意，也可以改成更具体的问题，我先基于已知常识给你一个简述方向",
-                ],
-            ),
+            plan=plan,
         )
 
     @classmethod
@@ -1761,44 +1867,93 @@ class IntentRouter:
             f"参考汇率：1 {source} = {rate_text} {target}。"
         )
 
+    @staticmethod
+    def _build_timezone_fallback_resolution_plan() -> RecoveryPlan:
+        return RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="environment_missing",
+                description="本地标准时区数据暂不可用",
+                missing_requirement="可用的 IANA 时区数据或 tzdata",
+            ),
+            strategies=[
+                RecoveryStrategy(
+                    kind="local_correction",
+                    detail="先按内置固定时区偏移完成当前时间计算",
+                ),
+            ],
+            checked_scope=[
+                "当前直达时间路由已尝试按标准时区数据解析",
+                "当前直达时间路由已尝试按内置固定时区偏移兜底",
+            ],
+            next_steps=[
+                "如果后续补齐标准时区数据，时间结果会优先回到完整时区规则计算",
+            ],
+            fallback_options=[],
+        )
+
+    @staticmethod
+    def _build_weather_history_resolution_plan(*, days: int) -> RecoveryPlan:
+        return RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="source_scope_insufficient",
+                description="未来天气预报范围不足以覆盖最近长跨度请求",
+                missing_requirement="可用的历史天气数据路径",
+            ),
+            strategies=[
+                RecoveryStrategy(
+                    kind="semantic_reroute",
+                    detail="将最近/过去的长跨度天气请求改走历史 archive 路径",
+                ),
+            ],
+            checked_scope=[
+                "当前直达天气路由已识别该请求更适合走历史天气路径",
+                "当前直达天气路由已尝试历史天气 archive 数据",
+            ],
+            next_steps=[
+                f"如果你需要，我也可以继续按同样方式补充最近{days}天内其他城市的历史天气",
+            ],
+            fallback_options=[],
+        )
+
     @classmethod
-    def _build_exchange_failure_message(cls, source: str, target: str) -> str:
-        return cls._build_recovery_guidance_from_plan(
+    def _build_exchange_failure_outcome(cls, source: str, target: str) -> RecoveryOutcome:
+        plan = RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="upstream_unavailable",
+                description="汇率上游服务未返回可用结果",
+                missing_requirement="至少一个可访问且返回目标货币对的汇率源",
+            ),
+            strategies=[
+                RecoveryStrategy(
+                    kind="fallback_source",
+                    detail="继续尝试备用汇率源",
+                ),
+                RecoveryStrategy(
+                    kind="reverse_solve",
+                    detail="当正向货币对缺失时尝试反向货币对后求倒数",
+                ),
+                RecoveryStrategy(
+                    kind="guidance_only",
+                    detail="在上游均失败时建议稍后重试",
+                ),
+            ],
+            checked_scope=[
+                "当前直达汇率路由已尝试主汇率源",
+                "当前直达汇率路由已尝试备用汇率源与反向货币对求解",
+            ],
+            next_steps=[
+                "你可以稍后重试，我会再次检查主汇率源和备用汇率源",
+            ],
+            fallback_options=[
+                "如果你只需要大致换算，我也可以按最近常见区间先给你一个明确标注为估算的近似值",
+            ],
+        )
+        return cls._recovery_outcome_from_plan(
             summary=(
                 f"暂时无法获取{source}->{target}的汇率数据。"
                 "主汇率源和备用汇率源都未成功响应。"
             ),
-            plan=RecoveryPlan(
-                blocker=RecoveryBlocker(
-                    kind="upstream_unavailable",
-                    description="汇率上游服务未返回可用结果",
-                    missing_requirement="至少一个可访问且返回目标货币对的汇率源",
-                ),
-                strategies=[
-                    RecoveryStrategy(
-                        kind="fallback_source",
-                        detail="继续尝试备用汇率源",
-                    ),
-                    RecoveryStrategy(
-                        kind="reverse_solve",
-                        detail="当正向货币对缺失时尝试反向货币对后求倒数",
-                    ),
-                    RecoveryStrategy(
-                        kind="guidance_only",
-                        detail="在上游均失败时建议稍后重试",
-                    ),
-                ],
-                checked_scope=[
-                    "当前直达汇率路由已尝试主汇率源",
-                    "当前直达汇率路由已尝试备用汇率源与反向货币对求解",
-                ],
-                next_steps=[
-                    "你可以稍后重试，我会再次检查主汇率源和备用汇率源",
-                ],
-                fallback_options=[
-                    "如果你只需要大致换算，我也可以按最近常见区间先给你一个明确标注为估算的近似值",
-                ],
-            ),
+            plan=plan,
         )
 
     @staticmethod
@@ -1809,49 +1964,50 @@ class IntentRouter:
         return text
 
     @classmethod
-    def _build_weather_days_limit_message(
+    def _build_weather_days_limit_outcome(
         cls,
         location: str,
         *,
         requested_days: int,
         max_supported_days: int,
         request_scope: Literal["recent", "future"] = "recent",
-    ) -> str:
+    ) -> RecoveryOutcome:
         scope_label = "未来" if request_scope == "future" else "最近"
-        return cls._build_recovery_guidance_from_plan(
+        plan = RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="source_scope_insufficient",
+                description="内置天气源的时间范围上限",
+                missing_requirement=f"超过{max_supported_days}天的可信长周期天气数据",
+            ),
+            strategies=[
+                RecoveryStrategy(
+                    kind="semantic_reroute",
+                    detail="对明显的最近/过去 N 天请求优先改走历史天气路径",
+                ),
+                RecoveryStrategy(
+                    kind="guidance_only",
+                    detail="在无法继续扩展时给出更短周期或估算趋势替代方案",
+                ),
+            ],
+            checked_scope=[
+                "当前直达天气路由已评估主天气源的覆盖范围",
+                "当前直达天气路由已评估备用天气源的覆盖范围",
+            ],
+            next_steps=[
+                f"我现在可以先返回{location}最近{max_supported_days}天的真实天气",
+                "如果后续补上更长周期的可信天气源，这一步应优先继续扩展求解",
+            ],
+            fallback_options=[
+                f"我也可以继续按季节趋势补一份标注为估算的{requested_days}天天气趋势版",
+                "如果你只需要更短时间范围，也可以直接改问 16 天以内的天气",
+            ],
+        )
+        return cls._recovery_outcome_from_plan(
             summary=(
                 f"当前内置天气数据源最多支持未来{max_supported_days}天天气预报，"
                 f"暂时无法直接提供{location}{scope_label}{requested_days}天的天气。"
             ),
-            plan=RecoveryPlan(
-                blocker=RecoveryBlocker(
-                    kind="source_scope_insufficient",
-                    description="内置天气源的时间范围上限",
-                    missing_requirement=f"超过{max_supported_days}天的可信长周期天气数据",
-                ),
-                strategies=[
-                    RecoveryStrategy(
-                        kind="semantic_reroute",
-                        detail="对明显的最近/过去 N 天请求优先改走历史天气路径",
-                    ),
-                    RecoveryStrategy(
-                        kind="guidance_only",
-                        detail="在无法继续扩展时给出更短周期或估算趋势替代方案",
-                    ),
-                ],
-                checked_scope=[
-                    "当前直达天气路由已评估主天气源的覆盖范围",
-                    "当前直达天气路由已评估备用天气源的覆盖范围",
-                ],
-                next_steps=[
-                    f"我现在可以先返回{location}最近{max_supported_days}天的真实天气",
-                    "如果后续补上更长周期的可信天气源，这一步应优先继续扩展求解",
-                ],
-                fallback_options=[
-                    f"我也可以继续按季节趋势补一份标注为估算的{requested_days}天天气趋势版",
-                    "如果你只需要更短时间范围，也可以直接改问 16 天以内的天气",
-                ],
-            ),
+            plan=plan,
         )
 
     @classmethod

@@ -2,6 +2,7 @@ from zen_claw.agent.intent_router import (
     IntentRouter,
     RecoveryBlocker,
     RecoveryGuidance,
+    RecoveryOutcome,
     RecoveryPlan,
     RecoveryStrategy,
 )
@@ -81,3 +82,56 @@ def test_build_recovery_guidance_message_hides_internal_source_details() -> None
     assert "主站点摘要接口" not in message
     assert "query API" not in message
     assert "我先尝试了当前可用的百科摘要来源和词条匹配方式" in message
+
+
+def test_weather_days_limit_outcome_returns_structured_recovery_outcome() -> None:
+    outcome = IntentRouter._build_weather_days_limit_outcome(
+        "成都",
+        requested_days=70,
+        max_supported_days=16,
+        request_scope="future",
+    )
+
+    assert isinstance(outcome, RecoveryOutcome)
+    assert outcome.mode == "guided"
+    assert outcome.plan is not None
+    assert outcome.plan.blocker.kind == "source_scope_insufficient"
+    assert "暂时无法直接提供成都未来70天的天气" in outcome.content
+
+
+def test_fixed_site_failure_outcome_returns_structured_recovery_outcome() -> None:
+    outcome = IntentRouter._build_fixed_site_failure_outcome(site="wikipedia", topic="Alan Turing")
+
+    assert isinstance(outcome, RecoveryOutcome)
+    assert outcome.mode == "guided"
+    assert outcome.plan is not None
+    assert outcome.plan.blocker.kind == "upstream_unavailable"
+    assert "暂时无法从维基百科获取“Alan Turing”的摘要" in outcome.content
+
+
+def test_timezone_fallback_resolution_plan_can_back_a_resolved_outcome() -> None:
+    content = "纽约当前时间：2026-03-08 06:00:00 EDT"
+    outcome = IntentRouter._resolved_outcome(
+        content=content,
+        plan=IntentRouter._build_timezone_fallback_resolution_plan(),
+    )
+
+    assert isinstance(outcome, RecoveryOutcome)
+    assert outcome.mode == "resolved"
+    assert outcome.plan is not None
+    assert outcome.plan.blocker.kind == "environment_missing"
+    assert outcome.content == content
+
+
+def test_weather_history_resolution_plan_can_back_a_resolved_outcome() -> None:
+    content = "成都最近70天天气记录：\n2026-01-29 大部晴朗 10~18°C"
+    outcome = IntentRouter._resolved_outcome(
+        content=content,
+        plan=IntentRouter._build_weather_history_resolution_plan(days=70),
+    )
+
+    assert isinstance(outcome, RecoveryOutcome)
+    assert outcome.mode == "resolved"
+    assert outcome.plan is not None
+    assert outcome.plan.blocker.kind == "source_scope_insufficient"
+    assert "天气记录" in outcome.content
