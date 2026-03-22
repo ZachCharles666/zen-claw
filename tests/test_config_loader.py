@@ -88,3 +88,30 @@ def test_load_config_sidecar_supervisor_fields(tmp_path: Path) -> None:
     assert cfg.tools.sidecar_supervisor_fail_window_sec == 200
     assert cfg.tools.sidecar_supervisor_fail_threshold == 8
     assert cfg.tools.sidecar_supervisor_circuit_open_sec == 90
+
+
+def test_load_config_parses_agent_profiles_and_normalizes_ids(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {"model": "openai/gpt-4o"},
+                    "profiles": {
+                        "Finance_Writer": {
+                            "displayName": "Finance Writer",
+                            "model": "deepseek-chat",
+                            "enablePlanning": False,
+                        }
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_config(config_path=config_file)
+    assert "finance_writer" in cfg.agents.profiles
+    profile = cfg.agents.profiles["finance_writer"]
+    assert profile.display_name == "Finance Writer"
+    assert profile.model == "deepseek-chat"
+    assert profile.enable_planning is False

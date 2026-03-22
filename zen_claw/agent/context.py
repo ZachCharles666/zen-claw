@@ -32,10 +32,19 @@ class ContextBuilder:
         "ARCHITECTURE.md",
     ]
 
-    def __init__(self, workspace: Path, memory_recall_mode: str = "sqlite", max_tokens: int = 8192):
+    def __init__(
+        self,
+        workspace: Path,
+        memory_recall_mode: str = "sqlite",
+        max_tokens: int = 8192,
+        system_prompt_override: str | None = None,
+        system_prompt_file: str | None = None,
+    ):
         self.workspace = workspace
         self.memory_recall_mode = memory_recall_mode
         self.max_tokens = max(512, int(max_tokens))
+        self.system_prompt_override = str(system_prompt_override or "").strip()
+        self.system_prompt_file = str(system_prompt_file or "").strip()
 
         if memory_recall_mode == "none":
             recall_strategy = NoopRecallStrategy()
@@ -87,6 +96,10 @@ class ContextBuilder:
 
         # Core identity
         parts.append(self._get_identity())
+
+        profile_prompt = self._load_profile_prompt()
+        if profile_prompt:
+            parts.append(f"# Agent Profile\n\n{profile_prompt}")
 
         # Bootstrap files
         bootstrap = self._load_bootstrap_files()
@@ -147,6 +160,24 @@ Skills with available="false" need dependencies installed first - you can try in
 {skills_summary}""")
 
         return "\n\n---\n\n".join(parts)
+
+    def _load_profile_prompt(self) -> str:
+        """Load profile-specific prompt text from inline override and/or file."""
+        parts: list[str] = []
+        if self.system_prompt_override:
+            parts.append(self.system_prompt_override)
+        if self.system_prompt_file:
+            path = Path(self.system_prompt_file)
+            if not path.is_absolute():
+                path = self.workspace / path
+            try:
+                resolved = path.expanduser().resolve()
+                resolved.relative_to(self.workspace.expanduser().resolve())
+                if resolved.exists():
+                    parts.append(resolved.read_text(encoding="utf-8"))
+            except Exception:
+                logger.warning("failed to load agent profile prompt file: {}", self.system_prompt_file)
+        return "\n\n".join(part for part in parts if part)
 
     def _get_identity(self) -> str:
         """Get the core identity section."""

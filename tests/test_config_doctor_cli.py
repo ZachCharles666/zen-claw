@@ -232,3 +232,101 @@ def test_config_doctor_warns_empty_agent_profile_in_strict_mode(tmp_path: Path) 
     lowered = out.output.lower()
     assert "channels.webchat.agent" in lowered
     assert "empty" in lowered
+
+
+def test_config_doctor_warns_unknown_agent_profile_reference(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"},
+                    "profiles": {"finance_writer": {"displayName": "Finance Writer"}},
+                },
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
+                "channels": {"webchat": {"agentProfile": "missing_writer"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = CliRunner().invoke(app, ["config", "doctor", "--config", str(cfg), "--strict"])
+    assert out.exit_code == 1
+    lowered = out.output.lower()
+    assert "unknown profile" in lowered
+    assert "missing_writer" in lowered
+
+
+def test_config_doctor_warns_profile_prompt_file_outside_workspace(tmp_path: Path) -> None:
+    outside_prompt = tmp_path / "outside.md"
+    outside_prompt.write_text("prompt", encoding="utf-8")
+    workspace = tmp_path / "finance-ws"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"},
+                    "profiles": {
+                        "finance_writer": {
+                            "workspace": str(workspace),
+                            "systemPromptFile": str(outside_prompt),
+                        }
+                    },
+                },
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = CliRunner().invoke(app, ["config", "doctor", "--config", str(cfg), "--strict"])
+    assert out.exit_code == 1
+    lowered = out.output.lower()
+    assert "points outside its workspace" in lowered
+    assert "finance_writer" in lowered
+
+
+def test_config_doctor_warns_profile_tool_binding_overlap(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "agents": {
+                    "defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"},
+                    "profiles": {
+                        "finance_writer": {
+                            "allowedTools": ["read_file", "exec"],
+                            "deniedTools": ["exec"],
+                        }
+                    },
+                },
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = CliRunner().invoke(app, ["config", "doctor", "--config", str(cfg), "--strict"])
+    assert out.exit_code == 1
+    lowered = out.output.lower()
+    assert "allowedtools/deniedtools" in lowered
+    assert "overlaps" in lowered
+    assert "exec" in lowered

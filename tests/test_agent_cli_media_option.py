@@ -71,7 +71,7 @@ def test_agent_cli_media_option_injects_refs_into_user_content(tmp_path: Path, m
     provider = _FakeProvider()
 
     monkeypatch.setattr("zen_claw.config.loader.load_config", lambda: cfg)
-    monkeypatch.setattr("zen_claw.cli.commands._make_provider", lambda _cfg: provider)
+    monkeypatch.setattr("zen_claw.cli.commands._make_provider", lambda _cfg, model=None: provider)
     monkeypatch.setattr("zen_claw.cli.commands._print_effective_tool_backends", lambda _cfg: None)
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _InMemorySessionManager)
     monkeypatch.setattr("zen_claw.agent.skills.SkillsLoader.get_always_skills", lambda self: [])

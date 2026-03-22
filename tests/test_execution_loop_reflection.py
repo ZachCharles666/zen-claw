@@ -429,6 +429,45 @@ def test_resolve_run_model_uses_thinking_model_when_enabled(
     assert model == "deep-think-model"
 
 
+def test_resolve_run_model_uses_task_type_override_before_default(
+    tmp_path: Path, monkeypatch
+) -> None:
+    provider = FakeProvider([LLMResponse(content="ok")])
+    loop = _build_loop(tmp_path, provider, monkeypatch)
+    loop.task_type_model_overrides = {"message.send": "message-model"}
+
+    model = loop._resolve_run_model(
+        [{"role": "user", "content": "send this"}],
+        preferred_model="fake-model",
+        metadata={"task_type": "message.send"},
+    )
+
+    assert model == "message-model"
+
+
+def test_resolve_run_model_uses_stability_and_cost_models_from_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    provider = FakeProvider([LLMResponse(content="ok")])
+    loop = _build_loop(tmp_path, provider, monkeypatch)
+    loop.stability_model = "stable-model"
+    loop.cost_model = "cheap-model"
+
+    stability_model = loop._resolve_run_model(
+        [{"role": "user", "content": "reliable answer"}],
+        preferred_model="fake-model",
+        metadata={"stability_required": True},
+    )
+    cost_model = loop._resolve_run_model(
+        [{"role": "user", "content": "cheap answer"}],
+        preferred_model="fake-model",
+        metadata={"cost_sensitive": True},
+    )
+
+    assert stability_model == "stable-model"
+    assert cost_model == "cheap-model"
+
+
 def test_run_execute_reflect_loop_retries_once_with_fallback_model(
     tmp_path: Path, monkeypatch
 ) -> None:

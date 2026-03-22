@@ -18,7 +18,7 @@ class Document:
 class Ingestor:
     SUPPORTED_TEXT_SUFFIXES = {".txt", ".md", ".rst"}
     SUPPORTED_HTML_SUFFIXES = {".html", ".htm"}
-    SUPPORTED_SUFFIXES = {".pdf", ".docx", *SUPPORTED_TEXT_SUFFIXES, *SUPPORTED_HTML_SUFFIXES}
+    SUPPORTED_SUFFIXES = {".pdf", ".docx", ".csv", *SUPPORTED_TEXT_SUFFIXES, *SUPPORTED_HTML_SUFFIXES}
 
     def __init__(
         self,
@@ -44,6 +44,8 @@ class Ingestor:
             return self._ingest_pdf(path)
         if suffix == ".docx":
             return self._ingest_docx(path)
+        if suffix == ".csv":
+            return self._ingest_csv(path)
         if suffix in self.SUPPORTED_TEXT_SUFFIXES:
             return self._ingest_text(path)
         if suffix in self.SUPPORTED_HTML_SUFFIXES:
@@ -126,6 +128,41 @@ class Ingestor:
     def _ingest_text(self, path: Path) -> list[Document]:
         content = path.read_text(encoding="utf-8", errors="replace").strip()
         return [Document(content=content, source=str(path), page=None)]
+
+    def _ingest_csv(self, path: Path) -> list[Document]:
+        import csv
+
+        docs: list[Document] = []
+        for encoding in ("utf-8-sig", "utf-8", "gbk"):
+            try:
+                with path.open(encoding=encoding, newline="") as fh:
+                    reader = csv.DictReader(fh)
+                    for row_num, row in enumerate(reader, start=1):
+                        pairs = [
+                            f"{k}: {v}"
+                            for k, v in row.items()
+                            if k is not None and str(v or "").strip()
+                        ]
+                        if not pairs:
+                            continue
+                        content = "\n".join(pairs)
+                        metadata: dict[str, Any] = {
+                            k: v
+                            for k, v in row.items()
+                            if k is not None and isinstance(v, str)
+                        }
+                        docs.append(
+                            Document(
+                                content=content,
+                                source=f"{path.name}:row{row_num}",
+                                page=row_num,
+                                metadata=metadata,
+                            )
+                        )
+                return docs
+            except (UnicodeDecodeError, LookupError):
+                continue
+        raise ValueError(f"Could not decode CSV file (tried utf-8, gbk): {path}")
 
     def _ingest_html(self, path: Path) -> list[Document]:
         raw = path.read_text(encoding="utf-8", errors="replace")

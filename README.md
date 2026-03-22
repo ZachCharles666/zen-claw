@@ -4,6 +4,22 @@
 
 zen-claw is a local-first AI agent execution framework offering controllable tool invocation, multi-channel integration, and traceable operational governance.
 
+## Quick Start
+
+```bash
+git clone https://github.com/your-org/zen-claw.git
+cd zen-claw
+cp .env.example .env          # fill in your LLM API key
+docker compose up -d
+open http://localhost:18791   # Dashboard
+```
+
+> For ChromaDB RAG support: `docker compose --profile rag up -d`
+>
+> Full deployment guide: [docs/DEPLOY.md](docs/DEPLOY.md)
+
+---
+
 ## Core Capabilities
 
 ### Agent & Execution

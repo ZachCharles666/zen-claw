@@ -116,10 +116,21 @@ class TextChunker:
         return chunks
 
     def chunk_with_metadata(
-        self, text: str, source: str = "", page: int | None = None
+        self,
+        text: str,
+        source: str = "",
+        page: int | None = None,
+        metadata: dict | None = None,
     ) -> list[dict]:
         chunks = self.chunk(text)
+        base_metadata = dict(metadata or {})
         return [
-            {"content": c, "source": source, "page": page, "chunk_index": i}
+            {
+                "content": c,
+                "source": source,
+                "page": page,
+                "chunk_index": i,
+                "metadata": dict(base_metadata),
+            }
             for i, c in enumerate(chunks)
         ]

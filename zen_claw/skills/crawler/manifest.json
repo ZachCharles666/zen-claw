@@ -1,0 +1,25 @@
+{
+  "name": "crawler",
+  "version": "0.1.0",
+  "description": "Optional crawler accelerator for scheduled web extraction and RAG ingest.",
+  "author": "zen-claw",
+  "permissions": [
+    "web_fetch"
+  ],
+  "scopes": [
+    "network"
+  ],
+  "trust": "trusted",
+  "runtime_contract": {
+    "intent": "crawler_ingest",
+    "intent_mode": "skill_first",
+    "response_mode": "direct",
+    "failure_mode": "runtime_direct",
+    "preferred_tools": [
+      "web_fetch"
+    ],
+    "allowed_tools": [
+      "web_fetch"
+    ]
+  }
+}

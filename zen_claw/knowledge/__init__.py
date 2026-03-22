@@ -2,6 +2,7 @@
 
 from zen_claw.knowledge.ingestor import Document, Ingestor
 from zen_claw.knowledge.notebook import Notebook, NotebookManager
+from zen_claw.knowledge.pipeline import RAGPipeline
 from zen_claw.knowledge.retriever import HybridRetriever, HybridSearchResult
 
 __all__ = [
@@ -9,6 +10,7 @@ __all__ = [
     "Ingestor",
     "Notebook",
     "NotebookManager",
+    "RAGPipeline",
     "HybridRetriever",
     "HybridSearchResult",
 ]

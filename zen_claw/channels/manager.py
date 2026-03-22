@@ -1,6 +1,7 @@
 """Channel manager for coordinating chat channels."""
 
 import asyncio
+import importlib
 import json
 import time
 from typing import Any
@@ -10,6 +11,7 @@ from loguru import logger
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.base import BaseChannel
+from zen_claw.channels.registry import get_channel_config, iter_channel_specs
 from zen_claw.channels.routing import AgentRouteStore
 from zen_claw.config.schema import Config
 from zen_claw.observability.trace import TraceContext
@@ -236,200 +238,32 @@ class ChannelManager:
     def _init_channels(self) -> None:
         """Initialize channels based on config."""
         media_root = self.config.workspace_path / "media"
-
-        # Telegram channel
-        if self.config.channels.telegram.enabled:
+        for spec in iter_channel_specs():
+            ch_cfg = get_channel_config(self.config, spec)
+            if not bool(getattr(ch_cfg, "enabled", False)):
+                continue
             try:
-                from zen_claw.channels.telegram import TelegramChannel
-
-                self.channels["telegram"] = TelegramChannel(
-                    self.config.channels.telegram,
-                    self.bus,
-                    groq_api_key=self.config.providers.groq.api_key,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["telegram"])
-                logger.info("Telegram channel enabled")
+                mod = importlib.import_module(spec.module_path)
+                cls = getattr(mod, spec.class_name)
+                kwargs: dict[str, Any] = {"media_root": media_root}
+                if spec.needs_groq_api_key:
+                    kwargs["groq_api_key"] = self.config.providers.groq.api_key
+                self.channels[spec.key] = cls(ch_cfg, self.bus, **kwargs)
+                self._bind_access_checker(self.channels[spec.key])
+                logger.info(f"{spec.display_name} channel enabled")
             except ImportError as e:
-                logger.warning(f"Telegram channel not available: {e}")
-
-        # WhatsApp channel
-        if self.config.channels.whatsapp.enabled:
-            try:
-                from zen_claw.channels.whatsapp import WhatsAppChannel
-
-                self.channels["whatsapp"] = WhatsAppChannel(
-                    self.config.channels.whatsapp,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["whatsapp"])
-                logger.info("WhatsApp channel enabled")
-            except ImportError as e:
-                logger.warning(f"WhatsApp channel not available: {e}")
-
-        # Discord channel
-        if self.config.channels.discord.enabled:
-            try:
-                from zen_claw.channels.discord import DiscordChannel
-
-                self.channels["discord"] = DiscordChannel(
-                    self.config.channels.discord,
-                    self.bus,
-                    media_root=media_root,
-                    groq_api_key=self.config.providers.groq.api_key,
-                )
-                self._bind_access_checker(self.channels["discord"])
-                logger.info("Discord channel enabled")
-            except ImportError as e:
-                logger.warning(f"Discord channel not available: {e}")
-
-        # WebChat channel
-        if self.config.channels.webchat.enabled:
-            try:
-                from zen_claw.channels.webchat import WebChatChannel
-
-                self.channels["webchat"] = WebChatChannel(
-                    self.config.channels.webchat,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["webchat"])
-                logger.info("WebChat channel enabled")
-            except ImportError as e:
-                logger.warning(f"WebChat channel not available: {e}")
-
-        # Generic webhook trigger channel
-        if self.config.channels.webhook_trigger.enabled:
-            try:
-                from zen_claw.channels.webhook_trigger import WebhookTriggerChannel
-
-                self.channels["webhook_trigger"] = WebhookTriggerChannel(
-                    self.config.channels.webhook_trigger,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["webhook_trigger"])
-                logger.info("Webhook trigger channel enabled")
-            except ImportError as e:
-                logger.warning(f"Webhook trigger channel not available: {e}")
-
-        # Slack channel
-        if self.config.channels.slack.enabled:
-            try:
-                from zen_claw.channels.slack import SlackChannel
-
-                self.channels["slack"] = SlackChannel(
-                    self.config.channels.slack,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["slack"])
-                logger.info("Slack channel enabled")
-            except ImportError as e:
-                logger.warning(f"Slack channel not available: {e}")
-
-        # Signal channel
-        if self.config.channels.signal.enabled:
-            try:
-                from zen_claw.channels.signal import SignalChannel
-
-                self.channels["signal"] = SignalChannel(
-                    self.config.channels.signal,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["signal"])
-                logger.info("Signal channel enabled")
-            except ImportError as e:
-                logger.warning(f"Signal channel not available: {e}")
-
-        # Matrix channel
-        if self.config.channels.matrix.enabled:
-            try:
-                from zen_claw.channels.matrix import MatrixChannel
-
-                self.channels["matrix"] = MatrixChannel(
-                    self.config.channels.matrix,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["matrix"])
-                logger.info("Matrix channel enabled")
-            except ImportError as e:
-                logger.warning(f"Matrix channel not available: {e}")
-
-        # Feishu channel
-        if self.config.channels.feishu.enabled:
-            try:
-                from zen_claw.channels.feishu import FeishuChannel
-
-                self.channels["feishu"] = FeishuChannel(
-                    self.config.channels.feishu,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["feishu"])
-                logger.info("Feishu channel enabled")
-            except ImportError as e:
-                logger.warning(f"Feishu channel not available: {e}")
-
-        # WeChat MP channel
-        if self.config.channels.wechat_mp.enabled:
-            try:
-                from zen_claw.channels.wechat_mp import WechatMPChannel
-
-                self.channels["wechat_mp"] = WechatMPChannel(
-                    self.config.channels.wechat_mp,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["wechat_mp"])
-                logger.info("WeChat MP channel enabled")
-            except ImportError as e:
-                logger.warning(f"WeChat MP channel not available: {e}")
-
-        # WeCom channel
-        if self.config.channels.wecom.enabled:
-            try:
-                from zen_claw.channels.wecom import WeComChannel
-
-                self.channels["wecom"] = WeComChannel(
-                    self.config.channels.wecom,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["wecom"])
-                logger.info("WeCom channel enabled")
-            except ImportError as e:
-                logger.warning(f"WeCom channel not available: {e}")
-
-        # DingTalk channel
-        if self.config.channels.dingtalk.enabled:
-            try:
-                from zen_claw.channels.dingtalk import DingTalkChannel
-
-                self.channels["dingtalk"] = DingTalkChannel(
-                    self.config.channels.dingtalk,
-                    self.bus,
-                    media_root=media_root,
-                )
-                self._bind_access_checker(self.channels["dingtalk"])
-                logger.info("DingTalk channel enabled")
-            except ImportError as e:
-                logger.warning(f"DingTalk channel not available: {e}")
+                logger.warning(f"{spec.display_name} channel not available: {e}")
 
         # Expose webhook-backed channels to dashboard API router.
         try:
             from zen_claw.dashboard.webhooks import register_channels
 
-            register_channels(
-                wechat=self.channels.get("wechat_mp"),
-                wecom=self.channels.get("wecom"),
-                dingtalk=self.channels.get("dingtalk"),
-                webhook_trigger=self.channels.get("webhook_trigger"),
-                slack=self.channels.get("slack"),
-            )
+            webhook_channels = {
+                spec.webhook_slot: self.channels.get(spec.key)
+                for spec in iter_channel_specs()
+                if spec.webhook_slot
+            }
+            register_channels(**webhook_channels)
         except Exception as e:
             logger.debug(f"Webhook route registration skipped: {e}")
 

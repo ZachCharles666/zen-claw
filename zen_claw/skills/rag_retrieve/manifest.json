@@ -1,0 +1,29 @@
+{
+  "name": "rag_retrieve",
+  "version": "0.1.0",
+  "description": "Business skill skeleton for grounded retrieval against local knowledge.",
+  "author": "zen-claw",
+  "permissions": [
+    "read_file",
+    "message"
+  ],
+  "scopes": [
+    "filesystem",
+    "message"
+  ],
+  "trust": "trusted",
+  "runtime_contract": {
+    "intent": "knowledge_retrieval",
+    "intent_mode": "skill_first",
+    "response_mode": "llm_assisted",
+    "failure_mode": "runtime_fact_llm_format",
+    "preferred_tools": [
+      "read_file",
+      "message"
+    ],
+    "allowed_tools": [
+      "read_file",
+      "message"
+    ]
+  }
+}

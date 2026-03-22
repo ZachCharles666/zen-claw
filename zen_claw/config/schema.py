@@ -1,5 +1,6 @@
 """Configuration schema using Pydantic."""
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -233,7 +234,10 @@ class AgentDefaults(BaseModel):
     vision_model: str = ""
     thinking_model: str = ""
     fallback_model: str = ""
+    cost_model: str = ""
+    stability_model: str = ""
     intent_model_overrides: dict[str, str] = Field(default_factory=dict)
+    task_type_model_overrides: dict[str, str] = Field(default_factory=dict)
     memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "none"] = "sqlite"
     enable_planning: bool = True
     max_reflections: int = 1
@@ -246,6 +250,58 @@ class AgentDefaults(BaseModel):
     temperature: float = 0.7
     max_tool_iterations: int = 20
     allowed_models: list[str] = Field(default_factory=list)
+    skill_names: list[str] = Field(default_factory=list)
+    token_budget_daily: int = 0  # 0 = unlimited; >0 = max total tokens per day (alarm only)
+
+
+class AgentProfileConfig(BaseModel):
+    """Per-agent profile overrides for orchestration."""
+
+    display_name: str = ""
+    description: str = ""
+    routing_keywords: list[str] = Field(default_factory=list)
+    skill_names: list[str] = Field(default_factory=list)
+    system_prompt: str = ""
+    system_prompt_file: str = ""
+    allowed_tools: list[str] | None = None
+    denied_tools: list[str] | None = None
+    workspace: str = ""
+    model: str = ""
+    vision_model: str = ""
+    thinking_model: str = ""
+    fallback_model: str = ""
+    cost_model: str = ""
+    stability_model: str = ""
+    intent_model_overrides: dict[str, str] = Field(default_factory=dict)
+    task_type_model_overrides: dict[str, str] = Field(default_factory=dict)
+    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "none"] | None = None
+    enable_planning: bool | None = None
+    max_reflections: int | None = None
+    auto_parameter_rewrite: bool | None = None
+    skill_permissions_mode: Literal["off", "warn", "enforce"] | None = None
+    max_tokens: int | None = None
+    compression_trigger_ratio: float | None = None
+    compression_hysteresis_ratio: float | None = None
+    compression_cooldown_turns: int | None = None
+    max_tool_iterations: int | None = None
+    allowed_models: list[str] | None = None
+    token_budget_daily: int | None = None  # Override defaults.token_budget_daily
+    on_complete_webhook: str = ""  # POST to this URL when agent task completes
+
+    @model_validator(mode="after")
+    def _normalize_routing_keywords(self) -> "AgentProfileConfig":
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in self.routing_keywords:
+            token = " ".join(str(raw or "").strip().lower().split())
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            normalized.append(token)
+        self.routing_keywords = normalized
+        self.allowed_tools = ToolPolicyLayerConfig._normalize_tool_list(self.allowed_tools)
+        self.denied_tools = ToolPolicyLayerConfig._normalize_tool_list(self.denied_tools)
+        return self
 
 
 class SocialAgentConfig(BaseModel):
@@ -272,8 +328,20 @@ class AgentsConfig(BaseModel):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    profiles: dict[str, AgentProfileConfig] = Field(default_factory=dict)
     social: SocialAgentConfig = Field(default_factory=SocialAgentConfig)
     identity: AgentIdentityConfig = Field(default_factory=AgentIdentityConfig)
+
+    @model_validator(mode="after")
+    def _normalize_profiles(self) -> "AgentsConfig":
+        normalized: dict[str, AgentProfileConfig] = {}
+        for key, value in self.profiles.items():
+            profile_id = re.sub(r"_+", "_", str(key or "").strip().lower())
+            if not profile_id:
+                continue
+            normalized[profile_id] = value
+        self.profiles = normalized
+        return self
 
 
 class ProviderConfig(BaseModel):
@@ -312,8 +380,14 @@ class KnowledgeConfig(BaseModel):
 
     enabled: bool = True
     default_notebook: str = "default"
+    store_backend: Literal["chroma", "memory"] = "chroma"
+    chroma_subdir: str = "chroma"
+    chroma_collection_prefix: str = ""
+    memory_namespace: str = ""
     embedding_provider: Literal["local", "openai"] = "local"
     embedding_model: str = "BAAI/bge-m3"
+    retention_max_documents: int = 0
+    retention_max_age_days: int = 0
 
 
 class GatewayConfig(BaseModel):

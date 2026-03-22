@@ -44,6 +44,7 @@ logs/
 *.tmp
 *.sqlite
 *.db
+.registry_data/
 browser/sidecar/node_modules/
 
 # Local workspace generated files

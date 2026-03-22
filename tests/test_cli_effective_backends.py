@@ -4,7 +4,7 @@ from pathlib import Path
 from rich.console import Console
 
 from zen_claw.cli import commands
-from zen_claw.config.schema import Config, ToolPolicyLayerConfig
+from zen_claw.config.schema import AgentProfileConfig, Config, ToolPolicyLayerConfig
 
 
 def test_print_effective_tool_backends_includes_policy_summary(monkeypatch) -> None:
@@ -52,6 +52,7 @@ def test_print_channel_rbac_status_summary_and_verbose(monkeypatch) -> None:
     assert "telegram: enabled=True, admins=2, users=1" in output
     assert "discord: enabled=True, admins=0, users=1" in output
     assert "whatsapp: enabled=False, admins=0, users=0" in output
+    assert "slack: enabled=False, admins=0, users=0" in output
     assert "admin_ids: a1, a2" in output
     assert "user_ids: u1" in output
 
@@ -192,3 +193,29 @@ def test_print_node_token_rotation_status(monkeypatch) -> None:
     assert "revoked=1" in output
     assert "expired=1" in output
     assert "expiringSoon=1" in output
+
+
+def test_print_agent_profile_status(monkeypatch, tmp_path: Path) -> None:
+    cfg = Config()
+    cfg.agents.defaults.workspace = str(tmp_path / "default-ws")
+    cfg.agents.profiles = {
+        "finance_writer": AgentProfileConfig(
+            workspace=str(tmp_path / "finance-ws"),
+            model="deepseek-chat",
+            system_prompt="Inline prompt",
+            allowed_tools=["read_file"],
+        )
+    }
+
+    buf = StringIO()
+    test_console = Console(file=buf, force_terminal=False, color_system=None)
+    monkeypatch.setattr(commands, "console", test_console)
+
+    commands._print_agent_profile_status(cfg, verbose=True)
+    output = buf.getvalue()
+    assert "Agent Profiles" in output
+    assert "finance_writer: registered=True" in output
+    assert "promptBound=True" in output
+    assert "toolBound=True" in output
+    assert "memoryIsolation: workspace-scoped" in output
+    assert "toolBinding: allow=read_file, deny=(none)" in output

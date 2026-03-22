@@ -79,8 +79,10 @@ packages = ["zen_claw"]
 [tool.hatch.build]
 include = [
     "zen_claw/**/*.py",
+    "zen_claw/skills/**/*.json",
     "zen_claw/skills/**/*.md",
     "zen_claw/skills/**/*.sh",
+    "zen_claw/skills/**/*.txt",
 ]
 
 [tool.hatch.build.targets.sdist]

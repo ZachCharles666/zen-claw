@@ -28,6 +28,8 @@ class ToolRegistry:
         # Optional additional gate (e.g. when a specific skill/plugin is loaded).
         # When set, tools not in this allow-list are denied regardless of policy config.
         self._skill_allowed_tools: set[str] | None = None
+        self._profile_allowed_tools: set[str] | None = None
+        self._profile_denied_tools: set[str] = set()
         self._active_skill_names: list[str] = []
         self._skill_permissions_mode: str = "off"
 
@@ -56,8 +58,26 @@ class ToolRegistry:
         *,
         extra_allow: set[str] | list[str] | tuple[str, ...] | None = None,
         extra_deny: set[str] | list[str] | tuple[str, ...] | None = None,
+        query_hint: str | None = None,
+        semantic_top_k: int = 10,
+        semantic_threshold: int = 12,
     ) -> list[dict[str, Any]]:
-        """Get only tool definitions visible under current/runtime-local constraints."""
+        """Get only tool definitions visible under current/runtime-local constraints.
+
+        Parameters
+        ----------
+        query_hint:
+            When provided and the visible tool count exceeds *semantic_threshold*,
+            BM25 relevance scoring is applied and only the top *semantic_top_k*
+            most relevant tools are returned.  This reduces input-token usage on
+            agents with many registered tools.  ``None`` preserves the original
+            behaviour (no semantic filtering).
+        semantic_top_k:
+            Maximum number of tools to keep after BM25 filtering.
+        semantic_threshold:
+            Minimum number of visible tools required before BM25 filtering is
+            applied.  Below this number the full set is always returned.
+        """
         allow_set = (
             {str(t).strip().lower() for t in extra_allow if str(t).strip()}
             if extra_allow is not None
@@ -79,6 +99,12 @@ class ToolRegistry:
             if not self._is_visible_under_current_policy(token):
                 continue
             visible.append(tool.to_schema())
+
+        # C2 — semantic tool selection via BM25 when query_hint is provided
+        if query_hint and len(visible) > semantic_threshold:
+            from zen_claw.agent.tools.semantic_selector import bm25_select
+            visible = bm25_select(visible, query_hint, top_k=semantic_top_k)
+
         return visible
 
     def set_policy_scope(
@@ -182,6 +208,56 @@ class ToolRegistry:
                         tool=name,
                         policy_scope="skill",
                         policy_code="skill_permission_denied",
+                        error_kind=result.error.kind.value if result.error else None,
+                        retryable=result.error.retryable if result.error else None,
+                        skill_names=self._active_skill_names or None,
+                        skill_permissions_mode=self._skill_permissions_mode,
+                    )
+                )
+                return result
+        t = (name or "").strip().lower()
+        if t in self._profile_denied_tools or "*" in self._profile_denied_tools:
+            result = ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                f"Tool '{t}' is denied by active agent profile binding",
+                code="profile_tool_denied",
+                policy_scope="agent_profile",
+                skill_names=self._active_skill_names,
+                skill_permissions_mode=self._skill_permissions_mode,
+            )
+            logger.warning(
+                "Tool blocked by profile deny gate "
+                + TraceContext.event_text(
+                    "tool.profile.denied",
+                    trace_id,
+                    tool=name,
+                    policy_scope="agent_profile",
+                    policy_code="profile_tool_denied",
+                    error_kind=result.error.kind.value if result.error else None,
+                    retryable=result.error.retryable if result.error else None,
+                    skill_names=self._active_skill_names or None,
+                    skill_permissions_mode=self._skill_permissions_mode,
+                )
+            )
+            return result
+        if self._profile_allowed_tools is not None:
+            if "*" not in self._profile_allowed_tools and t not in self._profile_allowed_tools:
+                result = ToolResult.failure(
+                    ToolErrorKind.PERMISSION,
+                    f"Tool '{t}' is not permitted by active agent profile binding",
+                    code="profile_tool_not_allowlisted",
+                    policy_scope="agent_profile",
+                    skill_names=self._active_skill_names,
+                    skill_permissions_mode=self._skill_permissions_mode,
+                )
+                logger.warning(
+                    "Tool blocked by profile allow gate "
+                    + TraceContext.event_text(
+                        "tool.profile.denied",
+                        trace_id,
+                        tool=name,
+                        policy_scope="agent_profile",
+                        policy_code="profile_tool_not_allowlisted",
                         error_kind=result.error.kind.value if result.error else None,
                         retryable=result.error.retryable if result.error else None,
                         skill_names=self._active_skill_names or None,
@@ -337,6 +413,11 @@ class ToolRegistry:
         if self._skill_allowed_tools is not None:
             if "*" not in self._skill_allowed_tools and name not in self._skill_allowed_tools:
                 return False
+        if name in self._profile_denied_tools or "*" in self._profile_denied_tools:
+            return False
+        if self._profile_allowed_tools is not None:
+            if "*" not in self._profile_allowed_tools and name not in self._profile_allowed_tools:
+                return False
         decision = self._policy.evaluate(name)
         return bool(decision.allowed)
 
@@ -431,6 +512,23 @@ class ToolRegistry:
     def clear_skill_allowed_tools(self) -> None:
         """Disable the skill permission gate."""
         self._skill_allowed_tools = None
+
+    def set_profile_tool_binding(
+        self,
+        *,
+        allow: set[str] | list[str] | tuple[str, ...] | None = None,
+        deny: set[str] | list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        """Set/replace the profile-level tool binding gate."""
+        self._profile_allowed_tools = (
+            {str(t).strip().lower() for t in allow if str(t).strip()} if allow is not None else None
+        )
+        self._profile_denied_tools = {str(t).strip().lower() for t in (deny or []) if str(t).strip()}
+
+    def clear_profile_tool_binding(self) -> None:
+        """Disable the profile-level tool binding gate."""
+        self._profile_allowed_tools = None
+        self._profile_denied_tools = set()
 
     def set_skill_attribution(self, skill_names: list[str] | None, mode: str = "off") -> None:
         """Set active skill attribution context for audit/log correlation."""

@@ -35,6 +35,17 @@ class CronPayload:
     target_timeout_sec: int = 10
     knowledge_source: str | None = None
     knowledge_notebook: str | None = None
+    knowledge_retention_max_documents: int | None = None
+    knowledge_retention_max_age_days: int | None = None
+    crawler_source_name: str | None = None
+    crawler_source_url: str | None = None
+    crawler_notebook: str | None = None
+    crawler_selector: str | None = None
+    crawler_use_browser: bool = False
+    crawler_max_chars: int | None = None
+    crawler_metadata_json: str | None = None
+    crawler_tenant_id: str | None = None
+    crawler_store_backend: str | None = None
 
 
 @dataclass

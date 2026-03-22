@@ -91,6 +91,23 @@ class CronService:
                                 ),
                                 knowledge_source=j["payload"].get("knowledgeSource"),
                                 knowledge_notebook=j["payload"].get("knowledgeNotebook"),
+                                knowledge_retention_max_documents=j["payload"].get(
+                                    "knowledgeRetentionMaxDocuments"
+                                ),
+                                knowledge_retention_max_age_days=j["payload"].get(
+                                    "knowledgeRetentionMaxAgeDays"
+                                ),
+                                crawler_source_name=j["payload"].get("crawlerSourceName"),
+                                crawler_source_url=j["payload"].get("crawlerSourceUrl"),
+                                crawler_notebook=j["payload"].get("crawlerNotebook"),
+                                crawler_selector=j["payload"].get("crawlerSelector"),
+                                crawler_use_browser=bool(
+                                    j["payload"].get("crawlerUseBrowser", False)
+                                ),
+                                crawler_max_chars=j["payload"].get("crawlerMaxChars"),
+                                crawler_metadata_json=j["payload"].get("crawlerMetadataJson"),
+                                crawler_tenant_id=j["payload"].get("crawlerTenantId"),
+                                crawler_store_backend=j["payload"].get("crawlerStoreBackend"),
                             ),
                             state=CronJobState(
                                 next_run_at_ms=j.get("state", {}).get("nextRunAtMs"),
@@ -145,6 +162,17 @@ class CronService:
                         "targetTimeoutSec": int(j.payload.target_timeout_sec or 10),
                         "knowledgeSource": j.payload.knowledge_source,
                         "knowledgeNotebook": j.payload.knowledge_notebook,
+                        "knowledgeRetentionMaxDocuments": j.payload.knowledge_retention_max_documents,
+                        "knowledgeRetentionMaxAgeDays": j.payload.knowledge_retention_max_age_days,
+                        "crawlerSourceName": j.payload.crawler_source_name,
+                        "crawlerSourceUrl": j.payload.crawler_source_url,
+                        "crawlerNotebook": j.payload.crawler_notebook,
+                        "crawlerSelector": j.payload.crawler_selector,
+                        "crawlerUseBrowser": j.payload.crawler_use_browser,
+                        "crawlerMaxChars": j.payload.crawler_max_chars,
+                        "crawlerMetadataJson": j.payload.crawler_metadata_json,
+                        "crawlerTenantId": j.payload.crawler_tenant_id,
+                        "crawlerStoreBackend": j.payload.crawler_store_backend,
                     },
                     "state": {
                         "nextRunAtMs": j.state.next_run_at_ms,
@@ -306,6 +334,17 @@ class CronService:
         target_timeout_sec: int = 10,
         knowledge_source: str | None = None,
         knowledge_notebook: str | None = None,
+        knowledge_retention_max_documents: int | None = None,
+        knowledge_retention_max_age_days: int | None = None,
+        crawler_source_name: str | None = None,
+        crawler_source_url: str | None = None,
+        crawler_notebook: str | None = None,
+        crawler_selector: str | None = None,
+        crawler_use_browser: bool = False,
+        crawler_max_chars: int | None = None,
+        crawler_metadata_json: str | None = None,
+        crawler_tenant_id: str | None = None,
+        crawler_store_backend: str | None = None,
         delete_after_run: bool = False,
         max_jobs: int = 10,
     ) -> CronJob:
@@ -339,6 +378,35 @@ class CronService:
                 target_timeout_sec=max(1, int(target_timeout_sec or 10)),
                 knowledge_source=str(knowledge_source).strip() if knowledge_source else None,
                 knowledge_notebook=str(knowledge_notebook).strip() if knowledge_notebook else None,
+                knowledge_retention_max_documents=(
+                    max(0, int(knowledge_retention_max_documents or 0))
+                    if knowledge_retention_max_documents is not None
+                    else None
+                ),
+                knowledge_retention_max_age_days=(
+                    max(0, int(knowledge_retention_max_age_days or 0))
+                    if knowledge_retention_max_age_days is not None
+                    else None
+                ),
+                crawler_source_name=(
+                    str(crawler_source_name).strip() if crawler_source_name else None
+                ),
+                crawler_source_url=str(crawler_source_url).strip() if crawler_source_url else None,
+                crawler_notebook=str(crawler_notebook).strip() if crawler_notebook else None,
+                crawler_selector=str(crawler_selector).strip() if crawler_selector else None,
+                crawler_use_browser=bool(crawler_use_browser),
+                crawler_max_chars=(
+                    max(100, int(crawler_max_chars or 20_000))
+                    if crawler_max_chars is not None
+                    else None
+                ),
+                crawler_metadata_json=(
+                    str(crawler_metadata_json).strip() if crawler_metadata_json else None
+                ),
+                crawler_tenant_id=str(crawler_tenant_id).strip() if crawler_tenant_id else None,
+                crawler_store_backend=(
+                    str(crawler_store_backend).strip() if crawler_store_backend else None
+                ),
             ),
             state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
             created_at_ms=now,

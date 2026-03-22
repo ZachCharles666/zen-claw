@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
+from loguru import logger
 from rich.console import Console
 from rich.table import Table
 
@@ -39,37 +40,71 @@ app = typer.Typer(
 
 async def _execute_knowledge_cron_job(job: Any, *, data_dir: Path) -> str:
     from zen_claw.agent.tools.knowledge import KnowledgeAddTool
+    from zen_claw.config.loader import load_config
+    from zen_claw.knowledge.pipeline import RAGPipeline
 
     dashboard_dir = Path(data_dir) / "dashboard"
     dashboard_dir.mkdir(parents=True, exist_ok=True)
     log_path = dashboard_dir / "knowledge_cron.log.jsonl"
     source = str(getattr(job.payload, "knowledge_source", "") or "").strip()
-    if not source:
-        raise ValueError("knowledge_source is required")
     notebook = str(getattr(job.payload, "knowledge_notebook", "") or "").strip() or "default"
+    cfg = load_config()
+    max_documents = int(
+        getattr(job.payload, "knowledge_retention_max_documents", None)
+        or cfg.knowledge.retention_max_documents
+        or 0
+    )
+    max_age_days = int(
+        getattr(job.payload, "knowledge_retention_max_age_days", None)
+        or cfg.knowledge.retention_max_age_days
+        or 0
+    )
 
-    tool = KnowledgeAddTool(data_dir=data_dir)
-    result = await tool.execute(source=source, notebook_id=notebook)
-    if not result.ok:
-        message = result.error.message if result.error else "knowledge cron ingest failed"
-        with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "at_ms": int(time.time() * 1000),
-                        "job_id": str(getattr(job, "id", "") or ""),
-                        "job_name": str(getattr(job, "name", "") or ""),
-                        "knowledge_source": source,
-                        "knowledge_notebook": notebook,
-                        "status": "error",
-                        "error": message,
-                    },
-                    ensure_ascii=False,
+    if not source and max_documents <= 0 and max_age_days <= 0:
+        raise ValueError("knowledge_source or retention policy is required")
+
+    payload: dict[str, Any] = {}
+    if source:
+        tool = KnowledgeAddTool(data_dir=data_dir)
+        result = await tool.execute(source=source, notebook_id=notebook)
+        if not result.ok:
+            message = result.error.message if result.error else "knowledge cron ingest failed"
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "at_ms": int(time.time() * 1000),
+                            "job_id": str(getattr(job, "id", "") or ""),
+                            "job_name": str(getattr(job, "name", "") or ""),
+                            "knowledge_source": source,
+                            "knowledge_notebook": notebook,
+                            "retention_max_documents": max_documents,
+                            "retention_max_age_days": max_age_days,
+                            "status": "error",
+                            "error": message,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
                 )
-                + "\n"
-            )
-        raise RuntimeError(message)
-    payload = json.loads(result.content)
+            raise RuntimeError(message)
+        payload = json.loads(result.content)
+
+    retention_payload: dict[str, Any] = {}
+    if max_documents > 0 or max_age_days > 0:
+        retention_payload = RAGPipeline(data_dir).run_retention(
+            notebook_id=notebook,
+            max_documents=max_documents,
+            max_age_days=max_age_days,
+        )
+        if payload:
+            payload["retention"] = retention_payload
+        else:
+            payload = retention_payload
+
+    if not payload:
+        payload = {"notebook": notebook, "documents": 0, "chunks_added": 0}
+
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(
             json.dumps(
@@ -79,19 +114,200 @@ async def _execute_knowledge_cron_job(job: Any, *, data_dir: Path) -> str:
                     "job_name": str(getattr(job, "name", "") or ""),
                     "knowledge_source": source,
                     "knowledge_notebook": notebook,
+                    "retention_max_documents": max_documents,
+                    "retention_max_age_days": max_age_days,
                     "status": "ok",
                     "documents": int(payload.get("documents", 0) or 0),
                     "chunks_added": int(payload.get("chunks_added", 0) or 0),
+                    "retention_documents_removed": int(
+                        retention_payload.get("documents_removed", 0) or 0
+                    ),
+                    "retention_chunks_deleted": int(
+                        retention_payload.get("chunks_deleted", 0) or 0
+                    ),
                 },
                 ensure_ascii=False,
             )
             + "\n"
         )
-    return result.content
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def _execute_crawler_cron_job(job: Any, *, data_dir: Path) -> str:
+    from zen_claw.skills.crawler.extractor import CrawlerExtractor, CrawlerSource
+
+    dashboard_dir = Path(data_dir) / "dashboard"
+    dashboard_dir.mkdir(parents=True, exist_ok=True)
+    log_path = dashboard_dir / "crawler_cron.log.jsonl"
+    source_url = str(getattr(job.payload, "crawler_source_url", "") or "").strip()
+    if not source_url:
+        raise ValueError("crawler_source_url is required")
+    metadata_raw = str(getattr(job.payload, "crawler_metadata_json", "") or "").strip()
+    metadata = json.loads(metadata_raw) if metadata_raw else {}
+    if metadata and not isinstance(metadata, dict):
+        raise ValueError("crawler_metadata_json must be a JSON object")
+    source = CrawlerSource(
+        name=str(getattr(job.payload, "crawler_source_name", "") or "").strip() or str(getattr(job, "name", "") or "").strip() or "crawler",
+        url=source_url,
+        notebook_id=str(getattr(job.payload, "crawler_notebook", "") or "").strip() or "default",
+        selector=str(getattr(job.payload, "crawler_selector", "") or "").strip(),
+        use_browser=bool(getattr(job.payload, "crawler_use_browser", False)),
+        max_chars=max(100, int(getattr(job.payload, "crawler_max_chars", 0) or 20_000)),
+        metadata=metadata,
+    )
+    tenant_id = str(getattr(job.payload, "crawler_tenant_id", "") or "").strip() or "default"
+    store_backend = str(getattr(job.payload, "crawler_store_backend", "") or "").strip()
+    extractor = CrawlerExtractor(data_dir=data_dir, tenant_id=tenant_id, store_kind=store_backend)
+    try:
+        payload = await extractor.crawl_to_rag(source)
+    except Exception as exc:
+        _append_jsonl(
+            log_path,
+            {
+                "at_ms": int(time.time() * 1000),
+                "job_id": str(getattr(job, "id", "") or ""),
+                "job_name": str(getattr(job, "name", "") or ""),
+                "source_name": source.name,
+                "source_url": source.url,
+                "notebook": source.notebook_id,
+                "tenant_id": tenant_id,
+                "store_backend": store_backend,
+                "use_browser": bool(source.use_browser),
+                "status": "error",
+                "error": str(exc),
+            },
+        )
+        raise
+    _append_jsonl(
+        log_path,
+        {
+            "at_ms": int(time.time() * 1000),
+            "job_id": str(getattr(job, "id", "") or ""),
+            "job_name": str(getattr(job, "name", "") or ""),
+            "source_name": source.name,
+            "source_url": source.url,
+            "notebook": payload.get("notebook", source.notebook_id),
+            "tenant_id": payload.get("tenant_id", tenant_id),
+            "store_backend": payload.get("store_backend", store_backend),
+            "use_browser": bool(source.use_browser),
+            "chunks_added": int(payload.get("chunks_added", 0) or 0),
+            "documents": int(payload.get("documents", 0) or 0),
+            "status": "ok",
+        },
+    )
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _resolve_routed_agent(
+    router,
+    *,
+    channel: str,
+    chat_id: str,
+    user_id: str,
+    content: str,
+    explicit_agent_id: str = "",
+):
+    """Resolve target agent through the orchestration router."""
+    return router.resolve(
+        channel=channel,
+        chat_id=chat_id,
+        user_id=user_id,
+        content=content,
+        explicit_agent_id=explicit_agent_id,
+    )
+
+
+async def _process_inbound_with_agent_router(
+    msg,
+    *,
+    router,
+    default_agent,
+    agent_pool,
+    bus,
+    channel_manager=None,
+) -> None:
+    """Dispatch one inbound message to the routed agent loop and publish its reply."""
+    from zen_claw.observability.trace import TraceContext
+
+    explicit_agent_id = str((msg.metadata or {}).get("agent_id") or "").strip()
+    decision = _resolve_routed_agent(
+        router,
+        channel=msg.channel,
+        chat_id=msg.chat_id,
+        user_id=msg.sender_id,
+        content=msg.content,
+        explicit_agent_id=explicit_agent_id,
+    )
+    target_loop = (
+        default_agent
+        if decision.agent_id == "default"
+        else await agent_pool.get_or_create(decision.agent_id)
+    )
+
+    if not isinstance(msg.metadata, dict):
+        msg.metadata = {}
+    msg.metadata["routed_agent_id"] = decision.agent_id
+    msg.metadata["routed_agent_reason"] = decision.reason
+    if decision.matched_keyword:
+        msg.metadata["routed_agent_keyword"] = decision.matched_keyword
+
+    if (
+        channel_manager is not None
+        and msg.channel not in {"cli", "system"}
+        and str(msg.sender_id or "").strip()
+        and decision.agent_id != "default"
+        and decision.reason in {"keyword", "channel_profile"}
+    ):
+        channel_manager.bind_agent(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            user_id=msg.sender_id,
+            agent_id=decision.agent_id,
+            reason=f"auto_route:{decision.reason}",
+        )
+
+    try:
+        response = await target_loop._process_message(msg)
+        if response:
+            await bus.publish_outbound(response)
+    except Exception as exc:
+        trace_id = msg.trace_id or TraceContext.new_trace_id()
+        logger.error(
+            f"Error processing routed message: {exc} "
+            + TraceContext.event_text(
+                "agent.route.process.error",
+                trace_id,
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                agent_id=decision.agent_id,
+                error_kind="runtime",
+                retryable=False,
+            )
+        )
+        from zen_claw.bus.events import OutboundMessage
+
+        await bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=f"Sorry, I encountered an error: {str(exc)}",
+                metadata=TraceContext.child_metadata(trace_id),
+            )
+        )
 
 
 def _cron_job_has_knowledge_ingest(job: Any) -> bool:
-    return bool(str(getattr(job.payload, "knowledge_source", "") or "").strip())
+    return bool(
+        str(getattr(job.payload, "knowledge_source", "") or "").strip()
+        or int(getattr(job.payload, "knowledge_retention_max_documents", 0) or 0) > 0
+        or int(getattr(job.payload, "knowledge_retention_max_age_days", 0) or 0) > 0
+    )
 
 
 def version_callback(value: bool):
@@ -222,20 +438,20 @@ This file stores important information that should persist across sessions.
         console.print("  [dim]Created memory/MEMORY.md[/dim]")
 
 
-def _make_provider(config):
+def _make_provider(config, model: str | None = None):
     """Create LiteLLMProvider from config. Exits if no API key found."""
     from zen_claw.providers.litellm_provider import LiteLLMProvider
 
-    p = config.get_provider()
-    model = config.agents.defaults.model
-    if not (p and p.api_key) and not model.startswith("bedrock/"):
+    effective_model = str(model or config.agents.defaults.model or "").strip()
+    p = config.get_provider(effective_model)
+    if not (p and p.api_key) and not effective_model.startswith("bedrock/"):
         console.print("[red]Error: No API key configured.[/red]")
         console.print("Set one in ~/.zen-claw/config.json under providers section")
         raise typer.Exit(1)
     return LiteLLMProvider(
         api_key=p.api_key if p else None,
-        api_base=config.get_api_base(),
-        default_model=model,
+        api_base=config.get_api_base(effective_model),
+        default_model=effective_model,
         extra_headers=p.extra_headers if p else None,
         rate_limit_delay_sec=p.rate_limit_delay_sec if p else 0.0,
     )
@@ -385,21 +601,52 @@ def _print_channel_rate_limit_status(config) -> None:
 
 def _print_channel_rbac_status(config, verbose: bool = False) -> None:
     """Print per-channel RBAC status summary for operational visibility."""
+    from zen_claw.channels.registry import build_channel_rbac_row, iter_channel_specs
+
     console.print("[cyan]Channel RBAC[/cyan]")
-    channel_items = [
-        ("telegram", config.channels.telegram),
-        ("discord", config.channels.discord),
-        ("whatsapp", config.channels.whatsapp),
-        ("feishu", config.channels.feishu),
-    ]
-    for name, ch_cfg in channel_items:
-        admins = sorted({str(v).strip() for v in getattr(ch_cfg, "admins", []) if str(v).strip()})
-        users = sorted({str(v).strip() for v in getattr(ch_cfg, "users", []) if str(v).strip()})
-        rbac_enabled = bool(admins or users)
-        console.print(f"  {name}: enabled={rbac_enabled}, admins={len(admins)}, users={len(users)}")
+    for spec in iter_channel_specs():
+        row = build_channel_rbac_row(config, spec)
+        console.print(
+            f"  {row['name']}: enabled={row['rbac_enabled']}, admins={row['admins']}, users={row['users']}"
+        )
         if verbose:
+            admins = row["admins_list"]
+            users = row["users_list"]
             console.print("    admin_ids: " + (", ".join(admins) if admins else "(none)"))
             console.print("    user_ids: " + (", ".join(users) if users else "(none)"))
+
+
+def _print_agent_profile_status(config, verbose: bool = False) -> None:
+    """Print agent profile isolation summary."""
+    from zen_claw.agent.pool import list_agent_profiles
+
+    profiles = list_agent_profiles(config)
+    console.print("[cyan]Agent Profiles[/cyan]")
+    for profile in profiles:
+        prompt_bound = bool(profile.system_prompt or profile.system_prompt_file)
+        tools_bound = bool(profile.allowed_tools is not None or profile.denied_tools is not None)
+        console.print(
+            "  "
+            + f"{profile.agent_id}: registered={profile.is_registered}, "
+            + f"model={profile.model}, "
+            + f"workspace={profile.workspace}, "
+            + f"promptBound={prompt_bound}, "
+            + f"toolBound={tools_bound}"
+        )
+        if verbose:
+            console.print("    memoryIsolation: workspace-scoped")
+            console.print("    sessionIsolation: workspace-scoped")
+            console.print("    skillsIsolation: workspace-scoped")
+            prompt_file = profile.system_prompt_file or "(none)"
+            console.print(
+                "    promptBinding: "
+                + (
+                    f"inline={'yes' if bool(profile.system_prompt) else 'no'}, file={prompt_file}"
+                )
+            )
+            allow = ", ".join(profile.allowed_tools or []) if profile.allowed_tools else "(none)"
+            deny = ", ".join(profile.denied_tools or []) if profile.denied_tools else "(none)"
+            console.print(f"    toolBinding: allow={allow}, deny={deny}")
 
 
 def _print_node_token_rotation_status(within_sec: int = 3600) -> None:
@@ -552,6 +799,7 @@ def gateway(
     """Start the zen-claw gateway."""
     from zen_claw.agent.loop import AgentLoop
     from zen_claw.agent.pool import AgentPool
+    from zen_claw.agent.router import AgentRouter
     from zen_claw.bus.queue import MessageBus
     from zen_claw.channels.manager import ChannelManager
     from zen_claw.config.loader import get_data_dir, load_config
@@ -610,11 +858,18 @@ def gateway(
         fallback_model=config.agents.defaults.fallback_model or None,
         intent_model_overrides=config.agents.defaults.intent_model_overrides,
     )
-    agent_pool = AgentPool(config=config, bus=bus, provider=provider)
+    agent_pool = AgentPool(
+        config=config,
+        bus=bus,
+        provider=provider,
+        provider_factory=lambda model=None: _make_provider(config, model=model),
+    )
 
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
+        if _cron_job_has_crawler_ingest(job):
+            return await _execute_crawler_cron_job(job, data_dir=get_data_dir())
         if _cron_job_has_knowledge_ingest(job):
             return await _execute_knowledge_cron_job(job, data_dir=get_data_dir())
 
@@ -692,6 +947,17 @@ def gateway(
         enabled=True,
     )
 
+    # Create channel manager before routing callbacks so gateway can reuse sticky routes.
+    channels = ChannelManager(config, bus)
+    agent_router = AgentRouter(
+        config,
+        resolve_bound_agent=lambda channel, chat_id, user_id: channels.resolve_agent(
+            channel=channel,
+            chat_id=chat_id,
+            user_id=user_id,
+        ),
+    )
+
     # Bridge node task queue to gateway+agent execution loop.
     node_service = NodeService(get_data_dir() / "nodes" / "state.json")
 
@@ -705,7 +971,15 @@ def gateway(
         agent_id: str | None = None,
         trace_id: str | None = None,
     ) -> str:
-        target_agent_id = str(agent_id or "").strip().lower() or "default"
+        decision = _resolve_routed_agent(
+            agent_router,
+            channel=channel,
+            chat_id=chat_id,
+            user_id=chat_id,
+            content=prompt,
+            explicit_agent_id=agent_id or "",
+        )
+        target_agent_id = decision.agent_id
         target_loop = (
             agent
             if target_agent_id == "default"
@@ -736,9 +1010,6 @@ def gateway(
         chaos_channels=node_chaos_channel,
     )
 
-    # Create channel manager
-    channels = ChannelManager(config, bus)
-
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
     else:
@@ -758,6 +1029,23 @@ def gateway(
         )
 
     async def run():
+        async def run_inbound_router() -> None:
+            while True:
+                try:
+                    msg = await asyncio.wait_for(bus.consume_inbound(), timeout=1.0)
+                    await _process_inbound_with_agent_router(
+                        msg,
+                        router=agent_router,
+                        default_agent=agent,
+                        agent_pool=agent_pool,
+                        bus=bus,
+                        channel_manager=channels,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                except asyncio.CancelledError:
+                    break
+
         try:
             if sidecar_supervisor:
                 await sidecar_supervisor.start()
@@ -765,7 +1053,7 @@ def gateway(
             await heartbeat.start()
             await node_dispatcher.start()
             await asyncio.gather(
-                agent.run(),
+                run_inbound_router(),
                 channels.start_all(),
             )
         except KeyboardInterrupt:
@@ -787,9 +1075,242 @@ def gateway(
 # Agent Commands
 # ============================================================================
 
+agent_app = typer.Typer(
+    help="Agent orchestration commands",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+app.add_typer(agent_app, name="agent")
 
-@app.command()
+
+def _run_agent_cli(
+    *,
+    message: str | None,
+    session_id: str,
+    agent_profile: str,
+    skill: list[str],
+    media: list[str],
+    skill_perms: str,
+) -> None:
+    from zen_claw.agent.loop import AgentLoop
+    from zen_claw.agent.pool import resolve_agent_profile
+    from zen_claw.bus.queue import MessageBus
+    from zen_claw.config.loader import load_config
+
+    config = load_config()
+    profile = resolve_agent_profile(config, agent_profile or "default")
+    _print_effective_tool_backends(config)
+    sidecar_supervisor = _create_sidecar_supervisor(config)
+
+    bus = MessageBus()
+    provider = _make_provider(config, model=profile.model)
+    exec_cfg = config.tools.effective_exec()
+    search_cfg = config.tools.effective_search()
+    fetch_cfg = config.tools.effective_fetch()
+    browser_cfg = config.tools.effective_browser()
+
+    agent_loop = AgentLoop(
+        bus=bus,
+        provider=provider,
+        workspace=profile.workspace,
+        model=profile.model,
+        system_prompt_override=profile.system_prompt or None,
+        system_prompt_file=profile.system_prompt_file or None,
+        profile_allowed_tools=profile.allowed_tools,
+        profile_denied_tools=profile.denied_tools,
+        vision_model=profile.vision_model or None,
+        memory_recall_mode=profile.memory_recall_mode,
+        enable_planning=profile.enable_planning,
+        max_reflections=profile.max_reflections,
+        auto_parameter_rewrite=profile.auto_parameter_rewrite,
+        max_context_tokens=profile.max_tokens,
+        max_iterations=profile.max_tool_iterations,
+        brave_api_key=search_cfg.api_key or None,
+        web_search_config=search_cfg,
+        web_fetch_config=fetch_cfg,
+        browser_config=browser_cfg,
+        exec_config=exec_cfg,
+        tool_policy_config=config.tools.policy,
+        restrict_to_workspace=config.tools.restrict_to_workspace,
+        compression_trigger_ratio=profile.compression_trigger_ratio,
+        compression_hysteresis_ratio=profile.compression_hysteresis_ratio,
+        compression_cooldown_turns=profile.compression_cooldown_turns,
+        thinking_model=profile.thinking_model or None,
+        fallback_model=profile.fallback_model or None,
+        intent_model_overrides=profile.intent_model_overrides,
+        skill_names=(list(profile.skill_names) + [name for name in skill if name not in profile.skill_names]),
+        skill_permissions_mode=skill_perms or profile.skill_permissions_mode,
+        allowed_models=profile.allowed_models,
+    )
+    agent_loop.workspace.mkdir(parents=True, exist_ok=True)
+
+    if profile.agent_id != "default":
+        console.print(
+            "Agent Profile: "
+            + f"{profile.agent_id}"
+            + (" (registered)" if profile.is_registered else " (ad-hoc)")
+        )
+
+    if skill:
+        console.print(
+            "Skill Slot: "
+            + (
+                ", ".join(list(profile.skill_names) + [name for name in skill if name not in profile.skill_names])
+                if (profile.skill_names or skill)
+                else "(none)"
+            )
+            + f" (skillPermsEffectiveThisRun={agent_loop.skill_permissions_mode})"
+        )
+    elif profile.skill_names:
+        console.print(
+            "Skill Slot: "
+            + ", ".join(profile.skill_names)
+            + f" (skillPermsEffectiveThisRun={agent_loop.skill_permissions_mode})"
+        )
+
+    if message:
+        async def run_once():
+            try:
+                if sidecar_supervisor:
+                    await sidecar_supervisor.start()
+                response = await agent_loop.process_direct(
+                    message,
+                    session_id,
+                    media=media or None,
+                )
+                console.print(f"\n{_display_logo()} {response}", soft_wrap=True)
+            finally:
+                if sidecar_supervisor:
+                    await sidecar_supervisor.stop()
+
+        asyncio.run(run_once())
+        return
+
+    console.print(f"{_display_logo()} Interactive mode (Ctrl+C to exit)\n")
+
+    async def run_interactive():
+        try:
+            if sidecar_supervisor:
+                await sidecar_supervisor.start()
+            while True:
+                try:
+                    user_input = console.input("[bold blue]You:[/bold blue] ")
+                    if not user_input.strip():
+                        continue
+
+                    response = await agent_loop.process_direct(
+                        user_input,
+                        session_id,
+                        media=media or None,
+                    )
+                    console.print(f"\n{_display_logo()} {response}\n", soft_wrap=True)
+                except KeyboardInterrupt:
+                    console.print("\nGoodbye!")
+                    break
+        finally:
+            if sidecar_supervisor:
+                await sidecar_supervisor.stop()
+
+    asyncio.run(run_interactive())
+
+
+@agent_app.callback()
 def agent(
+    ctx: typer.Context,
+    message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
+    session_id: str = typer.Option("cli:default", "--session", "-s", help="Session ID"),
+    agent_profile: str = typer.Option(
+        "",
+        "--agent-profile",
+        help="Run against a registered agent profile or ad-hoc agent id",
+    ),
+    skill: list[str] = typer.Option(
+        [], "--skill", help="Load skill(s) fully into the system prompt (repeatable)"
+    ),
+    media: list[str] = typer.Option(
+        [], "--media", help="Attach media refs/paths for this run (repeatable)"
+    ),
+    skill_perms: str = typer.Option(
+        "",
+        "--skill-perms",
+        help="Skill permission gate for requested skills: off|warn|enforce (default from config)",
+    ),
+):
+    """Interact with the agent directly, or use subcommands like `list/chat/test`."""
+    if ctx.invoked_subcommand is not None:
+        return
+    _run_agent_cli(
+        message=message,
+        session_id=session_id,
+        agent_profile=agent_profile,
+        skill=skill,
+        media=media,
+        skill_perms=skill_perms,
+    )
+
+
+def _cron_job_has_crawler_ingest(job: Any) -> bool:
+    return bool(str(getattr(job.payload, "crawler_source_url", "") or "").strip())
+
+
+@agent_app.command("list")
+def agent_list_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """List registered agent profiles."""
+    from zen_claw.agent.pool import list_agent_profiles
+    from zen_claw.config.loader import load_config
+
+    config = load_config()
+    profiles = list_agent_profiles(config)
+    if json_output:
+        console.print_json(
+            data=[
+                {
+                    "agent_id": profile.agent_id,
+                    "display_name": profile.display_name,
+                    "description": profile.description,
+                    "workspace": str(profile.workspace),
+                    "model": profile.model,
+                    "enable_planning": profile.enable_planning,
+                    "skill_names": list(profile.skill_names),
+                    "registered": profile.is_registered,
+                }
+                for profile in profiles
+            ]
+        )
+        return
+
+    table = Table(title="Agent Profiles")
+    table.add_column("ID")
+    table.add_column("Display Name")
+    table.add_column("Model")
+    table.add_column("Planning")
+    table.add_column("Skills")
+    table.add_column("Workspace")
+    for profile in profiles:
+        table.add_row(
+            profile.agent_id,
+            profile.display_name,
+            profile.model,
+            "on" if profile.enable_planning else "off",
+            ", ".join(profile.skill_names) if profile.skill_names else "-",
+            str(profile.workspace),
+        )
+    console.print(table)
+
+
+@app.command("agent-list")
+def agent_list(
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Compatibility alias for `zen-claw agent list`."""
+    agent_list_command(json_output=json_output)
+
+
+@agent_app.command("chat")
+def agent_chat(
+    profile_id: str = typer.Argument(..., help="Registered agent profile or ad-hoc agent id"),
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
     session_id: str = typer.Option("cli:default", "--session", "-s", help="Session ID"),
     skill: list[str] = typer.Option(
@@ -804,103 +1325,32 @@ def agent(
         help="Skill permission gate for requested skills: off|warn|enforce (default from config)",
     ),
 ):
-    """Interact with the agent directly."""
-    from zen_claw.agent.loop import AgentLoop
-    from zen_claw.bus.queue import MessageBus
-    from zen_claw.config.loader import load_config
-
-    config = load_config()
-    _print_effective_tool_backends(config)
-    sidecar_supervisor = _create_sidecar_supervisor(config)
-
-    bus = MessageBus()
-    provider = _make_provider(config)
-    exec_cfg = config.tools.effective_exec()
-    search_cfg = config.tools.effective_search()
-    fetch_cfg = config.tools.effective_fetch()
-    browser_cfg = config.tools.effective_browser()
-
-    agent_loop = AgentLoop(
-        bus=bus,
-        provider=provider,
-        workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        vision_model=config.agents.defaults.vision_model or None,
-        memory_recall_mode=config.agents.defaults.memory_recall_mode,
-        enable_planning=config.agents.defaults.enable_planning,
-        max_reflections=config.agents.defaults.max_reflections,
-        auto_parameter_rewrite=config.agents.defaults.auto_parameter_rewrite,
-        max_context_tokens=config.agents.defaults.max_tokens,
-        brave_api_key=search_cfg.api_key or None,
-        web_search_config=search_cfg,
-        web_fetch_config=fetch_cfg,
-        browser_config=browser_cfg,
-        exec_config=exec_cfg,
-        tool_policy_config=config.tools.policy,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
-        compression_trigger_ratio=config.agents.defaults.compression_trigger_ratio,
-        compression_hysteresis_ratio=config.agents.defaults.compression_hysteresis_ratio,
-        compression_cooldown_turns=config.agents.defaults.compression_cooldown_turns,
-        thinking_model=config.agents.defaults.thinking_model or None,
-        fallback_model=config.agents.defaults.fallback_model or None,
-        intent_model_overrides=config.agents.defaults.intent_model_overrides,
-        skill_names=skill,
-        skill_permissions_mode=skill_perms or config.agents.defaults.skill_permissions_mode,
-        allowed_models=config.agents.defaults.allowed_models,
+    """Chat with a specific agent profile."""
+    _run_agent_cli(
+        message=message,
+        session_id=session_id,
+        agent_profile=profile_id,
+        skill=skill,
+        media=media,
+        skill_perms=skill_perms,
     )
 
-    if skill:
-        console.print(
-            "Skill Slot: "
-            + (", ".join(skill) if skill else "(none)")
-            + f" (skillPermsEffectiveThisRun={agent_loop.skill_permissions_mode})"
-        )
 
-    if message:
-        # Single message mode
-        async def run_once():
-            try:
-                if sidecar_supervisor:
-                    await sidecar_supervisor.start()
-                response = await agent_loop.process_direct(
-                    message,
-                    session_id,
-                    media=media or None,
-                )
-                console.print(f"\n{_display_logo()} {response}")
-            finally:
-                if sidecar_supervisor:
-                    await sidecar_supervisor.stop()
-
-        asyncio.run(run_once())
-    else:
-        # Interactive mode
-        console.print(f"{_display_logo()} Interactive mode (Ctrl+C to exit)\n")
-
-        async def run_interactive():
-            try:
-                if sidecar_supervisor:
-                    await sidecar_supervisor.start()
-                while True:
-                    try:
-                        user_input = console.input("[bold blue]You:[/bold blue] ")
-                        if not user_input.strip():
-                            continue
-
-                        response = await agent_loop.process_direct(
-                            user_input,
-                            session_id,
-                            media=media or None,
-                        )
-                        console.print(f"\n{_display_logo()} {response}\n")
-                    except KeyboardInterrupt:
-                        console.print("\nGoodbye!")
-                        break
-            finally:
-                if sidecar_supervisor:
-                    await sidecar_supervisor.stop()
-
-        asyncio.run(run_interactive())
+@agent_app.command("test")
+def agent_test(
+    profile_id: str = typer.Argument(..., help="Registered agent profile or ad-hoc agent id"),
+    prompt: str = typer.Option("ping", "--prompt", "-p", help="Smoke-test prompt"),
+    session_id: str = typer.Option("cli:agent-test", "--session", "-s", help="Session ID"),
+):
+    """Run a minimal smoke test against a specific agent profile."""
+    _run_agent_cli(
+        message=prompt,
+        session_id=session_id,
+        agent_profile=profile_id,
+        skill=[],
+        media=[],
+        skill_perms="",
+    )
 
 
 # ============================================================================
@@ -1475,6 +1925,7 @@ def config_doctor(
         "signal": config.channels.signal.agent_profile,
         "matrix": config.channels.matrix.agent_profile,
     }
+    known_profiles = {"default", *config.agents.profiles.keys()}
     for channel_name, profile in channel_profiles.items():
         p = str(profile or "").strip()
         if not p:
@@ -1494,6 +1945,74 @@ def config_doctor(
                     "Use simple IDs like `default`, `alpha`, `assistant_a`.",
                 )
             )
+            continue
+        if p.lower() not in known_profiles:
+            issues.append(
+                (
+                    "WARN",
+                    f"channels.{channel_name}.agentProfile references unknown profile `{p}`.",
+                    "Register it under agents.profiles or switch the channel back to `default`.",
+                )
+            )
+
+    for profile_id, profile_cfg in sorted(config.agents.profiles.items()):
+        workspace_root = (
+            Path(str(profile_cfg.workspace).strip()).expanduser().resolve()
+            if str(profile_cfg.workspace).strip()
+            else None
+        )
+        prompt_file = str(profile_cfg.system_prompt_file or "").strip()
+        if prompt_file:
+            prompt_path = Path(prompt_file).expanduser()
+            if not prompt_path.is_absolute():
+                if workspace_root is None:
+                    issues.append(
+                        (
+                            "WARN",
+                            f"agents.profiles.{profile_id}.systemPromptFile is relative but profile workspace is unset.",
+                            "Set agents.profiles.<id>.workspace or use an absolute prompt path inside the intended workspace.",
+                        )
+                    )
+                else:
+                    prompt_path = (workspace_root / prompt_path).resolve()
+            else:
+                prompt_path = prompt_path.resolve()
+            if workspace_root is not None:
+                try:
+                    prompt_path.relative_to(workspace_root)
+                except ValueError:
+                    issues.append(
+                        (
+                            "WARN",
+                            f"agents.profiles.{profile_id}.systemPromptFile points outside its workspace.",
+                            "Keep profile prompt files inside the profile workspace for reproducible isolation.",
+                        )
+                    )
+            if not prompt_path.exists():
+                issues.append(
+                    (
+                        "WARN",
+                        f"agents.profiles.{profile_id}.systemPromptFile does not exist.",
+                        "Create the prompt file or clear systemPromptFile.",
+                    )
+                )
+        overlap = sorted(
+            set(profile_cfg.allowed_tools or []).intersection(set(profile_cfg.denied_tools or []))
+        )
+        if overlap:
+            issues.append(
+                (
+                    "WARN",
+                    f"agents.profiles.{profile_id} overlaps allowedTools/deniedTools: {', '.join(overlap)}.",
+                    "Remove overlapping tool names so the profile contract is unambiguous.",
+                )
+            )
+        infos.append(
+            "agent_profile."
+            + f"{profile_id}: workspace={'set' if workspace_root is not None else 'derived'}, "
+            + f"prompt_bound={bool(str(profile_cfg.system_prompt or '').strip() or prompt_file)}, "
+            + f"tool_bound={bool(profile_cfg.allowed_tools is not None or profile_cfg.denied_tools is not None)}"
+        )
 
     # Channel-specific checks for newly added schema fields/channels.
     if config.channels.webchat.enabled and not str(config.channels.webchat.token or "").strip():
@@ -2317,6 +2836,7 @@ def identity_verify(
 @channels_app.command("status")
 def channels_status():
     """Show channel status."""
+    from zen_claw.channels.registry import build_channel_rbac_row, iter_channel_specs
     from zen_claw.config.loader import load_config
 
     config = load_config()
@@ -2325,35 +2845,22 @@ def channels_status():
     table.add_column("Channel", style="cyan")
     table.add_column("Enabled", style="green")
     table.add_column("RBAC", style="magenta")
+    table.add_column("Transport", style="magenta")
     table.add_column("Admins", style="blue")
     table.add_column("Users", style="blue")
     table.add_column("Configuration", style="yellow")
 
-    def _rbac_meta(ch_cfg) -> tuple[str, str, str]:
-        admins = sorted({str(v).strip() for v in getattr(ch_cfg, "admins", []) if str(v).strip()})
-        users = sorted({str(v).strip() for v in getattr(ch_cfg, "users", []) if str(v).strip()})
-        return ("yes" if (admins or users) else "no", str(len(admins)), str(len(users)))
-
-    # WhatsApp
-    wa = config.channels.whatsapp
-    wa_rbac, wa_admins, wa_users = _rbac_meta(wa)
-    table.add_row(
-        "WhatsApp", "yes" if wa.enabled else "no", wa_rbac, wa_admins, wa_users, wa.bridge_url
-    )
-
-    dc = config.channels.discord
-    dc_rbac, dc_admins, dc_users = _rbac_meta(dc)
-    table.add_row(
-        "Discord", "yes" if dc.enabled else "no", dc_rbac, dc_admins, dc_users, dc.gateway_url
-    )
-
-    # Telegram
-    tg = config.channels.telegram
-    tg_config = f"token: {tg.token[:10]}..." if tg.token else "[dim]not configured[/dim]"
-    tg_rbac, tg_admins, tg_users = _rbac_meta(tg)
-    table.add_row(
-        "Telegram", "yes" if tg.enabled else "no", tg_rbac, tg_admins, tg_users, tg_config
-    )
+    for spec in iter_channel_specs():
+        row = build_channel_rbac_row(config, spec)
+        table.add_row(
+            row["display_name"],
+            "yes" if row["enabled"] else "no",
+            "yes" if row["rbac_enabled"] else "no",
+            str(row["transport"]),
+            str(row["admins"]),
+            str(row["users"]),
+            str(row["configuration"]),
+        )
 
     console.print(table)
 
@@ -2514,6 +3021,12 @@ def cron_add(
     knowledge_notebook: str = typer.Option(
         "default", "--knowledge-notebook", help="Notebook used for knowledge ingest jobs"
     ),
+    knowledge_retention_max_documents: int = typer.Option(
+        0, "--knowledge-retention-max-documents", help="Optional retention keep-most-recent limit"
+    ),
+    knowledge_retention_max_age_days: int = typer.Option(
+        0, "--knowledge-retention-max-age-days", help="Optional retention max-age in days"
+    ),
 ):
     """Add a scheduled job."""
     from zen_claw.config.loader import get_data_dir
@@ -2548,6 +3061,8 @@ def cron_add(
         target_method=target_method,
         knowledge_source=knowledge_source,
         knowledge_notebook=knowledge_notebook,
+        knowledge_retention_max_documents=knowledge_retention_max_documents,
+        knowledge_retention_max_age_days=knowledge_retention_max_age_days,
     )
 
     console.print(f"[green]✓[/green] Added job '{job.name}' ({job.id})")
@@ -2785,6 +3300,71 @@ def skills_disable(
         console.print(f"[green]✓[/green] Disabled skill: {name}")
     else:
         console.print(f"[red]Skill not found: {name}[/red]")
+
+
+@skills_app.command("test")
+def skills_test(
+    name: str = typer.Argument(..., help="Skill name"),
+    integrity: bool = typer.Option(
+        True,
+        "--integrity/--no-integrity",
+        help="Also verify manifest integrity hashes when declared",
+    ),
+    require_integrity: bool = typer.Option(
+        False,
+        "--require-integrity",
+        help="Fail when integrity metadata is missing",
+    ),
+):
+    """Run product-facing preflight checks for one skill and any local skill tests."""
+    import pytest
+
+    from zen_claw.agent.skills import SkillsLoader
+    from zen_claw.config.loader import load_config
+
+    config = load_config()
+    loader = SkillsLoader(config.workspace_path)
+    found = loader._find_skill(name)
+    if not found:
+        console.print(f"[red]Skill not found: {name}[/red]")
+        raise typer.Exit(1)
+
+    manifest_ok, manifest_errors = loader.validate_skill_manifest(name, strict=True)
+    integrity_ok = True
+    integrity_errors: list[str] = []
+    if integrity:
+        integrity_ok, integrity_errors = loader.verify_skill_integrity(
+            name, require_integrity=require_integrity
+        )
+
+    tests_dir = found["dir"] / "tests"  # type: ignore[index]
+    test_files = sorted(tests_dir.rglob("test_*.py")) if tests_dir.exists() else []
+    pytest_ok = True
+    pytest_exit_code = 0
+    if test_files:
+        pytest_exit_code = int(pytest.main(["-q", str(tests_dir)]))
+        pytest_ok = pytest_exit_code == 0
+
+    table = Table(title=f"Skill Test: {name}")
+    table.add_column("Check", style="cyan")
+    table.add_column("Result")
+    table.add_row("manifest", "pass" if manifest_ok else "fail")
+    table.add_row("integrity", "pass" if integrity_ok else "fail")
+    table.add_row("tests_dir", str(tests_dir if test_files else "not found"))
+    table.add_row("pytest", "pass" if pytest_ok else f"fail (exit={pytest_exit_code})")
+    console.print(table)
+
+    for err in manifest_errors:
+        console.print(f"  - manifest: {err}")
+    for err in integrity_errors:
+        console.print(f"  - integrity: {err}")
+    if not test_files:
+        console.print("  - pytest: no local tests found; preflight-only run")
+
+    if manifest_ok and integrity_ok and pytest_ok:
+        console.print(f"[green]✓[/green] Skill preflight passed: {name}")
+        return
+    raise typer.Exit(1)
 
 
 @skills_app.command("validate")
@@ -3212,7 +3792,7 @@ def skills_export(
         out_path = Path(out)
     else:
         out_path = config.workspace_path / ".zen-claw" / "exports" / f"{name}.zip"
-    ok, msg = loader.export_skill_to_zip(name, out_path, overwrite=overwrite)
+    ok, msg, *_ = loader.export_skill_to_zip(name, out_path, overwrite=overwrite)
     if ok:
         console.print(f"[green]✓[/green] {msg}")
         return
@@ -3340,13 +3920,22 @@ def tenant_create(
     name: str = typer.Argument(..., help="Tenant display name"),
     quota_llm: int = typer.Option(1000, "--quota-llm", help="LLM calls per day"),
     quota_storage: int = typer.Option(1000, "--quota-storage", help="Storage MB"),
+    store_backend: str = typer.Option("", "--store-backend", help="Tenant RAG backend policy"),
 ):
     from zen_claw.auth.tenant import TenantStore
     from zen_claw.config.loader import get_data_dir
 
     store = TenantStore(get_data_dir())
-    tenant = store.create(name, quota_llm_calls_per_day=quota_llm, quota_storage_mb=quota_storage)
-    console.print(f"[green]Tenant created[/green]: {tenant.tenant_id} ({tenant.name})")
+    tenant = store.create(
+        name,
+        quota_llm_calls_per_day=quota_llm,
+        quota_storage_mb=quota_storage,
+        store_backend=store_backend,
+    )
+    console.print(
+        f"[green]Tenant created[/green]: {tenant.tenant_id} ({tenant.name}) "
+        f"backend={tenant.store_backend or 'default'}"
+    )
 
 
 @tenant_app.command("list")
@@ -3363,6 +3952,7 @@ def tenant_list():
     table.add_column("Name")
     table.add_column("Enabled")
     table.add_column("LLM/day")
+    table.add_column("Backend")
     table.add_column("Created")
     for row in rows:
         created = datetime.datetime.fromtimestamp(row.created_at).strftime("%Y-%m-%d")
@@ -3371,9 +3961,31 @@ def tenant_list():
             row.name,
             "Yes" if row.enabled else "No",
             str(row.quota_llm_calls_per_day),
+            row.store_backend or "default",
             created,
         )
     console.print(table)
+
+
+@tenant_app.command("set-backend")
+def tenant_set_backend(
+    tenant_id: str = typer.Argument(..., help="Tenant ID"),
+    store_backend: str = typer.Option(
+        "", "--store-backend", help="Tenant RAG backend policy (chroma|memory)"
+    ),
+):
+    from zen_claw.auth.tenant import TenantStore
+    from zen_claw.config.loader import get_data_dir
+
+    store = TenantStore(get_data_dir())
+    try:
+        tenant = store.set_store_backend(tenant_id, store_backend)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]Updated[/green] tenant {tenant.tenant_id} backend={tenant.store_backend or 'default'}"
+    )
 
 
 @user_app.command("create")
@@ -3560,20 +4172,299 @@ def api_key_revoke(prefix: str = typer.Argument(..., help="Key prefix to revoke"
 
 knowledge_app = typer.Typer(help="Knowledge base (RAG) commands")
 app.add_typer(knowledge_app, name="knowledge")
+rag_app = typer.Typer(help="RAG pipeline commands")
+app.add_typer(rag_app, name="rag")
+crawler_app = typer.Typer(help="Crawler accelerator commands")
+app.add_typer(crawler_app, name="crawler")
+
+
+@crawler_app.command("run")
+def crawler_run(
+    url: str = typer.Argument(..., help="Source URL to crawl"),
+    name: str = typer.Option("crawler", "--name", help="Crawler source name"),
+    notebook: str = typer.Option("default", "--notebook", "-n", help="Target notebook"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+    selector: str = typer.Option("", "--selector", help="Optional CSS selector (browser mode only)"),
+    browser: bool = typer.Option(False, "--browser", help="Use browser sidecar extraction"),
+    max_chars: int = typer.Option(20000, "--max-chars", help="Maximum extracted characters"),
+    metadata_json: str = typer.Option("", "--metadata-json", help="Optional JSON object metadata"),
+):
+    """Run one crawler extraction and ingest the result into RAG."""
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.skills.crawler.extractor import CrawlerExtractor, CrawlerSource
+
+    async def _run() -> None:
+        metadata = json.loads(metadata_json) if metadata_json.strip() else {}
+        if metadata and not isinstance(metadata, dict):
+            console.print("[red]Error:[/red] --metadata-json must be a JSON object")
+            raise typer.Exit(1)
+        extractor = CrawlerExtractor(get_data_dir(), tenant_id=tenant, store_kind=store_backend)
+        payload = await extractor.crawl_to_rag(
+            CrawlerSource(
+                name=name,
+                url=url,
+                notebook_id=notebook,
+                selector=selector,
+                use_browser=browser,
+                max_chars=max_chars,
+                metadata=dict(metadata),
+            )
+        )
+        console.print(
+            f"[green]Crawled[/green] [cyan]{payload.get('crawl_name', name)}[/cyan] "
+            f"-> notebook [cyan]{payload.get('notebook', notebook)}[/cyan]"
+        )
+        console.print(
+            f"documents={payload.get('documents', 0)} "
+            f"chunks_added={payload.get('chunks_added', 0)} "
+            f"mode={payload.get('crawl_mode', '-')}"
+        )
+
+    asyncio.run(_run())
+
+
+@crawler_app.command("run-source")
+def crawler_run_source(
+    source_name: str = typer.Argument(..., help="Crawler source name from the shared catalog"),
+    source_file: str = typer.Option("", "--source-file", help="Optional crawler sources JSON file"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+):
+    """Run one crawler source from the shared source catalog."""
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.skills.crawler.extractor import CrawlerExtractor
+    from zen_claw.skills.crawler.scheduler import get_source_by_name, resolve_sources_path
+
+    async def _run() -> None:
+        catalog_path = resolve_sources_path(get_data_dir(), source_file or None)
+        source = get_source_by_name(catalog_path, source_name)
+        extractor = CrawlerExtractor(get_data_dir(), tenant_id=tenant, store_kind=store_backend)
+        payload = await extractor.crawl_to_rag(source)
+        console.print(
+            f"[green]Crawled[/green] [cyan]{payload.get('crawl_name', source.name)}[/cyan] "
+            f"-> notebook [cyan]{payload.get('notebook', source.notebook_id)}[/cyan]"
+        )
+        console.print(
+            f"documents={payload.get('documents', 0)} "
+            f"chunks_added={payload.get('chunks_added', 0)} "
+            f"mode={payload.get('crawl_mode', '-')} "
+            f"change={payload.get('change_status', '-')}"
+        )
+
+    asyncio.run(_run())
+
+
+@crawler_app.command("schedule")
+def crawler_schedule(
+    url: str = typer.Argument(..., help="Source URL to crawl"),
+    name: str = typer.Option(..., "--name", "-n", help="Cron job and crawler source name"),
+    every: int = typer.Option(None, "--every", "-e", help="Run every N seconds"),
+    cron_expr: str = typer.Option(None, "--cron", "-c", help="Cron expression"),
+    at: str = typer.Option(None, "--at", help="Run once at time (ISO format)"),
+    notebook: str = typer.Option("default", "--notebook", help="Target notebook"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+    selector: str = typer.Option("", "--selector", help="Optional CSS selector (browser mode only)"),
+    browser: bool = typer.Option(False, "--browser", help="Use browser sidecar extraction"),
+    max_chars: int = typer.Option(20000, "--max-chars", help="Maximum extracted characters"),
+    metadata_json: str = typer.Option("", "--metadata-json", help="Optional JSON object metadata"),
+    message: str = typer.Option("", "--message", "-m", help="Cron audit message"),
+):
+    """Schedule a crawler job on top of the existing cron service."""
+    import datetime
+
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.cron.service import CronService
+    from zen_claw.cron.types import CronSchedule
+    from zen_claw.skills.crawler.extractor import CrawlerSource
+    from zen_claw.skills.crawler.scheduler import build_crawler_cron_kwargs
+
+    if every:
+        schedule = CronSchedule(kind="every", every_ms=every * 1000)
+    elif cron_expr:
+        schedule = CronSchedule(kind="cron", expr=cron_expr)
+    elif at:
+        dt = datetime.datetime.fromisoformat(at)
+        schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
+    else:
+        console.print("[red]Error: Must specify --every, --cron, or --at[/red]")
+        raise typer.Exit(1)
+
+    metadata = json.loads(metadata_json) if metadata_json.strip() else {}
+    if metadata and not isinstance(metadata, dict):
+        console.print("[red]Error:[/red] --metadata-json must be a JSON object")
+        raise typer.Exit(1)
+
+    store_path = get_data_dir() / "cron" / "jobs.json"
+    cron = CronService(store_path)
+    source = CrawlerSource(
+        name=name,
+        url=url,
+        notebook_id=notebook,
+        selector=selector,
+        use_browser=browser,
+        max_chars=max_chars,
+        metadata=dict(metadata),
+    )
+    job = cron.add_job(
+        name=name,
+        schedule=schedule,
+        message=message or f"crawl {url}",
+        **build_crawler_cron_kwargs(
+            source,
+            tenant_id=tenant,
+            store_backend=store_backend,
+        ),
+    )
+    console.print(f"[green]Added crawler cron job[/green] {job.id} -> {name}")
+
+
+@crawler_app.command("schedule-source")
+def crawler_schedule_source(
+    source_name: str = typer.Argument(..., help="Crawler source name from the shared catalog"),
+    every: int = typer.Option(None, "--every", "-e", help="Run every N seconds"),
+    cron_expr: str = typer.Option(None, "--cron", "-c", help="Cron expression"),
+    at: str = typer.Option(None, "--at", help="Run once at time (ISO format)"),
+    source_file: str = typer.Option("", "--source-file", help="Optional crawler sources JSON file"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+    message: str = typer.Option("", "--message", "-m", help="Cron audit message"),
+):
+    """Schedule one crawler source from the shared catalog."""
+    import datetime
+
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.cron.service import CronService
+    from zen_claw.cron.types import CronSchedule
+    from zen_claw.skills.crawler.scheduler import (
+        build_crawler_cron_kwargs,
+        get_source_by_name,
+        resolve_sources_path,
+    )
+
+    if every:
+        schedule = CronSchedule(kind="every", every_ms=every * 1000)
+    elif cron_expr:
+        schedule = CronSchedule(kind="cron", expr=cron_expr)
+    elif at:
+        dt = datetime.datetime.fromisoformat(at)
+        schedule = CronSchedule(kind="at", at_ms=int(dt.timestamp() * 1000))
+    else:
+        console.print("[red]Error: Must specify --every, --cron, or --at[/red]")
+        raise typer.Exit(1)
+
+    catalog_path = resolve_sources_path(get_data_dir(), source_file or None)
+    source = get_source_by_name(catalog_path, source_name)
+    store_path = get_data_dir() / "cron" / "jobs.json"
+    cron = CronService(store_path)
+    job = cron.add_job(
+        name=source.name,
+        schedule=schedule,
+        message=message or f"crawl {source.url}",
+        **build_crawler_cron_kwargs(
+            source,
+            tenant_id=tenant,
+            store_backend=store_backend,
+        ),
+    )
+    console.print(f"[green]Added crawler cron job[/green] {job.id} -> {source.name}")
+
+
+@crawler_app.command("source-list")
+def crawler_source_list(
+    source_file: str = typer.Option("", "--source-file", help="Optional crawler sources JSON file"),
+):
+    """List crawler sources from the shared source catalog."""
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.skills.crawler.scheduler import load_sources_json, resolve_sources_path
+
+    catalog_path = resolve_sources_path(get_data_dir(), source_file or None)
+    if not catalog_path.exists():
+        console.print(f"[yellow]No crawler source catalog found:[/yellow] {catalog_path}")
+        raise typer.Exit(0)
+    rows = load_sources_json(catalog_path)
+    table = Table(title=f"Crawler Sources: {catalog_path}")
+    table.add_column("Name")
+    table.add_column("URL")
+    table.add_column("Notebook")
+    table.add_column("Mode")
+    table.add_column("Selector")
+    for row in rows:
+        table.add_row(
+            row.name,
+            row.url,
+            row.notebook_id,
+            "browser" if row.use_browser else "http",
+            row.selector or "-",
+        )
+    console.print(table)
+
+
+@crawler_app.command("source-add")
+def crawler_source_add(
+    url: str = typer.Argument(..., help="Source URL to add to the shared crawler catalog"),
+    name: str = typer.Option(..., "--name", "-n", help="Crawler source name"),
+    notebook: str = typer.Option("default", "--notebook", help="Target notebook"),
+    selector: str = typer.Option("", "--selector", help="Optional CSS selector"),
+    browser: bool = typer.Option(False, "--browser", help="Use browser extraction"),
+    max_chars: int = typer.Option(20000, "--max-chars", help="Maximum extracted characters"),
+    metadata_json: str = typer.Option("", "--metadata-json", help="Optional JSON object metadata"),
+    source_file: str = typer.Option("", "--source-file", help="Optional crawler sources JSON file"),
+):
+    """Add or update one crawler source in the shared source catalog."""
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.skills.crawler.extractor import CrawlerSource
+    from zen_claw.skills.crawler.scheduler import resolve_sources_path, upsert_source
+
+    metadata = json.loads(metadata_json) if metadata_json.strip() else {}
+    if metadata and not isinstance(metadata, dict):
+        console.print("[red]Error:[/red] --metadata-json must be a JSON object")
+        raise typer.Exit(1)
+
+    catalog_path = resolve_sources_path(get_data_dir(), source_file or None)
+    upsert_source(
+        catalog_path,
+        CrawlerSource(
+            name=name,
+            url=url,
+            notebook_id=notebook,
+            selector=selector,
+            use_browser=browser,
+            max_chars=max_chars,
+            metadata=dict(metadata),
+        ),
+    )
+    console.print(f"[green]Saved crawler source[/green] {name} -> {catalog_path}")
 
 
 @knowledge_app.command("add")
 def knowledge_add(
     source: str = typer.Argument(..., help="File path or URL to ingest"),
     notebook: str = typer.Option("default", "--notebook", "-n", help="Notebook name"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+    metadata_json: str = typer.Option(
+        "", "--metadata-json", help="Optional JSON object to attach as chunk metadata"
+    ),
 ):
     """Add content to the knowledge base."""
     from zen_claw.agent.tools.knowledge import KnowledgeAddTool
     from zen_claw.config.loader import get_data_dir
 
     async def _run() -> None:
-        tool = KnowledgeAddTool(data_dir=get_data_dir())
-        result = await tool.execute(source=source, notebook_id=notebook)
+        tool = KnowledgeAddTool(data_dir=get_data_dir(), tenant_id=tenant, store_kind=store_backend)
+        metadata = json.loads(metadata_json) if metadata_json.strip() else None
+        if metadata is not None and not isinstance(metadata, dict):
+            console.print("[red]Error:[/red] --metadata-json must be a JSON object")
+            raise typer.Exit(1)
+        result = await tool.execute(
+            source=source,
+            notebook_id=notebook,
+            metadata=metadata,
+            tenant_id=tenant,
+            store_backend=store_backend,
+        )
         if not result.ok:
             msg = result.error.message if result.error else "unknown"
             console.print(f"[red]Error:[/red] {msg}")
@@ -3593,15 +4484,36 @@ def knowledge_add(
 def knowledge_search(
     query: str = typer.Argument(..., help="Search query"),
     notebook: str = typer.Option("default", "--notebook", "-n", help="Notebook name"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
     top_k: int = typer.Option(5, "--top-k", "-k", help="Result count"),
+    filters_json: str = typer.Option(
+        "", "--filters-json", help="Optional JSON object for exact-match metadata filters"
+    ),
 ):
     """Search knowledge base."""
     from zen_claw.agent.tools.knowledge import KnowledgeSearchTool
     from zen_claw.config.loader import get_data_dir
 
     async def _run() -> None:
-        tool = KnowledgeSearchTool(data_dir=get_data_dir(), default_notebook=notebook)
-        result = await tool.execute(query=query, notebook_id=notebook, top_k=top_k)
+        tool = KnowledgeSearchTool(
+            data_dir=get_data_dir(),
+            default_notebook=notebook,
+            tenant_id=tenant,
+            store_kind=store_backend,
+        )
+        filters = json.loads(filters_json) if filters_json.strip() else None
+        if filters is not None and not isinstance(filters, dict):
+            console.print("[red]Error:[/red] --filters-json must be a JSON object")
+            raise typer.Exit(1)
+        result = await tool.execute(
+            query=query,
+            notebook_id=notebook,
+            top_k=top_k,
+            filters=filters,
+            tenant_id=tenant,
+            store_backend=store_backend,
+        )
         if not result.ok:
             msg = result.error.message if result.error else "unknown"
             console.print(f"[red]Error:[/red] {msg}")
@@ -3616,20 +4528,141 @@ def knowledge_search(
             score = row.get("score", 0.0)
             console.print(f"[bold]{i}.[/bold] {source} [dim](score={score:.3f})[/dim]")
             console.print(str(row.get("content", ""))[:300])
+        if data.get("filters"):
+            console.print(f"[dim]filters={json.dumps(data['filters'], ensure_ascii=False)}[/dim]")
 
     import json
 
     asyncio.run(_run())
 
 
+@knowledge_app.command("remove")
+def knowledge_remove(
+    document_id: str = typer.Argument(..., help="Stable document ID to remove"),
+    notebook: str = typer.Option("default", "--notebook", "-n", help="Notebook name"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+):
+    """Remove a document from the knowledge base by stable document ID."""
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.knowledge.pipeline import RAGPipeline
+
+    try:
+        payload = RAGPipeline(
+            get_data_dir(), tenant_id=tenant, store_kind=store_backend
+        ).delete_document(
+            document_id, notebook_id=notebook
+        )
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]Removed[/green] {payload['documents_removed']} document(s) / "
+        f"{payload['chunks_deleted']} chunk(s) from [cyan]{payload['notebook']}[/cyan]"
+    )
+
+
+@knowledge_app.command("documents")
+def knowledge_documents(
+    notebook: str = typer.Option("default", "--notebook", "-n", help="Notebook name"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+):
+    """List notebook documents with stable document IDs."""
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.knowledge.pipeline import RAGPipeline
+
+    try:
+        payload = RAGPipeline(
+            get_data_dir(), tenant_id=tenant, store_kind=store_backend
+        ).list_documents(notebook_id=notebook)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+    rows = payload.get("documents", [])
+    if not rows:
+        console.print("[yellow]No documents found.[/yellow]")
+        return
+    table = Table(title=f"Knowledge Documents ({payload['notebook']})")
+    table.add_column("Document ID")
+    table.add_column("Source")
+    table.add_column("Doc Units")
+    table.add_column("Created")
+    for row in rows:
+        table.add_row(
+            str(row.get("document_id", "")),
+            str(row.get("source", "")),
+            str(row.get("doc_units", 0)),
+            str(row.get("created_at", "")),
+        )
+    console.print(table)
+
+
+@knowledge_app.command("clear")
+def knowledge_clear(
+    notebook: str = typer.Option("default", "--notebook", "-n", help="Notebook name"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+):
+    """Remove all documents from a notebook while keeping the notebook itself."""
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.knowledge.pipeline import RAGPipeline
+
+    try:
+        payload = RAGPipeline(
+            get_data_dir(), tenant_id=tenant, store_kind=store_backend
+        ).clear_notebook(notebook_id=notebook)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]Cleared[/green] {payload['documents_removed']} document(s) / "
+        f"{payload['chunks_deleted']} chunk(s) from [cyan]{payload['notebook']}[/cyan]"
+    )
+
+
+@knowledge_app.command("retain")
+def knowledge_retain(
+    notebook: str = typer.Option("default", "--notebook", "-n", help="Notebook name"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+    max_documents: int = typer.Option(0, "--max-documents", help="Keep at most N newest documents"),
+    max_age_days: int = typer.Option(0, "--max-age-days", help="Delete documents older than N days"),
+):
+    """Run retention cleanup for a notebook."""
+    from zen_claw.config.loader import get_data_dir, load_config
+    from zen_claw.knowledge.pipeline import RAGPipeline
+
+    cfg = load_config()
+    effective_max_documents = int(max_documents or cfg.knowledge.retention_max_documents or 0)
+    effective_max_age_days = int(max_age_days or cfg.knowledge.retention_max_age_days or 0)
+    try:
+        payload = RAGPipeline(
+            get_data_dir(), tenant_id=tenant, store_kind=store_backend
+        ).run_retention(
+            notebook_id=notebook,
+            max_documents=effective_max_documents,
+            max_age_days=effective_max_age_days,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]Retention complete[/green] {payload['documents_removed']} document(s) / "
+        f"{payload['chunks_deleted']} chunk(s) removed from [cyan]{payload['notebook']}[/cyan]"
+    )
+
+
 @knowledge_app.command("list")
-def knowledge_list():
+def knowledge_list(
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+):
     """List knowledge notebooks."""
     from zen_claw.agent.tools.knowledge import KnowledgeListTool
     from zen_claw.config.loader import get_data_dir
 
     async def _run() -> None:
-        tool = KnowledgeListTool(data_dir=get_data_dir())
+        tool = KnowledgeListTool(data_dir=get_data_dir(), tenant_id=tenant)
         result = await tool.execute()
         if not result.ok:
             msg = result.error.message if result.error else "unknown"
@@ -3644,9 +4677,13 @@ def knowledge_list():
         table.add_column("Name")
         table.add_column("ID")
         table.add_column("Docs")
+        table.add_column("Backend")
         for row in rows:
             table.add_row(
-                str(row.get("name", "")), str(row.get("id", "")), str(row.get("doc_count", 0))
+                str(row.get("name", "")),
+                str(row.get("id", "")),
+                str(row.get("doc_count", 0)),
+                str(row.get("store_backend", "") or "default"),
             )
         console.print(table)
 
@@ -3655,24 +4692,82 @@ def knowledge_list():
     asyncio.run(_run())
 
 
+@knowledge_app.command("stats")
+def knowledge_stats(
+    notebook: str = typer.Option("", "--notebook", "-n", help="Notebook name"),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
+    store_backend: str = typer.Option("", "--store-backend", help="Optional store backend override"),
+):
+    """Show knowledge/RAG stats."""
+    from zen_claw.config.loader import get_data_dir
+    from zen_claw.knowledge.pipeline import RAGPipeline
+
+    payload = RAGPipeline(
+        get_data_dir(), tenant_id=tenant, store_kind=store_backend
+    ).stats(notebook_id=notebook)
+    table = Table(title="Knowledge Stats")
+    table.add_column("Notebook")
+    table.add_column("Docs")
+    table.add_column("Chunks")
+    table.add_column("Backend")
+    for row in payload["notebooks"]:
+        table.add_row(
+            str(row["name"]),
+            str(row["doc_count"]),
+            str(row["chunk_count"]),
+            str(row.get("store_backend", "") or "default"),
+        )
+    console.print(table)
+    console.print(
+        f"total notebooks={payload['total_notebooks']} "
+        f"documents={payload['total_documents']} "
+        f"chunks={payload['total_chunks']} "
+        f"rag_available={payload['rag_available']}"
+    )
+
+
 @knowledge_app.command("notebooks")
 def knowledge_notebooks(
     create: str = typer.Option("", "--create", help="Create notebook name"),
+    set_backend: str = typer.Option("", "--set-backend", help="Update notebook backend policy"),
+    store_backend: str = typer.Option(
+        "", "--store-backend", help="Notebook backend policy (chroma|memory)"
+    ),
+    tenant: str = typer.Option("default", "--tenant", "-t", help="Tenant ID"),
 ):
-    """Create notebook."""
-    if not create.strip():
-        console.print("Use --create <name> to create notebook.")
+    """Create notebook or update its backend policy."""
+    action_count = int(bool(create.strip())) + int(bool(set_backend.strip()))
+    if action_count != 1:
+        console.print("Use either --create <name> or --set-backend <name>.")
         return
+    from zen_claw.auth.paths import tenant_data_dir
     from zen_claw.config.loader import get_data_dir
     from zen_claw.knowledge.notebook import NotebookManager
 
-    manager = NotebookManager(get_data_dir())
+    manager = NotebookManager(tenant_data_dir(get_data_dir(), tenant))
     try:
-        nb = manager.create(create)
+        if create.strip():
+            nb = manager.create(create, store_backend=store_backend)
+            action = "Created"
+        else:
+            nb = manager.set_store_backend(set_backend, store_backend)
+            action = "Updated"
     except ValueError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1)
-    console.print(f"[green]Created[/green] notebook {nb.name} ({nb.id})")
+    effective_backend = nb.store_backend or "default"
+    console.print(
+        f"[green]{action}[/green] notebook {nb.name} ({nb.id}) backend={effective_backend}"
+    )
+
+
+rag_app.command("ingest")(knowledge_add)
+rag_app.command("search")(knowledge_search)
+rag_app.command("delete")(knowledge_remove)
+rag_app.command("documents")(knowledge_documents)
+rag_app.command("clear")(knowledge_clear)
+rag_app.command("retain")(knowledge_retain)
+rag_app.command("stats")(knowledge_stats)
 
 
 # ============================================================================
@@ -4150,6 +5245,7 @@ def status(
         _print_sidecar_status(config)
         _print_channel_rate_limit_status(config)
         _print_channel_rbac_status(config, verbose=verbose)
+        _print_agent_profile_status(config, verbose=verbose)
         _print_node_token_rotation_status(within_sec=3600)
         if verbose:
             _print_policy_audit_matrix(config)

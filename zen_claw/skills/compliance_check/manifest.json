@@ -1,0 +1,29 @@
+{
+  "name": "compliance_check",
+  "version": "0.1.0",
+  "description": "Business skill skeleton for content compliance review and rewrite guidance.",
+  "author": "zen-claw",
+  "permissions": [
+    "read_file",
+    "message"
+  ],
+  "scopes": [
+    "filesystem",
+    "message"
+  ],
+  "trust": "trusted",
+  "runtime_contract": {
+    "intent": "compliance_review",
+    "intent_mode": "skill_first",
+    "response_mode": "llm_assisted",
+    "failure_mode": "runtime_fact_llm_format",
+    "preferred_tools": [
+      "read_file",
+      "message"
+    ],
+    "allowed_tools": [
+      "read_file",
+      "message"
+    ]
+  }
+}

@@ -545,3 +545,69 @@ def test_skills_cli_install_dry_run(tmp_path: Path, monkeypatch) -> None:
     assert out.exit_code == 0
     assert "dry-run ok" in out.output
     assert not (workspace / "skills" / "alpha").exists()
+
+
+def test_skills_cli_test_runs_preflight_without_local_tests(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        json.dumps(
+            {
+                "name": "alpha",
+                "version": "1.0.0",
+                "description": "alpha skill",
+                "permissions": ["read_file"],
+                "scopes": ["filesystem"],
+            }
+        ),
+    )
+    _patch_workspace(monkeypatch, workspace, builtin)
+
+    out = runner.invoke(app, ["skills", "test", "alpha", "--no-integrity"])
+    assert out.exit_code == 0
+    assert "Skill preflight passed: alpha" in out.output
+    assert "preflight-only run" in out.output
+
+
+def test_skills_cli_test_runs_local_pytest_when_present(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    skill_dir = workspace / "skills" / "alpha"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text("# alpha\n", encoding="utf-8")
+    (skill_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "version": "1.0.0",
+                "description": "alpha skill",
+                "permissions": ["read_file"],
+                "scopes": ["filesystem"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    tests_dir = skill_dir / "tests"
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    (tests_dir / "test_alpha.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    _patch_workspace(monkeypatch, workspace, builtin)
+
+    called: dict[str, object] = {}
+
+    def _fake_pytest_main(args: list[str]) -> int:
+        called["args"] = args
+        return 0
+
+    monkeypatch.setattr("pytest.main", _fake_pytest_main)
+    out = runner.invoke(app, ["skills", "test", "alpha", "--no-integrity"])
+    assert out.exit_code == 0
+    assert called["args"] == ["-q", str(tests_dir)]
+    assert "pytest" in out.output

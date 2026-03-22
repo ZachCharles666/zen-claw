@@ -138,6 +138,35 @@ def test_process_direct_fuzzy_matches_slightly_misspelled_english_city_alias(
     assert "2026-03-07 07:00:00 EST" in out
 
 
+def test_process_direct_logs_resolved_recovery_when_fuzzy_timezone_alias_succeeds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+
+    loop = _make_loop(tmp_path)
+    monkeypatch.setattr(
+        loop.intent_router,
+        "_utc_now",
+        staticmethod(lambda: datetime(2026, 3, 7, 12, 0, 0, tzinfo=UTC)),
+    )
+
+    out = asyncio.run(loop.process_direct("time in Nwe York"))
+
+    assert out.startswith("Nwe York当前时间：")
+    rows = [
+        json.loads(line)
+        for line in (data_dir / "dashboard" / "intent_router.log.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line
+    ]
+    assert rows[-1]["route_status"] == "direct_success"
+    assert rows[-1]["recovery_mode"] == "resolved"
+    assert rows[-1]["recovery_blocker_kind"] == "locally_correctable"
+
+
 def test_process_direct_falls_back_when_zoneinfo_database_is_unavailable_for_new_york(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -1,0 +1,37 @@
+# zen-claw — 开发模式 Compose 覆盖配置
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# 特点：
+#   - 直接挂载源码，无需重新 build 镜像
+#   - 使用轻量 Python 运行时镜像（跳过 Go/Node 构建）
+#   - 适合本地开发迭代；生产环境请使用 docker-compose.yml
+
+services:
+  zen-claw:
+    # 开发模式使用轻量镜像（不含 Go sidecar，适合纯 Python 开发）
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ""            # 使用完整多阶段构建（或替换为 python-only 镜像）
+
+    volumes:
+      # 挂载源码目录，实现热重载
+      - ./zen_claw:/app/zen_claw
+      - ./bridge:/app/bridge
+      - ./data:/data
+
+    environment:
+      ZEN_CLAW_DATA_DIR: /data
+      ZEN_CLAW_DASHBOARD_HOST: "0.0.0.0"
+      ZEN_CLAW_DASHBOARD_PORT: "18791"
+      ZEN_CLAW_GATEWAY_HOST: "0.0.0.0"
+      ZEN_CLAW_GATEWAY_PORT: "18790"
+      # 开发模式：启用详细日志
+      ZEN_CLAW_LOG_LEVEL: "DEBUG"
+
+    # 开发模式启动：使用 watchfiles 自动重载（需安装 watchfiles）
+    command: ["dashboard", "--port", "18791"]
+
+    # 开发时关闭 restart，方便观察崩溃原因
+    restart: "no"

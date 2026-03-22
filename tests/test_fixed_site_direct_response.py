@@ -9,7 +9,7 @@ from zen_claw.agent.loop import AgentLoop
 from zen_claw.agent.skills import SkillsLoader
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.bus.queue import MessageBus
-from zen_claw.providers.base import LLMProvider
+from zen_claw.providers.base import LLMProvider, LLMResponse
 
 
 @pytest.fixture(autouse=True)
@@ -137,6 +137,74 @@ def test_process_direct_returns_deterministic_failure_when_wikipedia_sources_fai
     assert calls["count"] == 12
 
 
+def test_process_direct_enters_constrained_replan_when_wikipedia_sources_fail_and_planning_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class _QueueProvider(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key=None, api_base=None)
+            self.calls = 0
+
+        async def chat(self, messages, tools=None, model=None, max_tokens=4096, temperature=0.7):
+            self.calls += 1
+            return LLMResponse(content="done", tool_calls=[], finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "fake-model"
+
+    provider = _QueueProvider()
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=provider,
+        workspace=tmp_path,
+        model="fake-model",
+        enable_planning=True,
+    )
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop._extract_and_store_memory = AsyncMock()  # type: ignore[method-assign]
+    loop.execution.should_plan = lambda: False  # type: ignore[method-assign]
+
+    calls = {"count": 0}
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        assert name == "web_fetch"
+        calls["count"] += 1
+        return ToolResult.failure(
+            kind=ToolErrorKind.RETRYABLE,
+            message="timed out",
+            code="web_fetch_timeout",
+        )
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+    observed: dict[str, str] = {}
+
+    def _capture_replan(route_result):
+        observed["route_status"] = route_result.route_status
+        observed["recovery_mode"] = (
+            route_result.recovery_outcome.mode if route_result.recovery_outcome is not None else ""
+        )
+        observed["blocker_kind"] = (
+            route_result.recovery_outcome.plan.blocker.kind
+            if route_result.recovery_outcome is not None and route_result.recovery_outcome.plan is not None
+            else ""
+        )
+        return "captured fixed-site constrained replan"
+
+    monkeypatch.setattr(loop, "_build_intent_replan_instruction", _capture_replan)
+
+    out = asyncio.run(loop.process_direct("wiki Alan Turing"))
+
+    assert out == "done"
+    assert provider.calls == 1
+    assert calls["count"] == 12
+    assert observed == {
+        "route_status": "needs_constrained_replan",
+        "recovery_mode": "guided",
+        "blocker_kind": "upstream_unavailable",
+    }
+
+
 def test_process_direct_falls_back_to_wikipedia_query_api_when_summary_endpoint_fails(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -228,6 +296,69 @@ def test_process_direct_falls_back_to_wikipedia_search_then_summary(
         "https://en.wikipedia.org/w/api.php?action=query&list=search&srwhat=text&srlimit=1&format=json&formatversion=2&srsearch=Alan%20Mathison%20Turring",
         "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing",
     ]
+
+
+def test_process_direct_logs_resolved_recovery_when_wikipedia_search_retry_succeeds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_FailIfCalledProvider(),
+        workspace=tmp_path,
+        model="fake-model",
+        enable_planning=True,
+    )
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop._extract_and_store_memory = AsyncMock()  # type: ignore[method-assign]
+
+    async def _fake_execute(name: str, params: dict, trace_id: str | None = None):
+        assert name == "web_fetch"
+        url = params["url"]
+        if url == "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Mathison%20Turring":
+            return ToolResult.success(json.dumps({"text": json.dumps({"title": "Alan Mathison Turring"})}))
+        if (
+            url
+            == "https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1"
+            "&explaintext=1&redirects=1&format=json&formatversion=2&titles=Alan%20Mathison%20Turring"
+        ):
+            return ToolResult.success(
+                json.dumps({"text": json.dumps({"query": {"pages": [{"title": "Alan Mathison Turring"}]}})})
+            )
+        if (
+            url
+            == "https://en.wikipedia.org/w/api.php?action=query&list=search&srwhat=text&srlimit=1"
+            "&format=json&formatversion=2&srsearch=Alan%20Mathison%20Turring"
+        ):
+            payload = {"query": {"searchinfo": {"suggestion": "Alan Turing"}, "search": []}}
+            return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
+        if url == "https://en.wikipedia.org/api/rest_v1/page/summary/Alan%20Turing":
+            payload = {
+                "title": "Alan Turing",
+                "extract": "Alan Turing was a British mathematician and computing pioneer.",
+            }
+            return ToolResult.success(json.dumps({"text": json.dumps(payload)}))
+        raise AssertionError(f"unexpected url: {url}")
+
+    monkeypatch.setattr(loop.tools, "execute", _fake_execute)
+
+    out = asyncio.run(loop.process_direct("wiki Alan Mathison Turring"))
+
+    assert out.startswith("维基百科英文摘要（Alan Turing）：")
+    rows = [
+        json.loads(line)
+        for line in (data_dir / "dashboard" / "intent_router.log.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line
+    ]
+    assert rows[-1]["route_status"] == "direct_success"
+    assert rows[-1]["recovery_mode"] == "resolved"
+    assert rows[-1]["recovery_blocker_kind"] == "upstream_unavailable"
 
 
 def test_normalize_wikipedia_title_candidate_title_cases_ascii_suggestion() -> None:

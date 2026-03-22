@@ -20,11 +20,23 @@ class TestTenantStore:
         assert t.name == "Acme Corp"
         assert t.enabled is True
 
+    def test_create_tenant_with_store_backend(self, store):
+        t = store.create("Acme Corp", store_backend="memory")
+        assert t.store_backend == "memory"
+
     def test_get_existing_tenant(self, store):
         t = store.create("Test Org")
         fetched = store.get(t.tenant_id)
         assert fetched is not None
         assert fetched.name == "Test Org"
+
+    def test_set_store_backend_updates_existing_tenant(self, store):
+        t = store.create("Test Org")
+        updated = store.set_store_backend(t.tenant_id, "chroma")
+        fetched = store.get(t.tenant_id)
+        assert updated.store_backend == "chroma"
+        assert fetched is not None
+        assert fetched.store_backend == "chroma"
 
     def test_get_nonexistent_returns_none(self, store):
         assert store.get("00000000-0000-0000-0000-000000000000") is None

@@ -1190,17 +1190,26 @@ class SkillsLoader:
 
     def export_skill_to_zip(
         self, name: str, out_zip: Path, overwrite: bool = False
-    ) -> tuple[bool, str]:
-        """Export a skill directory as a zip archive."""
+    ) -> tuple[bool, str, str]:
+        """Export a skill directory as a zip archive.
+
+        Returns ``(ok, message, sha256_hex)``.  *sha256_hex* is an empty string
+        on failure so callers can always unpack three values safely.
+        """
         if not self._is_valid_skill_name(name):
-            return False, f"invalid skill name: {name}"
+            return False, f"invalid skill name: {name}", ""
         skill = self._find_skill(name)
         if not skill:
-            return False, f"skill '{name}' not found"
+            resolved = self.resolve_physical_path(name)
+            if resolved and (resolved / "SKILL.md").exists():
+                source = "workspace" if resolved.is_relative_to(self.workspace_skills) else "builtin"
+                skill = {"name": name, "dir": resolved, "source": source}
+        if not skill:
+            return False, f"skill '{name}' not found", ""
 
         out = out_zip.resolve()
         if out.exists() and not overwrite:
-            return False, f"output zip already exists: {out} (use --overwrite)"
+            return False, f"output zip already exists: {out} (use --overwrite)", ""
         out.parent.mkdir(parents=True, exist_ok=True)
 
         with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1210,7 +1219,7 @@ class SkillsLoader:
                     arcname = f"{name}/{p.relative_to(root).as_posix()}"
                     zf.write(p, arcname=arcname)
         digest = hashlib.sha256(out.read_bytes()).hexdigest()
-        return True, f"exported skill: {name} -> {out} (sha256={digest})"
+        return True, f"exported skill: {name} -> {out} (sha256={digest})", digest
 
     def build_skills_sbom(self) -> dict[str, object]:
         """Build a deterministic SBOM-style inventory for all discovered skills."""
@@ -1270,6 +1279,97 @@ class SkillsLoader:
         return {
             "schema": "zen-claw.skills.sbom.v1",
             "skills_count": len(rows),
+            "skills": rows,
+        }
+
+    def build_skills_inventory(self) -> dict[str, object]:
+        """Build a structured, product-facing inventory summary for discovered skills."""
+        skills = sorted(self.list_skills(filter_unavailable=False), key=lambda item: item["name"])
+        rows: list[dict[str, object]] = []
+        trust_breakdown: dict[str, int] = {}
+        runtime_mode_breakdown: dict[str, int] = {}
+        permission_breakdown: dict[str, int] = {}
+        scope_breakdown: dict[str, int] = {}
+        for item in skills:
+            name = item["name"]
+            available = self._check_requirements(self._get_skill_meta(name))
+            manifest, manifest_errors = self.get_skill_manifest(name)
+            if manifest_errors and any("manifest.json missing" in e for e in manifest_errors):
+                manifest_status = "missing"
+            else:
+                ok_manifest, _ = self.validate_skill_manifest(name, strict=True)
+                manifest_status = "valid" if ok_manifest else "invalid"
+
+            permissions: list[str] = []
+            scopes: list[str] = []
+            trust = ""
+            runtime_intent = ""
+            runtime_intent_mode = ""
+            tests_present = Path(item["path"]).parent.joinpath("tests").is_dir()
+            if isinstance(manifest, dict):
+                raw_permissions = manifest.get("permissions")
+                raw_scopes = manifest.get("scopes")
+                if isinstance(raw_permissions, list):
+                    permissions = [str(item).strip() for item in raw_permissions if str(item).strip()]
+                if isinstance(raw_scopes, list):
+                    scopes = [str(item).strip() for item in raw_scopes if str(item).strip()]
+                trust = str(manifest.get("trust") or "").strip().lower()
+                runtime_contract = manifest.get("runtime_contract")
+                if isinstance(runtime_contract, dict):
+                    runtime_intent = str(runtime_contract.get("intent") or "").strip()
+                    runtime_intent_mode = str(runtime_contract.get("intent_mode") or "").strip()
+
+            for permission in permissions:
+                permission_breakdown[permission] = permission_breakdown.get(permission, 0) + 1
+            for scope in scopes:
+                scope_breakdown[scope] = scope_breakdown.get(scope, 0) + 1
+            if trust:
+                trust_breakdown[trust] = trust_breakdown.get(trust, 0) + 1
+            if runtime_intent_mode:
+                runtime_mode_breakdown[runtime_intent_mode] = (
+                    runtime_mode_breakdown.get(runtime_intent_mode, 0) + 1
+                )
+
+            enforce_ready = manifest_status == "valid" and bool(permissions)
+            rows.append(
+                {
+                    "name": name,
+                    "source": item["source"],
+                    "path": item["path"],
+                    "enabled": self.is_skill_enabled(name),
+                    "available": available,
+                    "manifest": manifest_status,
+                    "enforce_ready": enforce_ready,
+                    "permissions_count": len(permissions),
+                    "scopes_count": len(scopes),
+                    "trust": trust,
+                    "permissions": permissions,
+                    "scopes": scopes,
+                    "runtime_intent": runtime_intent,
+                    "runtime_intent_mode": runtime_intent_mode,
+                    "tests_present": tests_present,
+                }
+            )
+
+        return {
+            "schema": "zen-claw.skills.inventory.v1",
+            "skills_count": len(rows),
+            "enabled_count": len([row for row in rows if bool(row["enabled"])]),
+            "available_count": len([row for row in rows if bool(row["available"])]),
+            "enforce_ready_count": len([row for row in rows if bool(row["enforce_ready"])]),
+            "invalid_count": len([row for row in rows if row["manifest"] == "invalid"]),
+            "missing_manifest_count": len([row for row in rows if row["manifest"] == "missing"]),
+            "tested_count": len([row for row in rows if bool(row["tests_present"])]),
+            "trusted_count": len([row for row in rows if row["trust"] == "trusted"]),
+            "runtime_intent_count": len([row for row in rows if bool(row["runtime_intent"])]),
+            "permissioned_count": len([row for row in rows if int(row["permissions_count"]) > 0]),
+            "scoped_count": len([row for row in rows if int(row["scopes_count"]) > 0]),
+            "trust_breakdown": dict(sorted(trust_breakdown.items())),
+            "runtime_mode_breakdown": dict(sorted(runtime_mode_breakdown.items())),
+            "permission_breakdown": dict(
+                sorted(permission_breakdown.items(), key=lambda item: (-item[1], item[0]))
+            ),
+            "scope_breakdown": dict(sorted(scope_breakdown.items(), key=lambda item: (-item[1], item[0]))),
             "skills": rows,
         }
 

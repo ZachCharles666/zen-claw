@@ -22,6 +22,7 @@ class Tenant:
     quota_llm_calls_per_day: int = 1000
     quota_storage_mb: int = 1000
     enabled: bool = True
+    store_backend: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -35,7 +36,15 @@ class Tenant:
             quota_llm_calls_per_day=int(d.get("quota_llm_calls_per_day", 1000)),
             quota_storage_mb=int(d.get("quota_storage_mb", 1000)),
             enabled=bool(d.get("enabled", True)),
+            store_backend=cls._normalize_store_backend(d.get("store_backend", "")),
         )
+
+    @staticmethod
+    def _normalize_store_backend(value: object) -> str:
+        backend = str(value or "").strip().lower()
+        if backend in {"chroma", "memory"}:
+            return backend
+        return ""
 
 
 class TenantStore:
@@ -48,7 +57,11 @@ class TenantStore:
         return self._tenants_root / tenant_id / "tenant.json"
 
     def create(
-        self, name: str, quota_llm_calls_per_day: int = 1000, quota_storage_mb: int = 1000
+        self,
+        name: str,
+        quota_llm_calls_per_day: int = 1000,
+        quota_storage_mb: int = 1000,
+        store_backend: str = "",
     ) -> Tenant:
         if not name or not name.strip():
             raise ValueError("Tenant name cannot be empty")
@@ -58,6 +71,7 @@ class TenantStore:
             created_at=time.time(),
             quota_llm_calls_per_day=quota_llm_calls_per_day,
             quota_storage_mb=quota_storage_mb,
+            store_backend=Tenant._normalize_store_backend(store_backend),
         )
         self._write(tenant)
         logger.info(f"Created tenant {tenant.tenant_id}")
@@ -101,6 +115,14 @@ class TenantStore:
         tenant.enabled = False
         self._write(tenant)
         return True
+
+    def set_store_backend(self, tenant_id: str, store_backend: str) -> Tenant:
+        tenant = self.get(tenant_id)
+        if tenant is None:
+            raise ValueError(f"tenant not found: {tenant_id}")
+        tenant.store_backend = Tenant._normalize_store_backend(store_backend)
+        self._write(tenant)
+        return tenant
 
     def _write(self, tenant: Tenant) -> None:
         f = self._tenant_file(tenant.tenant_id)

@@ -1,5 +1,6 @@
 from zen_claw.agent.intent_router import (
     IntentRouter,
+    IntentToolContract,
     RecoveryBlocker,
     RecoveryGuidance,
     RecoveryOutcome,
@@ -135,3 +136,70 @@ def test_weather_history_resolution_plan_can_back_a_resolved_outcome() -> None:
     assert outcome.plan is not None
     assert outcome.plan.blocker.kind == "source_scope_insufficient"
     assert "天气记录" in outcome.content
+
+
+def test_needs_constrained_replan_with_plan_preserves_structured_recovery() -> None:
+    plan = RecoveryPlan(
+        blocker=RecoveryBlocker(
+            kind="upstream_unavailable",
+            description="安全路径内的数据来源暂时未返回有效结果",
+            missing_requirement="至少一个允许的低风险数据来源",
+        ),
+        strategies=[
+            RecoveryStrategy(kind="fallback_source", detail="继续尝试允许列表内的低风险来源"),
+        ],
+        checked_scope=["已限制在 web_fetch 安全路径内重试"],
+        next_steps=["只继续尝试允许的网络抓取路径"],
+        fallback_options=[],
+    )
+
+    result = IntentRouter._needs_constrained_replan_with_plan(
+        intent_name="weather_like",
+        summary="暂时无法在当前安全路径下直接完成。",
+        plan=plan,
+        contract=IntentRouter._WEATHER_CONTRACT,
+        diagnostic="weather_sources_failed:wttr,open_meteo",
+    )
+
+    assert result.route_status == "needs_constrained_replan"
+    assert result.recovery_outcome is not None
+    assert result.recovery_outcome.mode == "guided"
+    assert result.recovery_outcome.plan is not None
+    assert result.recovery_outcome.plan.blocker.kind == "upstream_unavailable"
+
+
+def test_needs_explicit_approval_with_plan_preserves_structured_recovery() -> None:
+    plan = RecoveryPlan(
+        blocker=RecoveryBlocker(
+            kind="permission_required",
+            description="当前安全路径缺少执行所需的高风险工具授权",
+            missing_requirement="一次性显式授权的敏感工具范围",
+        ),
+        strategies=[
+            RecoveryStrategy(kind="guidance_only", detail="先请求一次性显式授权再继续"),
+        ],
+        checked_scope=["已在当前安全路径内评估允许工具集合"],
+        next_steps=["如果你确认，我会按最小工具范围发起一次性授权"],
+        fallback_options=[],
+    )
+
+    result = IntentRouter._needs_explicit_approval_with_plan(
+        intent_name="code_exec",
+        summary="当前安全路径无法直接完成。",
+        plan=plan,
+        contract=IntentToolContract(
+            intent_name="code_exec",
+            preferred_tools=["web_fetch"],
+            allowed_tools={"web_fetch"},
+            denied_tools={"exec"},
+            allow_high_risk_escalation=True,
+            response_mode="llm_assisted",
+        ),
+        diagnostic="explicit_approval:exec",
+    )
+
+    assert result.route_status == "needs_explicit_approval"
+    assert result.recovery_outcome is not None
+    assert result.recovery_outcome.mode == "guided"
+    assert result.recovery_outcome.plan is not None
+    assert result.recovery_outcome.plan.blocker.missing_requirement == "一次性显式授权的敏感工具范围"

@@ -6,7 +6,9 @@ from typing import Any
 
 import zen_claw.agent.loop as _loop_module
 from zen_claw.agent.loop import AgentLoop
+from zen_claw.bus.events import InboundMessage
 from zen_claw.bus.queue import MessageBus
+from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider, LLMResponse
 
 
@@ -107,6 +109,38 @@ def test_runtime_model_switch_overrides_dynamic_intent_model(tmp_path: Path, mon
     assert provider.called_models[-1] == "model-a"
 
 
+def test_runtime_model_profile_cheap_is_session_local(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_loop_module, "SessionManager", _InMemorySessionManager)
+    loop, provider = _make_loop(tmp_path)
+    loop.cost_model = "cheap-model"
+
+    out1 = asyncio.run(loop.process_direct("/model-profile cheap", session_key="cli:s1"))
+    assert "cheap" in out1
+
+    asyncio.run(loop.process_direct("hello s1", session_key="cli:s1"))
+    asyncio.run(loop.process_direct("hello s2", session_key="cli:s2"))
+    assert provider.called_models[0] == "cheap-model"
+    assert provider.called_models[1] == "default-model"
+
+
+def test_runtime_model_profile_stable_and_auto_query(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_loop_module, "SessionManager", _InMemorySessionManager)
+    loop, provider = _make_loop(tmp_path)
+    loop.stability_model = "stable-model"
+
+    out_query = asyncio.run(loop.process_direct("/model-profile", session_key="cli:s1"))
+    assert "auto" in out_query
+
+    out_set = asyncio.run(loop.process_direct("/model-profile stable", session_key="cli:s1"))
+    assert "stable" in out_set
+
+    asyncio.run(loop.process_direct("hello", session_key="cli:s1"))
+    assert provider.called_models[-1] == "stable-model"
+
+    out_auto = asyncio.run(loop.process_direct("/model-profile auto", session_key="cli:s1"))
+    assert "auto" in out_auto
+
+
 def test_dynamic_intent_model_writes_model_routing_event(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(_loop_module, "SessionManager", _InMemorySessionManager)
     data_dir = tmp_path / "data"
@@ -129,6 +163,44 @@ def test_dynamic_intent_model_writes_model_routing_event(tmp_path: Path, monkeyp
     rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
     assert rows[-1]["selected_model"] == "weather-model"
     assert rows[-1]["reason"] == "intent_override:weather"
+
+
+def test_metadata_driven_model_routing_writes_task_type_reason(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_loop_module, "SessionManager", _InMemorySessionManager)
+    data_dir = tmp_path / "data"
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    loop, provider = _make_loop(tmp_path)
+    loop.task_type_model_overrides = {"message.send": "message-model"}
+    loop.cost_model = "cheap-model"
+
+    async def _fake_route(_content, *, tools, trace_id=None):
+        from zen_claw.agent.intent_router import IntentRouteResult
+
+        _ = tools, trace_id
+        return IntentRouteResult(handled=False, intent_name="weather", route_status="miss")
+
+    monkeypatch.setattr(loop.intent_router, "route", _fake_route)
+
+    msg = InboundMessage(
+        channel="cli",
+        sender_id="user",
+        chat_id="direct",
+        content="send summary",
+        metadata={
+            **TraceContext.child_metadata(None),
+            "session_key": "cli:s1",
+            "channel_role": "admin",
+            "task_type": "message.send",
+            "cost_sensitive": True,
+        },
+    )
+
+    asyncio.run(loop._process_message(msg))
+    assert provider.called_models[-1] == "message-model"
+    log_path = data_dir / "dashboard" / "model_routing.log.jsonl"
+    rows = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
+    assert rows[-1]["selected_model"] == "message-model"
+    assert rows[-1]["reason"] == "task_type_override:message.send"
 
 
 def test_runtime_model_override_prevents_fallback_model(tmp_path: Path, monkeypatch) -> None:

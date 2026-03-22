@@ -30,7 +30,7 @@ def test_channels_status_includes_rbac_columns(monkeypatch) -> None:
     assert "RBAC" in out.output
     assert "Admins" in out.output
     assert "Users" in out.output
+    assert "Transport" in out.output
     assert "WhatsApp" in out.output
     assert "Discord" in out.output
     assert "Telegram" in out.output
-    assert "ws://localhost:3001" in out.output

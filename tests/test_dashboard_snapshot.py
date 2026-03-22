@@ -149,10 +149,18 @@ def test_build_dashboard_snapshot_includes_cron_sidecar_rate_limit(
     assert snapshot["node"]["approval_timeline"][0]["action"] == "submitted"
     assert snapshot["node"]["approval_chain_ok"] is False
 
-    rows = {row["name"]: row for row in snapshot["channels"]}
+    rows = {row["name"]: row for row in snapshot["channels"]["rows"]}
     assert rows["telegram"]["rbac_enabled"] is True
     assert rows["telegram"]["admins"] == 1
     assert rows["telegram"]["users"] == 2
+    assert rows["telegram"]["transport"] == "polling_http"
+    assert rows["telegram"]["inbound_mode"] == "polling"
+    assert rows["slack"]["passive_capable"] is True
+    runtime_rows = {row["channel_name"]: row for row in snapshot["channels"]["runtime_controls"]}
+    assert runtime_rows["webchat"]["state"] in {"running", "stopped"}
+    assert runtime_rows["webchat"]["apply_supported"] is True
+    assert runtime_rows["slack"]["supported"] is False
+    assert snapshot["channels"]["actions_total"] == 0
     assert "api_base" not in snapshot["providers"][0]
 
 
@@ -300,6 +308,23 @@ def test_build_dashboard_snapshot_includes_recent_observability_events(
         + "\n",
         encoding="utf-8",
     )
+    (data_dir / "dashboard" / "knowledge_policy.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 250,
+                "trace_id": "trace-policy-1",
+                "event": "knowledge.policy.update",
+                "policy_kind": "tenant",
+                "tenant_id": "default",
+                "target_id": "default",
+                "before_store_backend": "",
+                "after_store_backend": "memory",
+                "actor": "api_key",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
     monkeypatch.setattr(
         "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
@@ -325,8 +350,9 @@ def test_build_dashboard_snapshot_includes_recent_observability_events(
 
     snapshot = build_dashboard_snapshot(cfg)
     events = snapshot["agent"]["recent_observability_events"]
-    assert len(events) == 3
+    assert len(events) == 4
     assert [event["kind"] for event in events] == [
+        "policy_audit",
         "intent_router",
         "compression",
         "approval",
@@ -418,18 +444,44 @@ def test_build_dashboard_snapshot_includes_model_routing_events(
         encoding="utf-8",
     )
     (data_dir / "dashboard" / "model_routing.log.jsonl").write_text(
-        json.dumps(
-            {
-                "at_ms": 250,
-                "trace_id": "trace-model-1",
-                "channel": "cli",
-                "chat_id": "direct",
-                "intent_name": "weather",
-                "selected_model": "weather-model",
-                "reason": "intent_override:weather",
-            }
-        )
-        + "\n",
+        (
+            json.dumps(
+                {
+                    "at_ms": 250,
+                    "trace_id": "trace-model-1",
+                    "channel": "cli",
+                    "chat_id": "direct",
+                    "intent_name": "weather",
+                    "selected_model": "weather-model",
+                    "reason": "intent_override:weather",
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "at_ms": 200,
+                    "trace_id": "trace-model-2",
+                    "channel": "cli",
+                    "chat_id": "direct",
+                    "intent_name": "finance",
+                    "selected_model": "weather-model",
+                    "reason": "intent_override:weather",
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "at_ms": 150,
+                    "trace_id": "trace-model-3",
+                    "channel": "cli",
+                    "chat_id": "direct",
+                    "intent_name": "chat",
+                    "selected_model": "default-model",
+                    "reason": "default",
+                }
+            )
+            + "\n"
+        ),
         encoding="utf-8",
     )
 
@@ -441,11 +493,194 @@ def test_build_dashboard_snapshot_includes_model_routing_events(
 
     snapshot = build_dashboard_snapshot(cfg)
 
-    assert snapshot["agent"]["model_routing_summary"]["total"] == 1
+    assert snapshot["agent"]["model_routing_summary"]["total"] == 3
     assert snapshot["agent"]["model_routing_summary"]["latest_model"] == "weather-model"
     assert snapshot["agent"]["model_routing_summary"]["latest_reason"] == "intent_override:weather"
     assert snapshot["agent"]["model_routing_events"][0]["intent_name"] == "weather"
+    assert snapshot["agent"]["model_routing_summary"]["models"][0] == {
+        "model": "weather-model",
+        "count": 2,
+    }
+    assert snapshot["agent"]["model_routing_summary"]["reasons"][0] == {
+        "reason": "intent_override:weather",
+        "count": 2,
+    }
+    assert snapshot["agent"]["model_routing_summary"]["intents"][0] == {
+        "intent": "weather",
+        "count": 1,
+    }
+    assert snapshot["agent"]["model_routing_summary"]["channels"][0] == {
+        "channel": "cli",
+        "count": 3,
+    }
     assert snapshot["agent"]["recent_observability_events"][0]["kind"] == "model_routing"
+
+
+def test_build_dashboard_snapshot_includes_agent_profiles(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {"workspace": str(tmp_path / "default-ws"), "model": "default-model"},
+                "profiles": {
+                    "finance_writer": {
+                        "display_name": "Finance Writer",
+                        "model": "deepseek-chat",
+                        "enable_planning": False,
+                        "routing_keywords": ["finance", "bank campaign"],
+                        "allowed_tools": ["rag_retrieve", "content_gen"],
+                        "denied_tools": ["exec"],
+                    }
+                },
+            }
+        }
+    )
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["agent"]["profiles_total"] == 2
+    assert snapshot["agent"]["registered_profiles"] == 2
+    assert snapshot["agent"]["profiles"][1]["agent_id"] == "finance_writer"
+    assert snapshot["agent"]["profiles"][1]["model"] == "deepseek-chat"
+    assert snapshot["agent"]["profiles"][1]["planning_enabled"] is False
+    assert snapshot["agent"]["profiles"][1]["routing_keywords"] == ["finance", "bank campaign"]
+    assert snapshot["agent"]["profiles"][1]["routing_keywords_count"] == 2
+
+
+def test_build_dashboard_snapshot_includes_agent_actions(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "agent_actions.log.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "at_ms": 200,
+                        "trace_id": "trace-agent-2",
+                        "event": "agent.profile.updated",
+                        "agent_id": "finance_writer",
+                        "action": "planning_disable",
+                        "planning_enabled": False,
+                        "actor": "api_key",
+                        "detail": "",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "at_ms": 100,
+                        "trace_id": "trace-agent-1",
+                        "event": "agent.profile.updated",
+                        "agent_id": "default",
+                        "action": "planning_enable",
+                        "planning_enabled": True,
+                        "actor": "api_key",
+                        "detail": "",
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["agent"]["actions_total"] == 2
+    assert snapshot["agent"]["recent_actions"][0]["agent_id"] == "finance_writer"
+    assert snapshot["agent"]["recent_actions"][0]["action"] == "planning_disable"
+    assert snapshot["agent"]["pending_reload"] is True
+    assert snapshot["agent"]["pending_reload_count"] == 2
+    assert snapshot["ops"]["status"] == "attention"
+    assert "agents pending apply: 2" in snapshot["ops"]["notes"]
+    assert snapshot["ops"]["pending_apply_total"] == 2
+    assert snapshot["ops"]["pending_apply_rows"][0]["surface"] == "agent"
+    assert "execution_mode" in snapshot["ops"]["pending_apply_rows"][0]
+    assert any(
+        section["key"] == "pending_apply_audit_only"
+        for section in snapshot["ops"]["attention_sections"]
+    )
+    assert snapshot["ops"]["recent_activity"][0]["surface"] == "agent"
+    assert any(section["key"] == "pending_apply" for section in snapshot["ops"]["attention_sections"])
+
+
+def test_build_dashboard_snapshot_clears_pending_agent_reload_after_apply(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "agent_actions.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 700,
+                "trace_id": "trace-agent",
+                "event": "agent.profile.updated",
+                "agent_id": "finance_writer",
+                "action": "model_update",
+                "planning_enabled": True,
+                "actor": "api_key",
+                "detail": "deepseek-chat -> gpt-4.1-mini",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "agent_apply.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 800,
+                "trace_id": "trace-apply",
+                "event": "agent.config.applied",
+                "actor": "api_key",
+                "note": "operator_confirmed_reload",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["agent"]["pending_reload"] is False
+    assert snapshot["agent"]["pending_reload_count"] == 0
+    assert snapshot["agent"]["last_apply"]["event"] == "agent.config.applied"
 
 
 def test_build_dashboard_snapshot_includes_knowledge_summary(
@@ -462,6 +697,19 @@ def test_build_dashboard_snapshot_includes_knowledge_summary(
         '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
         encoding="utf-8",
     )
+    (data_dir / "tenants" / "11111111-1111-1111-1111-111111111111").mkdir(parents=True, exist_ok=True)
+    (data_dir / "tenants" / "11111111-1111-1111-1111-111111111111" / "tenant.json").write_text(
+        json.dumps(
+            {
+                "tenant_id": "11111111-1111-1111-1111-111111111111",
+                "name": "Acme",
+                "created_at": 1,
+                "enabled": True,
+                "store_backend": "memory",
+            }
+        ),
+        encoding="utf-8",
+    )
     (data_dir / "knowledge" / "notebooks.json").write_text(
         json.dumps(
             {
@@ -471,12 +719,14 @@ def test_build_dashboard_snapshot_includes_knowledge_summary(
                         "name": "Default",
                         "created_at": "2026-03-10T10:00:00+00:00",
                         "doc_count": 3,
+                        "store_backend": "memory",
                     },
                     {
                         "id": "chat_uploads",
                         "name": "chat_uploads",
                         "created_at": "2026-03-10T10:05:00+00:00",
                         "doc_count": 0,
+                        "store_backend": "",
                     },
                 ]
             }
@@ -516,7 +766,228 @@ def test_build_dashboard_snapshot_includes_knowledge_summary(
     assert snapshot["knowledge"]["cron_runs_error"] == 0
     assert snapshot["knowledge"]["recent_cron_runs"][0]["job_name"] == "refresh knowledge"
     assert snapshot["knowledge"]["notebooks"][0]["name"] == "chat_uploads"
+    assert snapshot["knowledge"]["notebooks"][1]["store_backend"] == "memory"
+    assert snapshot["knowledge"]["tenant_policies"][0]["store_backend"] == "memory"
+    assert snapshot["knowledge"]["backend_diagnostics"]["configured_backend"] == "chroma"
+    assert snapshot["knowledge"]["backend_diagnostics"]["all_healthy"] is True
+    assert snapshot["knowledge"]["backend_diagnostics"]["detected_backends"][0]["backend"] == "chroma"
+    assert snapshot["knowledge"]["recent_policy_changes"] == []
     assert snapshot["agent"]["recent_observability_events"][0]["kind"] == "knowledge_cron"
+
+
+def test_build_dashboard_snapshot_includes_recent_knowledge_policy_changes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "knowledge_policy.log.jsonl").write_text(
+        (
+            json.dumps(
+                {
+                    "at_ms": 300,
+                    "trace_id": "trace-tenant",
+                    "event": "knowledge.policy.update",
+                    "policy_kind": "tenant",
+                    "tenant_id": "default",
+                    "target_id": "default",
+                    "before_store_backend": "",
+                    "after_store_backend": "memory",
+                    "actor": "api_key",
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "at_ms": 400,
+                    "trace_id": "trace-notebook",
+                    "event": "knowledge.policy.update",
+                    "policy_kind": "notebook",
+                    "tenant_id": "default",
+                    "target_id": "finance_kb",
+                    "before_store_backend": "memory",
+                    "after_store_backend": "chroma",
+                    "actor": "api_key",
+                }
+            )
+            + "\n"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["knowledge"]["policy_changes_total"] == 2
+    assert snapshot["knowledge"]["recent_policy_changes"][0]["policy_kind"] == "notebook"
+    assert snapshot["knowledge"]["recent_policy_changes"][1]["policy_kind"] == "tenant"
+
+
+def test_build_dashboard_snapshot_includes_skill_actions(monkeypatch, tmp_path: Path) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "skills_actions.log.jsonl").write_text(
+        (
+            json.dumps(
+                {
+                    "at_ms": 500,
+                    "trace_id": "trace-disable",
+                    "event": "skills.state.change",
+                    "skill_name": "alpha",
+                    "action": "disable",
+                    "enabled": False,
+                    "actor": "api_key",
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "at_ms": 600,
+                    "trace_id": "trace-enable",
+                    "event": "skills.state.change",
+                    "skill_name": "alpha",
+                    "action": "enable",
+                    "enabled": True,
+                    "actor": "api_key",
+                }
+            )
+            + "\n"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["skills"]["actions_total"] == 2
+    assert snapshot["skills"]["recent_actions"][0]["skill_name"] == "alpha"
+    assert snapshot["skills"]["recent_actions"][0]["action"] == "enable"
+
+
+def test_build_dashboard_snapshot_includes_skill_checks(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    cfg.agents.defaults.workspace = str(tmp_path / "ws")
+    cfg.workspace_path.mkdir(parents=True, exist_ok=True)
+    skill_dir = cfg.workspace_path / "skills" / "alpha"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text("# alpha\n", encoding="utf-8")
+    (skill_dir / "tests").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "manifest.json").write_text(
+        '{"name":"alpha","version":"1.0.0","description":"alpha","permissions":["read_file"],"trust":"trusted","runtime_contract":{"intent":"assist","intent_mode":"skill_first"}}',
+        encoding="utf-8",
+    )
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "skills_checks.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 700,
+                "trace_id": "trace-check",
+                "event": "skills.preflight",
+                "skill_name": "alpha",
+                "ok": True,
+                "manifest_ok": True,
+                "integrity_ok": True,
+                "tests_present": True,
+                "detail": "manifest/integrity checks passed",
+                "actor": "api_key",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["skills"]["checks_total"] == 1
+    assert snapshot["skills"]["failed_checks"] == 0
+    assert snapshot["skills"]["recent_checks"][0]["skill_name"] == "alpha"
+    assert snapshot["skills"]["recent_checks"][0]["ok"] is True
+    assert snapshot["skills"]["rows"][0]["last_check"]["detail"] == "manifest/integrity checks passed"
+
+
+def test_build_dashboard_snapshot_includes_skill_exports(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    cfg.agents.defaults.workspace = str(tmp_path / "ws")
+    cfg.workspace_path.mkdir(parents=True, exist_ok=True)
+    skill_dir = cfg.workspace_path / "skills" / "alpha"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text("# alpha\n", encoding="utf-8")
+    (skill_dir / "manifest.json").write_text(
+        '{"name":"alpha","version":"1.0.0","description":"alpha","permissions":["read_file"],"trust":"trusted"}',
+        encoding="utf-8",
+    )
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "skills_exports.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 710,
+                "trace_id": "trace-export",
+                "event": "skills.export",
+                "skill_name": "alpha",
+                "out_path": str(tmp_path / "ws" / ".zen-claw" / "exports" / "alpha.zip"),
+                "message": "exported skill: alpha",
+                "actor": "api_key",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["ops"]["status"] == "attention"
+    assert "no recent model routing events" in snapshot["ops"]["notes"]
+    assert snapshot["skills"]["exports_total"] == 1
+    assert snapshot["skills"]["recent_exports"][0]["skill_name"] == "alpha"
 
 
 def test_build_dashboard_snapshot_classifies_knowledge_related_cron_jobs(
@@ -572,3 +1043,249 @@ def test_build_dashboard_snapshot_classifies_knowledge_related_cron_jobs(
     assert snapshot["cron"]["knowledge_related_jobs"] == 1
     assert snapshot["cron"]["jobs"][0]["target_kind"] in {"webhook", "channel_delivery"}
     assert any(job["knowledge_related"] for job in snapshot["cron"]["jobs"])
+
+
+def test_build_dashboard_snapshot_includes_skills_summary(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    cfg.agents.defaults.workspace = str(tmp_path / "ws")
+    cfg.workspace_path.mkdir(parents=True, exist_ok=True)
+    builtin = tmp_path / "builtin"
+    builtin.mkdir(parents=True, exist_ok=True)
+    skill_dir = cfg.workspace_path / "skills" / "alpha"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text("# alpha\n", encoding="utf-8")
+    (skill_dir / "tests").mkdir(parents=True, exist_ok=True)
+    (skill_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "version": "1.0.0",
+                "description": "alpha skill",
+                "permissions": ["read_file"],
+                "scopes": ["filesystem"],
+                "trust": "trusted",
+                "runtime_contract": {"intent": "assist", "intent_mode": "skill_first"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "data" / "cron").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "channels").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "nodes").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+    monkeypatch.setattr("zen_claw.agent.skills.BUILTIN_SKILLS_DIR", builtin)
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["skills"]["total"] == 1
+    assert snapshot["skills"]["enabled"] == 1
+    assert snapshot["skills"]["enforce_ready"] == 1
+    assert snapshot["skills"]["tested"] == 1
+    assert snapshot["skills"]["trusted"] == 1
+    assert snapshot["skills"]["runtime_intent"] == 1
+    assert snapshot["skills"]["trust_breakdown"]["trusted"] == 1
+    assert snapshot["skills"]["runtime_mode_breakdown"]["skill_first"] == 1
+    assert snapshot["skills"]["rows"][0]["name"] == "alpha"
+    assert snapshot["skills"]["rows"][0]["tests_present"] is True
+
+
+def test_build_dashboard_snapshot_uses_shared_channel_registry(monkeypatch, tmp_path: Path) -> None:
+    cfg = Config()
+    cfg.channels.slack.enabled = True
+    cfg.channels.slack.admins = ["s-admin"]
+    cfg.channels.webchat.enabled = True
+    cfg.channels.webchat.users = ["web-user"]
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    rows = {row["name"]: row for row in snapshot["channels"]["rows"]}
+    assert rows["slack"]["enabled"] is True
+    assert rows["slack"]["admins"] == 1
+    assert rows["webchat"]["users"] == 1
+    assert rows["slack"]["webhook_backed"] is True
+    assert rows["webchat"]["transport"] == "local_web"
+
+
+def test_build_dashboard_snapshot_includes_channel_actions(monkeypatch, tmp_path: Path) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "channel_actions.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 700,
+                "trace_id": "trace-channel",
+                "event": "channels.state.change",
+                "channel_name": "slack",
+                "action": "disable",
+                "enabled": False,
+                "actor": "api_key",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["channels"]["actions_total"] == 1
+    assert snapshot["channels"]["recent_actions"][0]["channel_name"] == "slack"
+    assert snapshot["channels"]["pending_reload"] is True
+    assert snapshot["channels"]["pending_reload_count"] == 1
+
+
+def test_build_dashboard_snapshot_includes_crawler_summary(monkeypatch, tmp_path: Path) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "crawler").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "crawler" / "sources.json").write_text(
+        json.dumps(
+            {
+                "sources": [
+                    {
+                        "name": "news",
+                        "url": "https://example.com/news",
+                        "notebook": "crawler_kb",
+                        "use_browser": True,
+                        "selector": ".body",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "crawler_sources.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 900,
+                "event": "crawler.source.upsert",
+                "source_name": "news",
+                "source_url": "https://example.com/news",
+                "notebook_id": "crawler_kb",
+                "actor": "api_key",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "crawler_runs.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 950,
+                "event": "crawler.run",
+                "source_name": "news",
+                "source_url": "https://example.com/news",
+                "status": "ok",
+                "change_status": "updated",
+                "chunks_added": 4,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["crawler"]["total_sources"] == 1
+    assert snapshot["crawler"]["browser_sources"] == 1
+    assert snapshot["crawler"]["runs_total"] == 1
+    assert snapshot["crawler"]["failed_runs"] == 0
+    assert snapshot["crawler"]["sources"][0]["name"] == "news"
+    assert snapshot["crawler"]["recent_runs"][0]["change_status"] == "updated"
+
+
+def test_build_dashboard_snapshot_clears_pending_channel_reload_after_apply(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "channel_actions.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 700,
+                "trace_id": "trace-channel",
+                "event": "channels.state.change",
+                "channel_name": "slack",
+                "action": "disable",
+                "enabled": False,
+                "actor": "api_key",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "channel_apply.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 800,
+                "trace_id": "trace-apply",
+                "event": "channels.config.applied",
+                "actor": "api_key",
+                "note": "operator_confirmed_reload",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["channels"]["pending_reload"] is False
+    assert snapshot["channels"]["pending_reload_count"] == 0
+    assert snapshot["channels"]["last_apply"]["event"] == "channels.config.applied"

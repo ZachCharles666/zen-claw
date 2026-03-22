@@ -1,0 +1,77 @@
+# zen-claw — Docker Compose 主配置
+# 用法：
+#   标准启动：docker compose up -d
+#   含 ChromaDB：docker compose --profile rag up -d
+#   查看日志：docker compose logs -f zen-claw
+#
+# 首次使用请复制 .env.example 为 .env 并填写 API 密钥。
+
+services:
+
+  # ── 主服务 ─────────────────────────────────────────────────────────────────
+  zen-claw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zen-claw:latest
+    container_name: zen-claw
+    restart: unless-stopped
+
+    # 从 .env 文件读取环境变量（敏感信息不写入此文件）
+    env_file:
+      - .env
+
+    environment:
+      # 数据目录指向挂载点
+      ZEN_CLAW_DATA_DIR: /data
+      # Dashboard 监听所有接口（容器内）
+      ZEN_CLAW_DASHBOARD_HOST: "0.0.0.0"
+      ZEN_CLAW_DASHBOARD_PORT: "18791"
+      # Gateway 监听所有接口（容器内）
+      ZEN_CLAW_GATEWAY_HOST: "0.0.0.0"
+      ZEN_CLAW_GATEWAY_PORT: "18790"
+
+    ports:
+      # Dashboard UI
+      - "${DASHBOARD_PORT:-18791}:18791"
+      # Agent Gateway（HTTP API）
+      - "${GATEWAY_PORT:-18790}:18790"
+
+    volumes:
+      # 持久化数据：知识库、会话、日志、配置
+      - ./data:/data
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:18791/api/status', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+    command: ["dashboard", "--port", "18791"]
+
+  # ── ChromaDB（可选，使用 --profile rag 启用）──────────────────────────────
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: zen-claw-chroma
+    profiles:
+      - rag
+    restart: unless-stopped
+
+    environment:
+      CHROMA_SERVER_AUTH_CREDENTIALS_PROVIDER: ""
+      ANONYMIZED_TELEMETRY: "False"
+
+    volumes:
+      - ./data/chroma:/chroma/chroma
+
+    ports:
+      - "${CHROMA_PORT:-8000}:8000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

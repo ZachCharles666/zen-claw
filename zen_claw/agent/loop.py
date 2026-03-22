@@ -24,7 +24,11 @@ from zen_claw.agent.approval_gate import ApprovalGate, ApprovalStatus
 from zen_claw.agent.context import ContextBuilder
 from zen_claw.agent.context_compression import ContextCompressor
 from zen_claw.agent.execution import ExecutionController
-from zen_claw.agent.intent_router import IntentRouter, IntentRouteResult, IntentToolContract
+from zen_claw.agent.intent_router import (
+    IntentRouter,
+    IntentRouteResult,
+    IntentToolContract,
+)
 from zen_claw.agent.memory_extractor import MemoryExtractor
 from zen_claw.agent.subagent import SubagentManager
 from zen_claw.agent.tools.browser import (
@@ -94,6 +98,10 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
+        system_prompt_override: str | None = None,
+        system_prompt_file: str | None = None,
+        profile_allowed_tools: list[str] | None = None,
+        profile_denied_tools: list[str] | None = None,
         max_iterations: int = 20,
         brave_api_key: str | None = None,
         web_search_config: "WebSearchConfig | None" = None,
@@ -114,7 +122,10 @@ class AgentLoop:
         vision_model: str | None = None,
         thinking_model: str | None = None,
         fallback_model: str | None = None,
+        cost_model: str | None = None,
+        stability_model: str | None = None,
         intent_model_overrides: dict[str, str] | None = None,
+        task_type_model_overrides: dict[str, str] | None = None,
         skill_names: list[str] | None = None,
         skill_permissions_mode: str = "off",  # off|warn|enforce
         allowed_models: list[str] | None = None,
@@ -155,9 +166,22 @@ class AgentLoop:
         self.vision_model = (vision_model or "").strip()
         self.thinking_model = (thinking_model or "").strip()
         self.fallback_model = (fallback_model or "").strip()
+        self.cost_model = (cost_model or "").strip()
+        self.stability_model = (stability_model or "").strip()
+        self.profile_allowed_tools = [
+            str(tool).strip().lower() for tool in (profile_allowed_tools or []) if str(tool).strip()
+        ] or None
+        self.profile_denied_tools = [
+            str(tool).strip().lower() for tool in (profile_denied_tools or []) if str(tool).strip()
+        ] or None
         self.intent_model_overrides = {
             str(key or "").strip().lower(): str(value or "").strip()
             for key, value in (intent_model_overrides or {}).items()
+            if str(key or "").strip() and str(value or "").strip()
+        }
+        self.task_type_model_overrides = {
+            str(key or "").strip().lower(): str(value or "").strip()
+            for key, value in (task_type_model_overrides or {}).items()
             if str(key or "").strip() and str(value or "").strip()
         }
         self.skill_names = skill_names or []
@@ -176,6 +200,8 @@ class AgentLoop:
             workspace,
             memory_recall_mode=self.memory_recall_mode,
             max_tokens=self.max_context_tokens,
+            system_prompt_override=system_prompt_override,
+            system_prompt_file=system_prompt_file,
         )
         self.sessions = SessionManager(workspace)
 
@@ -204,7 +230,9 @@ class AgentLoop:
             max_reflections=self.max_reflections,
             enable_planning=self.enable_planning,
         )
-        self.intent_router = IntentRouter()
+        self.intent_router = IntentRouter(
+            allow_runtime_constrained_replan=self.enable_planning,
+        )
         self.compressor = ContextCompressor(
             trigger_ratio=self.compression_trigger_ratio,
             hysteresis_ratio=self.compression_hysteresis_ratio,
@@ -409,6 +437,17 @@ class AgentLoop:
             # RAG dependencies are optional.
             pass
         try:
+            from zen_claw.agent.tools.business_skills import ComplianceCheckTool, ContentGenTool
+            from zen_claw.config.loader import get_data_dir
+
+            self.tools.register(
+                ContentGenTool(data_dir=get_data_dir(), provider=self.provider)
+            )
+            self.tools.register(ComplianceCheckTool(provider=self.provider))
+        except Exception:
+            # Business skill tools are optional; missing RAG deps should not block startup.
+            pass
+        try:
             from zen_claw.config.loader import load_config
 
             tts_cfg = load_config()
@@ -439,8 +478,19 @@ class AgentLoop:
             allow=self.tool_policy_config.agent.allow,
             deny=self.tool_policy_config.agent.deny,
         )
+        self._apply_profile_tool_binding()
 
         self._apply_skill_permission_gate()
+
+    def _apply_profile_tool_binding(self) -> None:
+        """Apply profile-level tool binding as an additional policy scope."""
+        if self.profile_allowed_tools is None and self.profile_denied_tools is None:
+            self.tools.clear_profile_tool_binding()
+            return
+        self.tools.set_profile_tool_binding(
+            allow=self.profile_allowed_tools,
+            deny=self.profile_denied_tools,
+        )
 
     def _apply_skill_permission_gate(self) -> None:
         """Optionally restrict tools by the declared permissions of loaded skills."""
@@ -827,6 +877,12 @@ class AgentLoop:
                     route_status="needs_constrained_replan",
                     diagnostic=route_result.diagnostic,
                     skip_planning=route_result.skip_planning,
+                    recovery_outcome=route_result.recovery_outcome,
+                )
+                self._append_intent_router_event(
+                    trace_id=trace_id,
+                    msg=msg,
+                    route_result=route_result,
                 )
         if route_result.route_status in {"direct_success", "direct_failed"} and route_result.content is not None:
             direct_content = route_result.content
@@ -880,11 +936,13 @@ class AgentLoop:
         session_override_model = str(session.metadata.get("override_model") or "").strip()
         preferred_model = session_override_model or self.model
         allow_model_fallback = not bool(session_override_model)
+        routing_metadata = {**dict(session.metadata or {}), **dict(msg.metadata or {})}
         run_model_reason = self._resolve_run_model_reason(
             messages,
             intent_name=route_result.intent_name,
             think_enabled=bool(session.metadata.get("think_enabled", False)),
             allow_dynamic_override=allow_model_fallback,
+            metadata=routing_metadata,
         )
         run_model = self._resolve_run_model(
             messages,
@@ -892,6 +950,7 @@ class AgentLoop:
             intent_name=route_result.intent_name,
             think_enabled=bool(session.metadata.get("think_enabled", False)),
             allow_dynamic_override=allow_model_fallback,
+            metadata=routing_metadata,
         )
         self._append_model_selection_event(
             trace_id=trace_id,
@@ -983,6 +1042,20 @@ class AgentLoop:
         """Handle runtime slash commands scoped to the current session."""
         if not stripped.startswith("/"):
             return None
+
+        if stripped.startswith("/model-profile"):
+            parts = stripped.split(None, 1)
+            if len(parts) < 2:
+                current = str(session.metadata.get("model_profile") or "auto").strip().lower() or "auto"
+                return f"当前会话模型策略：`{current}`"
+            mode = parts[1].strip().lower()
+            if mode not in {"auto", "cheap", "stable"}:
+                return "用法：`/model-profile cheap`、`/model-profile stable` 或 `/model-profile auto`"
+            if mode == "auto":
+                session.metadata.pop("model_profile", None)
+                return "🧭 当前会话模型策略已重置为 `auto`。"
+            session.metadata["model_profile"] = mode
+            return f"🧭 当前会话模型策略已设为 `{mode}`。"
 
         if stripped.startswith("/model"):
             parts = stripped.split(None, 1)
@@ -1107,16 +1180,19 @@ class AgentLoop:
         session_override_model = str(session.metadata.get("override_model") or "").strip()
         preferred_model = session_override_model or self.model
         allow_model_fallback = not bool(session_override_model)
+        routing_metadata = {**dict(session.metadata or {}), **dict(msg.metadata or {})}
         run_model_reason = self._resolve_run_model_reason(
             messages,
             think_enabled=bool(session.metadata.get("think_enabled", False)),
             allow_dynamic_override=allow_model_fallback,
+            metadata=routing_metadata,
         )
         run_model = self._resolve_run_model(
             messages,
             preferred_model=preferred_model,
             think_enabled=bool(session.metadata.get("think_enabled", False)),
             allow_dynamic_override=allow_model_fallback,
+            metadata=routing_metadata,
         )
         self._append_model_selection_event(
             trace_id=trace_id,
@@ -1289,6 +1365,8 @@ class AgentLoop:
         )
         approval_msg = approval.format_request_message()
         if msg.channel == "cli":
+            if route_result.content:
+                return set(), f"{route_result.content}\n\n{approval_msg}"
             return set(), approval_msg
         return set(), (
             f"{route_result.content or '当前请求需要一次性显式授权。'}\n\n"
@@ -1587,6 +1665,8 @@ class AgentLoop:
 
     @staticmethod
     def _build_non_permission_route_failure(route_result: IntentRouteResult) -> str:
+        if route_result.recovery_outcome is not None and route_result.recovery_outcome.content:
+            return route_result.recovery_outcome.content
         if route_result.intent_name == "weather":
             return "暂时无法获取天气数据。这次失败不是权限或审批问题，而是安全路径下的数据请求未成功。请稍后重试。"
         return "当前安全路径执行未成功，这次失败不是权限或审批问题。请稍后重试。"
@@ -1889,7 +1969,13 @@ class AgentLoop:
             try:
                 response, used_model, fallback_state = await self._chat_with_optional_fallback(
                     messages=messages,
-                    tools=tool_definitions if tool_definitions is not None else self.tools.get_definitions(),
+                    tools=tool_definitions
+                    if tool_definitions is not None
+                    else (
+                        self.tools.get_visible_definitions()
+                        if hasattr(self.tools, "get_visible_definitions")
+                        else self.tools.get_definitions()
+                    ),
                     model=active_model,
                     allow_fallback=allow_model_fallback,
                     trace_id=trace_id,
@@ -2162,17 +2248,28 @@ class AgentLoop:
         intent_name: str | None = None,
         think_enabled: bool = False,
         allow_dynamic_override: bool = True,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Use vision model when current message payload includes image blocks."""
         if self.vision_model and self._contains_image_payload(messages):
             return self.vision_model
         if not allow_dynamic_override:
             return str(preferred_model or self.model)
+        routing_hint = self._resolve_model_routing_hint(metadata)
+        task_type = routing_hint.get("task_type") or ""
+        if task_type:
+            override = str(self.task_type_model_overrides.get(task_type) or "").strip()
+            if override:
+                return override
         normalized_intent = str(intent_name or "").strip().lower()
         if normalized_intent:
             override = str(self.intent_model_overrides.get(normalized_intent) or "").strip()
             if override:
                 return override
+        if routing_hint.get("stability_required") and self.stability_model:
+            return self.stability_model
+        if routing_hint.get("cost_sensitive") and self.cost_model:
+            return self.cost_model
         if think_enabled and self.thinking_model:
             return self.thinking_model
         return str(preferred_model or self.model)
@@ -2184,17 +2281,49 @@ class AgentLoop:
         intent_name: str | None = None,
         think_enabled: bool = False,
         allow_dynamic_override: bool = True,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         if self.vision_model and self._contains_image_payload(messages):
             return "vision_model"
         if not allow_dynamic_override:
             return "session_override_model"
+        routing_hint = self._resolve_model_routing_hint(metadata)
+        task_type = routing_hint.get("task_type") or ""
+        if task_type and str(self.task_type_model_overrides.get(task_type) or "").strip():
+            return f"task_type_override:{task_type}"
         normalized_intent = str(intent_name or "").strip().lower()
         if normalized_intent and str(self.intent_model_overrides.get(normalized_intent) or "").strip():
             return f"intent_override:{normalized_intent}"
+        if routing_hint.get("stability_required") and self.stability_model:
+            return "stability_model"
+        if routing_hint.get("cost_sensitive") and self.cost_model:
+            return "cost_model"
         if think_enabled and self.thinking_model:
             return "thinking_model"
         return "default_model"
+
+    @staticmethod
+    def _resolve_model_routing_hint(metadata: dict[str, Any] | None) -> dict[str, Any]:
+        meta = metadata if isinstance(metadata, dict) else {}
+        task_type = str(meta.get("task_type") or "").strip().lower()
+        profile_hint = str(meta.get("model_profile") or meta.get("routing_profile") or "").strip().lower()
+        cost_tier = str(meta.get("cost_tier") or "").strip().lower()
+        stability_tier = str(meta.get("stability_tier") or "").strip().lower()
+        cost_sensitive = bool(meta.get("cost_sensitive")) or profile_hint in {
+            "cheap",
+            "cost",
+            "low_cost",
+        } or cost_tier in {"cheap", "low", "budget"}
+        stability_required = bool(meta.get("stability_required")) or profile_hint in {
+            "stable",
+            "stability",
+            "reliable",
+        } or stability_tier in {"stable", "high", "reliable"}
+        return {
+            "task_type": task_type,
+            "cost_sensitive": cost_sensitive,
+            "stability_required": stability_required,
+        }
 
     @staticmethod
     def _accumulate_usage(target: dict[str, int] | None, usage: dict[str, Any] | None) -> None:

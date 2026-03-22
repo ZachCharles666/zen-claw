@@ -135,6 +135,29 @@ def test_channel_manager_injects_workspace_media_root(monkeypatch, tmp_path: Pat
     assert callable(fs.access_checker)
 
 
+def test_channel_manager_registers_webhook_backed_channels_via_registry(
+    monkeypatch, tmp_path: Path
+) -> None:
+    fs_mod = ModuleType("zen_claw.channels.slack")
+    fs_mod.SlackChannel = _FakeFeishuChannel
+    monkeypatch.setitem(sys.modules, "zen_claw.channels.slack", fs_mod)
+
+    registered: dict[str, object] = {}
+
+    def _fake_register_channels(**kwargs):
+        registered.update(kwargs)
+
+    monkeypatch.setattr("zen_claw.dashboard.webhooks.register_channels", _fake_register_channels)
+
+    cfg = Config()
+    cfg.agents.defaults.workspace = str(tmp_path / "ws")
+    cfg.channels.slack.enabled = True
+
+    ChannelManager(cfg, MessageBus())
+    assert "slack" in registered
+    assert registered["slack"] is not None
+
+
 def test_channel_manager_global_allow_deny_rbac(tmp_path: Path) -> None:
     cfg = Config()
     cfg.agents.defaults.workspace = str(tmp_path / "ws")

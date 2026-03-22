@@ -124,6 +124,14 @@ class RetryPolicy:
 
 
 @dataclass(frozen=True)
+class ExchangeRateResolution:
+    """Exchange-rate value with the path used to resolve it."""
+
+    rate: float
+    recovery_kind: Literal["direct", "fallback_source", "reverse_solve"] = "direct"
+
+
+@dataclass(frozen=True)
 class RecoveryGuidance:
     """Structured guidance for deterministic-but-helpful direct failures."""
 
@@ -155,6 +163,7 @@ class RecoveryBlocker:
         "upstream_unavailable",
         "environment_missing",
         "locally_correctable",
+        "permission_required",
     ]
     description: str
     missing_requirement: str
@@ -197,6 +206,9 @@ class RecoveryOutcome:
 
 class IntentRouter:
     """Handle a narrow set of deterministic, low-risk intents before LLM planning."""
+
+    def __init__(self, *, allow_runtime_constrained_replan: bool = False) -> None:
+        self.allow_runtime_constrained_replan = allow_runtime_constrained_replan
 
     _MAX_FORECAST_DAYS = 16
     _CURRENCY_ALIASES = {
@@ -355,6 +367,17 @@ class IntentRouter:
         response_mode="direct",
         failure_mode="runtime_direct",
     )
+    _EXEC_CONTRACT = IntentToolContract(
+        intent_name="code_exec",
+        intent_mode="router_first",
+        preferred_tools=[],
+        allowed_tools=set(),
+        denied_tools={"exec", "spawn", "write_file", "edit_file", "web_fetch"},
+        allow_constrained_replan=True,
+        allow_high_risk_escalation=True,
+        response_mode="llm_assisted",
+        failure_mode="runtime_direct",
+    )
     _LOW_RISK_FETCH_RETRY = RetryPolicy(max_attempts=2)
 
     async def route(
@@ -364,6 +387,9 @@ class IntentRouter:
         tools: ToolRegistry,
         trace_id: str,
     ) -> IntentRouteResult:
+        exec_request = self._extract_exec_request(content)
+        if exec_request is not None:
+            return self._route_exec_request(exec_request)
         location = self._extract_weather_location(content)
         if location:
             return await self._route_weather(content, location=location, tools=tools, trace_id=trace_id)
@@ -376,6 +402,16 @@ class IntentRouter:
         time_request = self._extract_time_request(content)
         if time_request is not None:
             return self._route_time(time_request)
+        # C1 — nine zero-LLM direct contracts (calculator, unit_convert, etc.)
+        from zen_claw.agent.direct_contracts import route as _route_direct
+        direct = _route_direct(content)
+        if direct is not None:
+            return IntentRouteResult(
+                handled=True,
+                intent_name=direct.intent_name,
+                content=direct.content,
+                route_status="direct_success",
+            )
         return IntentRouteResult(handled=False)
 
     @staticmethod
@@ -486,6 +522,149 @@ class IntentRouter:
             content=outcome.content,
             contract=contract,
             diagnostic=diagnostic,
+            recovery_outcome=outcome,
+        )
+
+    @staticmethod
+    def _needs_constrained_replan(
+        *,
+        intent_name: str,
+        contract: IntentToolContract,
+        diagnostic: str,
+        content: str | None = None,
+        skip_planning: bool = False,
+        recovery_outcome: RecoveryOutcome | None = None,
+    ) -> IntentRouteResult:
+        return IntentRouteResult(
+            handled=True,
+            intent_name=intent_name,
+            content=content,
+            contract=contract,
+            route_status="needs_constrained_replan",
+            diagnostic=diagnostic,
+            skip_planning=skip_planning,
+            recovery_outcome=recovery_outcome,
+        )
+
+    @staticmethod
+    def _needs_explicit_approval(
+        *,
+        intent_name: str,
+        contract: IntentToolContract,
+        diagnostic: str,
+        content: str | None = None,
+        skip_planning: bool = False,
+        recovery_outcome: RecoveryOutcome | None = None,
+    ) -> IntentRouteResult:
+        return IntentRouteResult(
+            handled=True,
+            intent_name=intent_name,
+            content=content,
+            contract=contract,
+            route_status="needs_explicit_approval",
+            diagnostic=diagnostic,
+            skip_planning=skip_planning,
+            recovery_outcome=recovery_outcome,
+        )
+
+    @classmethod
+    def _needs_constrained_replan_with_outcome(
+        cls,
+        *,
+        intent_name: str,
+        outcome: RecoveryOutcome,
+        contract: IntentToolContract,
+        diagnostic: str,
+        content: str | None = None,
+        skip_planning: bool = False,
+    ) -> IntentRouteResult:
+        return cls._needs_constrained_replan(
+            intent_name=intent_name,
+            contract=contract,
+            diagnostic=diagnostic,
+            content=content or outcome.content,
+            skip_planning=skip_planning,
+            recovery_outcome=outcome,
+        )
+
+    @classmethod
+    def _needs_constrained_replan_with_plan(
+        cls,
+        *,
+        intent_name: str,
+        summary: str,
+        plan: RecoveryPlan,
+        contract: IntentToolContract,
+        diagnostic: str,
+        content: str | None = None,
+        skip_planning: bool = False,
+        mode: Literal["guided", "failed"] = "guided",
+    ) -> IntentRouteResult:
+        outcome = cls._recovery_outcome_from_plan(summary=summary, plan=plan, mode=mode)
+        return cls._needs_constrained_replan(
+            intent_name=intent_name,
+            contract=contract,
+            diagnostic=diagnostic,
+            content=content or outcome.content,
+            skip_planning=skip_planning,
+            recovery_outcome=outcome,
+        )
+
+    @classmethod
+    def _needs_explicit_approval_with_plan(
+        cls,
+        *,
+        intent_name: str,
+        summary: str,
+        plan: RecoveryPlan,
+        contract: IntentToolContract,
+        diagnostic: str,
+        content: str | None = None,
+        skip_planning: bool = False,
+        mode: Literal["guided", "failed"] = "guided",
+    ) -> IntentRouteResult:
+        outcome = cls._recovery_outcome_from_plan(summary=summary, plan=plan, mode=mode)
+        return cls._needs_explicit_approval(
+            intent_name=intent_name,
+            contract=contract,
+            diagnostic=diagnostic,
+            content=content or outcome.content,
+            skip_planning=skip_planning,
+            recovery_outcome=outcome,
+        )
+
+    def _route_exec_request(self, request: dict[str, str]) -> IntentRouteResult:
+        command = str(request.get("command") or "").strip()
+        if not command:
+            return IntentRouteResult(handled=False)
+        return self._needs_explicit_approval_with_plan(
+            intent_name="code_exec",
+            summary="当前安全路径无法直接执行这条命令。",
+            plan=RecoveryPlan(
+                blocker=RecoveryBlocker(
+                    kind="permission_required",
+                    description="执行命令属于高风险能力，当前安全路径未持有授权",
+                    missing_requirement="一次性显式授权的 exec 工具范围",
+                ),
+                strategies=[
+                    RecoveryStrategy(
+                        kind="guidance_only",
+                        detail="先按最小范围请求一次性显式授权，再继续执行命令",
+                    ),
+                ],
+                checked_scope=[
+                    "当前直达执行路由已识别这是显式命令执行请求",
+                    "当前直达执行路由已停留在未授权的安全路径内",
+                ],
+                next_steps=[
+                    "如果你确认，我会只为这次请求发起一次性 exec 授权",
+                ],
+                fallback_options=[
+                    "如果你只是想知道命令怎么写，我也可以先给你命令建议而不实际执行",
+                ],
+            ),
+            contract=self._EXEC_CONTRACT,
+            diagnostic="explicit_approval:exec",
         )
 
     async def _route_exchange(
@@ -529,23 +708,51 @@ class IntentRouter:
                 ),
             ]
         )
-        if isinstance(resolution.value, (int, float)):
-            return IntentRouteResult(
-                handled=True,
+        if isinstance(resolution.value, ExchangeRateResolution):
+            content = self._build_exchange_success_message(
+                source,
+                target,
+                amount,
+                resolution.value.rate,
+            )
+            if resolution.value.recovery_kind != "direct":
+                return self._direct_success_with_plan(
+                    intent_name="exchange_rate",
+                    content=content,
+                    plan=self._build_exchange_resolution_plan(
+                        source=source,
+                        target=target,
+                        recovery_kind=resolution.value.recovery_kind,
+                    ),
+                    contract=self._EXCHANGE_CONTRACT,
+                    diagnostic=(
+                        f"exchange_{resolution.value.recovery_kind}_resolved:"
+                        f"{source}_{target}"
+                    ),
+                )
+            return self._direct_success(
                 intent_name="exchange_rate",
-                content=self._build_exchange_success_message(source, target, amount, float(resolution.value)),
+                content=content,
                 contract=self._EXCHANGE_CONTRACT,
-                route_status="direct_success",
             )
 
+        outcome = self._build_exchange_failure_outcome(source, target)
+        diagnostic = (
+            f"exchange_sources_failed:{source}_{target}:"
+            f"{','.join(resolution.attempts or [])}"
+        )
+        if self.allow_runtime_constrained_replan and self._EXCHANGE_CONTRACT.allow_constrained_replan:
+            return self._needs_constrained_replan_with_outcome(
+                intent_name="exchange_rate",
+                outcome=outcome,
+                contract=self._EXCHANGE_CONTRACT,
+                diagnostic=diagnostic,
+            )
         return self._direct_failed_with_outcome(
             intent_name="exchange_rate",
-            outcome=self._build_exchange_failure_outcome(source, target),
+            outcome=outcome,
             contract=self._EXCHANGE_CONTRACT,
-            diagnostic=(
-                f"exchange_sources_failed:{source}_{target}:"
-                f"{','.join(resolution.attempts or [])}"
-            ),
+            diagnostic=diagnostic,
         )
 
     def _route_time(self, request: dict[str, str | None]) -> IntentRouteResult:
@@ -554,6 +761,7 @@ class IntentRouter:
         label = request.get("label") or ""
 
         if zone_key:
+            fuzzy_candidate = self._fuzzy_timezone_alias_lookup(zone_key)
             candidate = self._resolve_timezone_candidate(zone_key)
             zone = self._resolve_timezone(zone_key)
             if zone is None and candidate is not None:
@@ -609,6 +817,14 @@ class IntentRouter:
                     diagnostic=f"timezone_unrecognized:{display}",
                 )
             now = self._utc_now().astimezone(zone)
+            if fuzzy_candidate is not None:
+                return self._direct_success_with_plan(
+                    intent_name="time",
+                    content=self._format_time_response(mode=mode, now=now, label=label or zone.key),
+                    plan=self._build_timezone_fuzzy_alias_resolution_plan(),
+                    contract=self._TIME_CONTRACT,
+                    diagnostic=f"timezone_fuzzy_alias_resolved:{fuzzy_candidate}",
+                )
             return self._direct_success(
                 intent_name="time",
                 content=self._format_time_response(mode=mode, now=now, label=label or zone.key),
@@ -650,17 +866,47 @@ class IntentRouter:
             ]
         )
         if isinstance(resolution.value, dict):
+            content = self._build_fixed_site_success_message(site=site, payload=resolution.value)
+            recovery_kind = str(resolution.value.get("_recovery_kind") or "direct").strip().lower()
+            preferred_winner = f"{site}_{languages[0]}" if languages else ""
+            if recovery_kind != "direct" or (
+                resolution.winner and preferred_winner and resolution.winner != preferred_winner
+            ):
+                return self._direct_success_with_plan(
+                    intent_name="fixed_site_fetch",
+                    content=content,
+                    plan=self._build_fixed_site_resolution_plan(
+                        site=site,
+                        recovery_kind=(
+                            recovery_kind if recovery_kind != "direct" else "fallback_source"
+                        ),
+                    ),
+                    contract=self._FIXED_SITE_CONTRACT,
+                    diagnostic=(
+                        f"fixed_site_{recovery_kind}_resolved:{site}:{topic}:"
+                        f"{resolution.winner or ''}"
+                    ),
+                )
             return self._direct_success(
                 intent_name="fixed_site_fetch",
-                content=self._build_fixed_site_success_message(site=site, payload=resolution.value),
+                content=content,
                 contract=self._FIXED_SITE_CONTRACT,
             )
 
+        outcome = self._build_fixed_site_failure_outcome(site=site, topic=topic)
+        diagnostic = f"fixed_site_failed:{site}:{topic}:{','.join(resolution.attempts or [])}"
+        if self.allow_runtime_constrained_replan and self._FIXED_SITE_CONTRACT.allow_constrained_replan:
+            return self._needs_constrained_replan_with_outcome(
+                intent_name="fixed_site_fetch",
+                outcome=outcome,
+                contract=self._FIXED_SITE_CONTRACT,
+                diagnostic=diagnostic,
+            )
         return self._direct_failed_with_outcome(
             intent_name="fixed_site_fetch",
-            outcome=self._build_fixed_site_failure_outcome(site=site, topic=topic),
+            outcome=outcome,
             contract=self._FIXED_SITE_CONTRACT,
-            diagnostic=f"fixed_site_failed:{site}:{topic}:{','.join(resolution.attempts or [])}",
+            diagnostic=diagnostic,
         )
 
     async def _route_weather(
@@ -724,45 +970,37 @@ class IntentRouter:
             ]
         )
         if isinstance(resolution.value, list) and resolution.value:
+            weather_content = f"{location}天气预报：\n" + "\n".join(resolution.value)
+            if resolution.winner == "open_meteo":
+                return self._direct_success_with_plan(
+                    intent_name="weather",
+                    content=weather_content,
+                    plan=self._build_weather_fallback_source_resolution_plan(location=location, days=days),
+                    contract=self._WEATHER_CONTRACT,
+                    diagnostic=f"weather_fallback_source_resolved:{location}:{days}",
+                )
             return self._direct_success(
                 intent_name="weather",
-                content=f"{location}天气预报：\n" + "\n".join(resolution.value),
+                content=weather_content,
                 contract=self._WEATHER_CONTRACT,
             )
 
+        failure_plan = self._build_weather_source_failure_plan(location=location)
+        diagnostic = f"weather_sources_failed:{','.join(resolution.attempts or [])}"
+        if self.allow_runtime_constrained_replan and self._WEATHER_CONTRACT.allow_constrained_replan:
+            return self._needs_constrained_replan_with_plan(
+                intent_name="weather",
+                summary=f"暂时无法获取{location}的天气数据。",
+                plan=failure_plan,
+                contract=self._WEATHER_CONTRACT,
+                diagnostic=diagnostic,
+            )
         return self._direct_failed_with_plan(
             intent_name="weather",
             summary=f"暂时无法获取{location}的天气数据。",
-            plan=RecoveryPlan(
-                blocker=RecoveryBlocker(
-                    kind="upstream_unavailable",
-                    description="当前可用天气来源暂时没有返回稳定结果",
-                    missing_requirement="至少一个可访问且返回有效天气结果的数据来源",
-                ),
-                strategies=[
-                    RecoveryStrategy(
-                        kind="fallback_source",
-                        detail="继续尝试其他可用天气来源",
-                    ),
-                    RecoveryStrategy(
-                        kind="guidance_only",
-                        detail="在当前来源都失败时提示稍后重试或缩短时间范围",
-                    ),
-                ],
-                checked_scope=[
-                    "当前直达天气路由已尝试多个可用天气来源",
-                    "当前直达天气路由已检查返回内容是否能生成有效天气结果",
-                ],
-                next_steps=[
-                    f"你可以稍后重试，我会重新检查{location}的天气数据",
-                    "如果你只需要更短时间范围，我也可以先尝试缩短查询范围",
-                ],
-                fallback_options=[
-                    "如果你愿意，也可以先改问更短时间范围，或只查询今天/未来几天的天气",
-                ],
-            ),
+            plan=failure_plan,
             contract=self._WEATHER_CONTRACT,
-            diagnostic=f"weather_sources_failed:{','.join(resolution.attempts or [])}",
+            diagnostic=diagnostic,
         )
 
     @classmethod
@@ -908,6 +1146,24 @@ class IntentRouter:
             topic = re.sub(r"\s+", " ", topic).strip(" ，,。.!?？；;")
             if topic:
                 return {"site": "wikipedia", "topic": topic}
+        return None
+
+    @staticmethod
+    def _extract_exec_request(content: str) -> dict[str, str] | None:
+        text = str(content or "").strip()
+        if not text:
+            return None
+        patterns = (
+            r"^(?:请|请帮我|帮我|麻烦|麻烦你)?(?:执行命令|运行命令|执行shell|运行shell)\s+(?P<command>.+)$",
+            r"^(?:please\s+)?(?:run command|execute command|run shell|execute shell|exec)\s+(?P<command>.+)$",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if not match:
+                continue
+            command = str(match.group("command") or "").strip()
+            if command:
+                return {"command": command}
         return None
 
     @classmethod
@@ -1493,7 +1749,7 @@ class IntentRouter:
         target: str,
         tools: ToolRegistry,
         trace_id: str,
-    ) -> float | None:
+    ) -> ExchangeRateResolution | None:
         result = await self._fetch_with_retry(
             tools=tools,
             params={
@@ -1512,7 +1768,7 @@ class IntentRouter:
         value = rates.get(target)
         if not isinstance(value, (int, float)):
             return None
-        return float(value)
+        return ExchangeRateResolution(rate=float(value))
 
     async def _fetch_exchange_rate_fallback(
         self,
@@ -1521,7 +1777,7 @@ class IntentRouter:
         target: str,
         tools: ToolRegistry,
         trace_id: str,
-    ) -> float | None:
+    ) -> ExchangeRateResolution | None:
         direct_value = await self._fetch_frankfurter_rate(
             source=source,
             target=target,
@@ -1529,7 +1785,7 @@ class IntentRouter:
             trace_id=trace_id,
         )
         if direct_value is not None:
-            return direct_value
+            return ExchangeRateResolution(rate=direct_value, recovery_kind="fallback_source")
         reverse_value = await self._fetch_frankfurter_rate(
             source=target,
             target=source,
@@ -1537,7 +1793,10 @@ class IntentRouter:
             trace_id=trace_id,
         )
         if isinstance(reverse_value, (int, float)) and reverse_value not in {0, 0.0}:
-            return 1.0 / float(reverse_value)
+            return ExchangeRateResolution(
+                rate=1.0 / float(reverse_value),
+                recovery_kind="reverse_solve",
+            )
         return None
 
     async def _fetch_frankfurter_rate(
@@ -1657,12 +1916,16 @@ class IntentRouter:
             trace_id=trace_id,
         )
         if resolved_topic and resolved_topic != topic:
-            return await self._fetch_wikipedia_summary_once(
+            resolved = await self._fetch_wikipedia_summary_once(
                 language=language,
                 topic=resolved_topic,
                 tools=tools,
                 trace_id=trace_id,
             )
+            if resolved is not None:
+                enriched = dict(resolved)
+                enriched["_recovery_kind"] = "same_site_search"
+                return enriched
         return None
 
     async def _fetch_wikipedia_summary_once(
@@ -1689,7 +1952,13 @@ class IntentRouter:
             extract = str(payload.get("extract") or "").strip()
             title = str(payload.get("title") or topic).strip() or topic
             if extract:
-                return {"site": "wikipedia", "language": language, "title": title, "extract": extract}
+                return {
+                    "site": "wikipedia",
+                    "language": language,
+                    "title": title,
+                    "extract": extract,
+                    "_recovery_kind": "direct",
+                }
         return await self._fetch_wikipedia_summary_via_query_api(
             language=language,
             topic=topic,
@@ -1795,7 +2064,13 @@ class IntentRouter:
         title = str(first.get("title") or topic).strip() or topic
         if not extract:
             return None
-        return {"site": "wikipedia", "language": language, "title": title, "extract": extract}
+        return {
+            "site": "wikipedia",
+            "language": language,
+            "title": title,
+            "extract": extract,
+            "_recovery_kind": "fallback_source",
+        }
 
     @staticmethod
     def _build_fixed_site_success_message(*, site: str, payload: dict[str, str]) -> str:
@@ -1892,6 +2167,30 @@ class IntentRouter:
         )
 
     @staticmethod
+    def _build_timezone_fuzzy_alias_resolution_plan() -> RecoveryPlan:
+        return RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="locally_correctable",
+                description="输入里的城市别名存在轻微拼写偏差",
+                missing_requirement="可映射到已知时区的近似城市别名",
+            ),
+            strategies=[
+                RecoveryStrategy(
+                    kind="local_correction",
+                    detail="先按低风险 fuzzy alias lookup 纠正城市别名后继续时区解析",
+                ),
+            ],
+            checked_scope=[
+                "当前直达时间路由已尝试精确城市别名匹配",
+                "当前直达时间路由已尝试低风险 fuzzy alias lookup",
+            ],
+            next_steps=[
+                "如果你继续用相近写法查询，我会优先按这条低风险纠错路径继续处理",
+            ],
+            fallback_options=[],
+        )
+
+    @staticmethod
     def _build_weather_history_resolution_plan(*, days: int) -> RecoveryPlan:
         return RecoveryPlan(
             blocker=RecoveryBlocker(
@@ -1913,6 +2212,61 @@ class IntentRouter:
                 f"如果你需要，我也可以继续按同样方式补充最近{days}天内其他城市的历史天气",
             ],
             fallback_options=[],
+        )
+
+    @staticmethod
+    def _build_weather_fallback_source_resolution_plan(*, location: str, days: int) -> RecoveryPlan:
+        return RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="upstream_unavailable",
+                description="首选天气源未稳定返回完整天气结果",
+                missing_requirement="至少一个可访问且返回有效天气结果的备用来源",
+            ),
+            strategies=[
+                RecoveryStrategy(
+                    kind="fallback_source",
+                    detail="主天气源未返回可用结果时改走 Open-Meteo 备用路径",
+                ),
+            ],
+            checked_scope=[
+                "当前直达天气路由已尝试首选天气源",
+                "当前直达天气路由已尝试 Open-Meteo 备用天气源",
+            ],
+            next_steps=[
+                f"如果你继续查询 {location} 未来{days}天内天气，我会优先复用这条已成功的备用路径",
+            ],
+            fallback_options=[],
+        )
+
+    @staticmethod
+    def _build_weather_source_failure_plan(*, location: str) -> RecoveryPlan:
+        return RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="upstream_unavailable",
+                description="当前可用天气来源暂时没有返回稳定结果",
+                missing_requirement="至少一个可访问且返回有效天气结果的数据来源",
+            ),
+            strategies=[
+                RecoveryStrategy(
+                    kind="fallback_source",
+                    detail="继续尝试其他可用天气来源",
+                ),
+                RecoveryStrategy(
+                    kind="guidance_only",
+                    detail="在当前来源都失败时提示稍后重试或缩短时间范围",
+                ),
+            ],
+            checked_scope=[
+                "当前直达天气路由已尝试多个可用天气来源",
+                "当前直达天气路由已检查返回内容是否能生成有效天气结果",
+            ],
+            next_steps=[
+                f"你可以稍后重试，我会重新检查{location}的天气数据",
+                "如果你只需要更短时间范围，我也可以先尝试缩短查询范围",
+            ],
+            fallback_options=[
+                "如果你愿意，也可以先改问更短时间范围，或只查询今天/未来几天的天气",
+            ],
         )
 
     @classmethod
@@ -1954,6 +2308,57 @@ class IntentRouter:
                 "主汇率源和备用汇率源都未成功响应。"
             ),
             plan=plan,
+        )
+
+    @staticmethod
+    def _build_exchange_resolution_plan(
+        *, source: str, target: str, recovery_kind: Literal["fallback_source", "reverse_solve"]
+    ) -> RecoveryPlan:
+        checked_scope = [
+            "当前直达汇率路由已尝试主汇率源",
+            "当前直达汇率路由已尝试备用汇率源",
+        ]
+        strategy_detail = "主汇率源失败后改走备用汇率源"
+        if recovery_kind == "reverse_solve":
+            checked_scope.append("当前直达汇率路由已尝试反向货币对求解")
+            strategy_detail = "备用汇率源缺少正向货币对时改走反向货币对后求倒数"
+        return RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="upstream_unavailable",
+                description="主汇率获取路径未直接返回目标货币对",
+                missing_requirement="至少一条可用的备用汇率或可逆推货币对路径",
+            ),
+            strategies=[RecoveryStrategy(kind=recovery_kind, detail=strategy_detail)],
+            checked_scope=checked_scope,
+            next_steps=[
+                f"如果你继续查 {source}->{target}，我会优先沿着这条已成功的扩展路径继续获取",
+            ],
+            fallback_options=[],
+        )
+
+    @staticmethod
+    def _build_fixed_site_resolution_plan(
+        *, site: str, recovery_kind: Literal["fallback_source", "same_site_search"]
+    ) -> RecoveryPlan:
+        site_label = "维基百科" if site == "wikipedia" else site
+        strategy_detail = "主摘要接口未直接返回结果时改走备用语言站点或 query API"
+        if recovery_kind == "same_site_search":
+            strategy_detail = "词条名不精确时先站内搜索，再重试摘要抓取"
+        return RecoveryPlan(
+            blocker=RecoveryBlocker(
+                kind="upstream_unavailable",
+                description=f"{site_label}直达摘要路径未直接返回可用内容",
+                missing_requirement="可用的同站备用抓取路径或更准确的词条定位",
+            ),
+            strategies=[RecoveryStrategy(kind=recovery_kind, detail=strategy_detail)],
+            checked_scope=[
+                f"当前直达{site_label}路由已先尝试首选摘要路径",
+                f"当前直达{site_label}路由已按需扩展到同站备用抓取或词条搜索路径",
+            ],
+            next_steps=[
+                "如果你继续追问同一词条，我会优先复用这条已验证可行的扩展路径",
+            ],
+            fallback_options=[],
         )
 
     @staticmethod

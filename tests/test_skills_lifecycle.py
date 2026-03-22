@@ -1121,7 +1121,7 @@ def test_export_skill_to_zip(tmp_path: Path) -> None:
     )
     out_zip = tmp_path / "out" / "alpha.zip"
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
-    ok, msg = loader.export_skill_to_zip("alpha", out_zip)
+    ok, msg, *_ = loader.export_skill_to_zip("alpha", out_zip)
     assert ok is True
     assert "exported skill: alpha" in msg
     assert "sha256=" in msg
@@ -1164,7 +1164,7 @@ def test_export_skill_to_zip_preserves_runtime_contract_manifest(tmp_path: Path)
     out_zip = tmp_path / "out" / "weather_export.zip"
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
 
-    ok, msg = loader.export_skill_to_zip("weather_export", out_zip)
+    ok, msg, *_ = loader.export_skill_to_zip("weather_export", out_zip)
     assert ok is True
     assert "exported skill: weather_export" in msg
 
@@ -1191,3 +1191,48 @@ def test_install_skill_dry_run_does_not_write(tmp_path: Path) -> None:
     assert ok is True
     assert "dry-run ok" in msg
     assert not (workspace / "skills" / "alpha").exists()
+
+
+def test_build_skills_inventory_summarizes_status(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(
+        workspace,
+        "alpha",
+        """
+{
+  "name": "alpha",
+  "version": "1.0.0",
+  "description": "alpha skill",
+  "permissions": ["read_file"],
+  "scopes": ["filesystem"],
+  "trust": "trusted",
+  "runtime_contract": {
+    "intent": "alpha_lookup",
+    "intent_mode": "skill_first",
+    "allowed_tools": ["read_file"]
+  }
+}
+""".strip(),
+    )
+    _write_skill(workspace, "beta")
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    assert loader.set_skill_enabled("beta", False) is True
+
+    inventory = loader.build_skills_inventory()
+    assert inventory["schema"] == "zen-claw.skills.inventory.v1"
+    assert inventory["skills_count"] == 2
+    assert inventory["enabled_count"] == 1
+    assert inventory["missing_manifest_count"] == 1
+
+    rows = {row["name"]: row for row in inventory["skills"]}
+    assert rows["alpha"]["manifest"] == "valid"
+    assert rows["alpha"]["available"] is True
+    assert rows["alpha"]["enforce_ready"] is True
+    assert rows["alpha"]["runtime_intent"] == "alpha_lookup"
+    assert rows["alpha"]["runtime_intent_mode"] == "skill_first"
+    assert rows["beta"]["enabled"] is False
+    assert rows["beta"]["manifest"] == "missing"
