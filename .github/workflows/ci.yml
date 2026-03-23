@@ -61,7 +61,11 @@ jobs:
           }
           Write-Host ("Running shard {0}/{1}: {2}" -f ($index + 1), $total, ($selected -join ' '))
           & python -m pytest -p no:timeout -q @selected
-          exit $LASTEXITCODE
+          $pytestExit = if (Test-Path variable:LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
+          Write-Host ("Pytest exit code: {0}" -f $pytestExit)
+          if ($pytestExit -ne 0) {
+            exit $pytestExit
+          }
 
   memory-recall:
     runs-on: windows-latest
