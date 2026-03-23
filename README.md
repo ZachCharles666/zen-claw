@@ -1,84 +1,73 @@
 # zen-claw
 
-[中文版 (Chinese Version)](#中文版)
+[中文版](#中文版)
 
-zen-claw is a local-first AI agent execution framework offering controllable tool invocation, multi-channel integration, and traceable operational governance.
+zen-claw is a local-first AI agent framework for developers who need controllable tool execution, multi-agent orchestration, multi-channel delivery, and traceable operator workflows in one codebase.
 
-## Quick Start
+## What This Project Is
 
-```bash
-git clone https://github.com/your-org/zen-claw.git
-cd zen-claw
-cp .env.example .env          # fill in your LLM API key
-docker compose up -d
-open http://localhost:18791   # Dashboard
-```
+zen-claw is not just a chat wrapper around an LLM. The current repository already combines:
 
-> For ChromaDB RAG support: `docker compose --profile rag up -d`
->
-> Full deployment guide: [docs/DEPLOY.md](docs/DEPLOY.md)
+- An agent runtime with direct-intent handling, tool invocation, approval-aware execution, and recovery-aware routing
+- Multi-agent profile routing with isolated workspaces, route preview, sticky bindings, and profile-level model/prompt/tool controls
+- A knowledge and RAG stack with notebook management, retention, tenant-aware storage policy, and operator-facing APIs
+- A skills system with inventory, preflight, enable/disable, export/restore, and built-in business-skill foundations
+- A FastAPI dashboard/control plane for agents, skills, ops summary, model routing, RAG, and crawler management
+- Multi-channel integrations and webhook-style entrypoints for practical deployment scenarios
 
----
+## Current Implemented Capability Areas
 
-## Core Capabilities
+### Agent Runtime And Routing
 
-### Agent & Execution
-- Agent Loop + Tool Invocation + Reflection Iteration
-- Runtime commands: `/model`, `/clear`, `/think`, `/usage`, `/verbose`
-- Multi-agent routing & isolated workspaces: `~/.zen-claw/workspaces/<agent_id>/`
+- Direct-intent routes for common deterministic tasks such as time, weather, exchange, and fixed-site lookup
+- Tool-calling runtime with approval-aware execution and structured recovery outcomes
+- Multi-agent profile registry with:
+  - profile-level workspace/model/planning overrides
+  - prompt binding and tool allow/deny policy
+  - route preview, route bind, and route clear flows
+- Operator visibility through CLI, dashboard, and `/api/v1/agents*` endpoints
 
-### Security & Governance
-- Subagent sensitive tool guardrails
-- Sidecar network proxy and execution proxy (optional)
-- `config doctor` for configuration health checks and troubleshooting
+### Skills And Tools
 
-### Context & Memory
-- SQLite default memory retrieval and fallback strategies
-- Token-aware context hysteresis (thresholds / fallback / cooldowns)
-- Dashboard displaying context compression history
+- Structured skill inventory and loader/runtime integration
+- Preflight and validation flows via `zen-claw skills test <name>`
+- Skill enable/disable, export/restore, package policy, and batch operations
+- Built-in business-facing skill foundations including `content_gen`, `compliance_check`, `rag_retrieve`, and crawler-related flows
 
-### Zero-Config Tunneling & Compliance
-- **Cloudflare Tunnel Integration**: Native `zen-claw tunnel start` for secure gateway exposure.
-- **Fortified Webhook Exposure Guards**: `X-Signature` validation, `X-Nonce` replay-prevention tracking, and automated IP/ASN blacklisting/circuit-breaking.
-- **Centralized Registry AuthZ**: Ecosystem review repository enforcing the 4-Eyes principle alongside a one-click DMCA takedown mechanism.
-- **TUF-style Trust & DR**: Hardcoded Root-of-Trust public keys enforcing RTO/RPO mechanisms with mandatory rollbacks for supply-chain integrity.
+### Knowledge And RAG
 
-## Detailed Features & Usage
+- Shared `RAGPipeline` abstraction for ingest, search, stats, retention, and document lifecycle
+- Notebook-level and tenant-level backend policy
+- Metadata-aware ingestion and exact-match search filters
+- Tenant-aware API and CLI surfaces for RAG operations
+- Dashboard/API management for notebooks, repair, policy history, activity history, and backend diagnostics
 
-### 1. LLM & Conversation
-Zen-Claw is a multi-channel AI agent. Beyond basic chat, it supports:
-- **Runtime Model Switching**: Change models mid-conversation using `/model <name>` (e.g., `/model gpt-4o`).
-- **Think Mode**: Toggle reasoning chains for models like DeepSeek Reasoner using `/think on/off`.
-- **Context Management**: Use `/clear` to reset conversation context. Automatic token-aware compression prevents context overflow.
+### Dashboard And Control Plane APIs
 
-### 2. Skills & Subagents
-- **Web Browsing**: Automatically uses a headless sidecar browser for web search and page reading.
-- **Skill Registry**: Install verified skills via CLI: `zen-claw skill install <name_or_url>`.
-- **Permission System**: High-risk actions (file write, shell exec) require explicit user approval.
+- Dashboard cards and APIs for:
+  - agents
+  - skills
+  - model routing
+  - operations summary / pending apply
+  - RAG
+  - crawler sources and schedules
+- Representative API families:
+  - `/api/v1/agents`
+  - `/api/v1/skills`
+  - `/api/v1/rag`
+  - `/api/v1/ops`
+  - `/api/v1/model-routing`
+  - `/api/v1/crawler`
 
-### 3. Exposure Guards & Privacy
-- **Cloudflare Tunnel**: Securely expose your local gateway to the public internet with `zen-claw tunnel start`.
-- **Webhook Security**: POST requests to `/webhook/trigger/{agent_id}` require mandatory `X-Signature`, `X-Timestamp`, and `X-Nonce` headers to prevent replay attacks and unauthorized access.
-- **Audit Logging**: All activity is recorded in `audit_logs/*.jsonl` with tenant isolation and PII masking.
+### Channels, Webhooks, And Crawler
 
-### Multi-Channel Integration
-- IM/Social Channels: Telegram, Discord, WhatsApp, Feishu, DingTalk, WeChat MP, WeCom
-- Extended Channels: WebChat, Webhook Trigger, Slack, Signal, Matrix
+- Channel support in the repository includes WebChat, Webhook Trigger, Slack, Signal, Matrix, Telegram, Discord, WhatsApp, Feishu, and others
+- Webhook-style inbound paths and dashboard-operable channel controls exist in the current codebase
+- Crawler support includes source catalog, run/schedule flows, browser-backed extraction, and dashboard/API surfaces
 
-## Channel Support Matrix
+## Developer Quick Start
 
-| Channel | Inbound | Outbound | Attachments | Notes |
-| --- | --- | --- | --- | --- |
-| WebChat | Yes | Yes | Yes | Dashboard `/chat/ws` via internal bus streaming |
-| Webhook Trigger | Yes | N/A | N/A | Supports signatures, nonces, anti-replay, IP allowlist |
-| Slack | Yes | Yes | Yes | Socket Mode + HTTP Events dual-mode |
-| Signal | Yes | Yes | Yes | signald / signal-cli, supports attachment download mapping |
-| Matrix | Yes | Yes | Yes | Supports auto register/login, E2EE paths |
-| Telegram / Discord / WhatsApp / Feishu | Yes | Yes | Partial | Common basic production channels |
-
-## Quick Start
-
-### 1. Installation
+### 1. Install
 
 ```powershell
 git clone https://github.com/ZachCharles666/zen-claw.git
@@ -89,48 +78,83 @@ python -m pip install -U pip
 pip install -e .[dev]
 ```
 
-### 2. Initialize Configuration
+Optional dependency groups are available when you need them:
+
+- `pip install -e .[rag]` for Chroma / embeddings / document ingestion extras
+- `pip install -e .[tts]` or `pip install -e .[tts-all]` for speech-related providers
+- `pip install -e .[multitenant]` for multi-tenant auth-related extras
+
+### 2. Configure
 
 ```powershell
 zen-claw config wizard
-zen-claw config doctor
-```
-
-Strict inspection mode:
-
-```powershell
 zen-claw config doctor --strict
 ```
 
-### 3. Local Chat
+### 3. Run A Local Agent Prompt
 
 ```powershell
 zen-claw agent -m "Hello"
 ```
 
-### 4. Start Gateway & Dashboard
+### 4. Start Gateway And Dashboard
 
 ```powershell
 zen-claw gateway --port 18790
 zen-claw dashboard --host 127.0.0.1 --port 18791
 ```
 
-## Common Commands
+Dashboard URL: [http://127.0.0.1:18791](http://127.0.0.1:18791)
+
+## Common CLI Entry Points
 
 ```powershell
 zen-claw status -v
 zen-claw config providers
 zen-claw config troubleshoot
-zen-claw skill install <path-or-url-or-market:name>
+zen-claw agent list
+zen-claw agent chat default
+zen-claw skills test content_gen
+zen-claw rag stats
+zen-claw crawler run --source https://example.com --notebook demo
 ```
+
+## Repository Shape
+
+These top-level areas are the main places to read code:
+
+- `zen_claw/agent/`: agent loop, routing, pool, tool selection, runtime decisions
+- `zen_claw/skills/`: built-in skills, manifests, runtime skill integration
+- `zen_claw/knowledge/`: ingestion, notebooks, retrieval, vector-store abstraction, RAG pipeline
+- `zen_claw/dashboard/`: dashboard server and operator-facing API surface
+- `zen_claw/channels/`: inbound/outbound channel integrations
+- `zen_claw/cron/`: scheduled execution and job orchestration
+- `zen_claw/tunnel/`, `bridge/`, `browser/sidecar/`, `go/`: supporting runtime sidecars and infra helpers
+- `tests/`: behavior and regression coverage across runtime, CLI, dashboard, RAG, channels, and crawler flows
+
+## Current Boundaries And Notes
+
+- README only covers stable entry points and repository-level orientation. It does not try to replace subsystem-specific docs.
+- Some features depend on optional extras, external credentials, or channel/provider-specific runtime setup.
+- The repository includes roadmap and audit documents; README should be read as “current implemented baseline”, not as a promise that every historical plan item is complete.
+- Verification commands and repo structure should always defer to the generated docs in `docs/`.
+
+## Developer Navigation
+
+- Project overview: [`docs/project-overview.md`](docs/project-overview.md)
+- Repository map: [`docs/repo_map.md`](docs/repo_map.md)
+- Verification source of truth: [`docs/verify_profile.md`](docs/verify_profile.md)
+- Deployment guide: [`docs/DEPLOY.md`](docs/DEPLOY.md)
+- Feature usage reference: [`docs/feature-summary_and_usage.md`](docs/feature-summary_and_usage.md)
+- Product/roadmap context: [`docs/zen-claw功能补足开发计划.md`](docs/zen-claw功能补足开发计划.md)
 
 ## Development Verification
 
-Refer to `docs/verify_profile.md` for baselines. Standard sequence:
+Use [`docs/verify_profile.md`](docs/verify_profile.md) as the source of truth. Current baseline:
 
 ```powershell
-E:\zen-claw-public\.venv\Scripts\python.exe -m ruff check .
-E:\zen-claw-public\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 ## License
@@ -142,64 +166,70 @@ MIT
 <span id="中文版"></span>
 # 中文版
 
-zen-claw 是一个本地优先的 AI 代理执行框架，提供可控的工具调用、多渠道接入、以及可追踪的运行治理能力。
+zen-claw 是一个面向开发者的本地优先 AI Agent 框架，目标是在同一套代码里提供可控工具执行、多 Agent 编排、多渠道接入，以及可追踪的运维控制面。
 
-## 核心能力
+## 这个项目现在是什么
 
-### Agent 与执行
-- Agent Loop + 工具调用 + 反思迭代
-- Runtime 命令：`/model`、`/clear`、`/think`、`/usage`、`/verbose`
-- 多 Agent 路由与隔离工作区：`~/.zen-claw/workspaces/<agent_id>/`
+它不是一个单纯的 LLM 聊天壳。当前仓库已经把这些能力落在同一个系统里：
 
-### 安全与治理
-- 子代理敏感工具护栏（Subagent Guardrail）
-- Sidecar 网络代理与执行代理（可选）
-- `config doctor` 配置体检与故障提示
+- Agent 运行时：直达意图、工具调用、审批感知执行、结构化恢复路径
+- 多 Agent 配置与路由：隔离工作区、route preview、sticky route、profile 级模型/Prompt/工具控制
+- Knowledge / RAG：notebook 管理、保留策略、租户级后端策略、操作面 API
+- Skills 系统：清单、preflight、启停、导出恢复、内置业务技能骨架
+- Dashboard / FastAPI 控制面：agents、skills、ops、model routing、RAG、crawler
+- 多渠道与 webhook/crawler 等实际交付需要的外围能力
 
-### 上下文与记忆
-- SQLite 默认记忆检索与降级策略
-- Token 感知上下文压缩（阈值/回滞/冷却）
-- Dashboard 展示压缩触发历史
+## 当前已实现的能力分区
 
-### 零配置内网穿透与合规体系 
-- **Cloudflare Tunnel 集成**: 原生 `zen-claw tunnel start` 安全暴漏内部网关。
-- **高防 Webhook 防线**: `X-Signature`, 防重放 `X-Nonce` 跟踪及自动化 IP/ASN 黑名单阻断。
-- **中心化 RegistryAuthZ**: 面向四眼原则（4-Eyes）发布的生态审核库与一键 DMCA 下架机制。
-- **TUFs 信托灾备**: 支持 RTO/RPO 机制的硬编码根公钥与强制回滚。
+### Agent Runtime 与路由
 
-## 详细功能与指引
+- 针对时间、天气、汇率、固定站点查询等场景的直达意图处理
+- 支持工具调用、审批约束、恢复结果建模的 Agent 运行时
+- 多 Agent profile 注册与路由能力，包括：
+  - profile 级 workspace / model / planning 覆盖
+  - prompt 绑定与工具 allow/deny 策略
+  - route preview、route bind、route clear
+- 可通过 CLI、Dashboard 与 `/api/v1/agents*` 观察和管理
 
-### 1. 核心大语言模型与对话能力
-*   **模型热切 (Runtime Model Switching)**：发送 `/model gpt-4o` 直接切换模型，`/model default` 恢复默认。
-*   **深度思考模式 (Think Mode)**：针对推理模型（如 DeepSeek Reasoner）开关思维链展示：`/think on` 或 `/think off`。
-*   **会话重置与压缩**：`/clear` 清空上下文。系统内置 Token 感知压缩，自动处理长文对话。
+### Skills 与工具
 
-### 2. 工具与技能扩展 (Skills & Subagents)
-*   **Web 搜索与阅读**：自动触发基于 Playwright 的 Sidecar Browser 抓取网页内容。
-*   **技能安装**：支持一键安装：`zen-claw skill install github_analyzer` 或其 Web URL。
-*   **权限审批**：高危权限（文件写入、Shell 执行）默认需用户实时审批。
+- 结构化技能清单与运行时绑定
+- `zen-claw skills test <name>` preflight / 测试入口
+- 技能启停、导出恢复、package policy、批量操作
+- 当前仓库已有业务向技能基础能力，例如 `content_gen`、`compliance_check`、`rag_retrieve` 与 crawler 相关能力
 
-### 3. 安全防护与内网穿透
-*   **Cloudflare Tunnel**：无需公网 IP 即可安全对外：`zen-claw tunnel start --port 18790`。
-*   **Webhook 验签保护**：所有外部推送必须携带 `X-Signature`、`X-Timestamp` 及 `X-Nonce`。系统自动识别并惩罚恶意重放请求。
-*   **操作审计**：所有敏感指令、多租户访问流水均记录于 `audit_logs/` 下。
+### Knowledge 与 RAG
 
-### 多渠道接入
-- IM/社交通道：Telegram、Discord、WhatsApp、Feishu、DingTalk、WeChat MP、WeCom
-- 扩展通道：WebChat、Webhook Trigger、Slack、Signal、Matrix
+- 统一的 `RAGPipeline` 抽象，覆盖 ingest、search、stats、retention、document lifecycle
+- notebook 级与 tenant 级后端策略
+- 支持 metadata 注入与精确过滤搜索
+- 提供 tenant-aware 的 CLI 与 API 入口
+- Dashboard/API 支持 notebook、repair、policy history、activity history、backend diagnostics
 
-## 渠道支持矩阵
+### Dashboard 与控制面 API
 
-| Channel | 入站 | 出站 | 附件 | 备注 |
-| --- | --- | --- | --- | --- |
-| WebChat | Yes | Yes | Yes | Dashboard `/chat/ws` 走 bus 流式链路 |
-| Webhook Trigger | Yes | N/A | N/A | 支持签名、nonce、防重放、IP allowlist |
-| Slack | Yes | Yes | Yes | Socket Mode + HTTP Events 双模式 |
-| Signal | Yes | Yes | Yes | signald / signal-cli，支持附件下载映射 |
-| Matrix | Yes | Yes | Yes | 支持 auto register/login、E2EE 路径 |
-| Telegram / Discord / WhatsApp / Feishu | Yes | Yes | Partial | 生产常用基础通道 |
+- 当前 Dashboard 与 API 已覆盖：
+  - agents
+  - skills
+  - model routing
+  - operations summary / pending apply
+  - RAG
+  - crawler source / schedule
+- 代表性 API 家族：
+  - `/api/v1/agents`
+  - `/api/v1/skills`
+  - `/api/v1/rag`
+  - `/api/v1/ops`
+  - `/api/v1/model-routing`
+  - `/api/v1/crawler`
 
-## 快速开始
+### 渠道、Webhook 与 Crawler
+
+- 仓库内已包含 WebChat、Webhook Trigger、Slack、Signal、Matrix、Telegram、Discord、WhatsApp、Feishu 等渠道支持
+- 现有代码中已存在 webhook 风格的入站路径与 Dashboard 可操作的控制面
+- crawler 能力已覆盖 source catalog、run/schedule、browser-backed extraction、Dashboard/API 面板
+
+## 开发者快速开始
 
 ### 1. 安装
 
@@ -212,48 +242,83 @@ python -m pip install -U pip
 pip install -e .[dev]
 ```
 
+按需安装可选依赖：
+
+- `pip install -e .[rag]`：Chroma / embedding / 文档解析相关依赖
+- `pip install -e .[tts]` 或 `pip install -e .[tts-all]`：语音相关能力
+- `pip install -e .[multitenant]`：多租户认证相关能力
+
 ### 2. 初始化配置
 
 ```powershell
 zen-claw config wizard
-zen-claw config doctor
-```
-
-严格检查模式：
-
-```powershell
 zen-claw config doctor --strict
 ```
 
-### 3. 本地对话
+### 3. 本地运行一个 Agent Prompt
 
 ```powershell
 zen-claw agent -m "Hello"
 ```
 
-### 4. 启动网关与仪表盘
+### 4. 启动 Gateway 与 Dashboard
 
 ```powershell
 zen-claw gateway --port 18790
 zen-claw dashboard --host 127.0.0.1 --port 18791
 ```
 
-## 常用命令
+访问地址：[http://127.0.0.1:18791](http://127.0.0.1:18791)
+
+## 常用 CLI 入口
 
 ```powershell
 zen-claw status -v
 zen-claw config providers
 zen-claw config troubleshoot
-zen-claw skill install <path-or-url-or-market:name>
+zen-claw agent list
+zen-claw agent chat default
+zen-claw skills test content_gen
+zen-claw rag stats
+zen-claw crawler run --source https://example.com --notebook demo
 ```
+
+## 仓库结构怎么读
+
+如果你要快速建立代码全景，优先看这些目录：
+
+- `zen_claw/agent/`：agent loop、intent routing、pool、tool 选择、运行时决策
+- `zen_claw/skills/`：内置技能、manifest、skill 运行时集成
+- `zen_claw/knowledge/`：ingestion、notebook、retrieval、vector store 抽象、RAG pipeline
+- `zen_claw/dashboard/`：dashboard server 与 operator-facing API
+- `zen_claw/channels/`：各渠道接入
+- `zen_claw/cron/`：定时任务与调度
+- `zen_claw/tunnel/`、`bridge/`、`browser/sidecar/`、`go/`：配套 sidecar 和基础设施辅助组件
+- `tests/`：覆盖 runtime、CLI、dashboard、RAG、channels、crawler 的回归测试
+
+## 当前边界与注意事项
+
+- README 只覆盖稳定入口与仓库导航，不展开所有子系统细节。
+- 部分能力依赖可选 extras、外部凭证或渠道/模型特定配置。
+- 仓库里存在 roadmap 与 audit 文档；README 只描述“当前已实现基线”，不把历史规划自动视为完成。
+- 涉及验证命令和仓库结构时，应以 `docs/` 中生成的真源文档为准。
+
+## 开发者导航
+
+- 项目全景说明：[`docs/project-overview.md`](docs/project-overview.md)
+- 仓库地图：[`docs/repo_map.md`](docs/repo_map.md)
+- 验证真源：[`docs/verify_profile.md`](docs/verify_profile.md)
+- 部署说明：[`docs/DEPLOY.md`](docs/DEPLOY.md)
+- 功能与用法参考：[`docs/feature-summary_and_usage.md`](docs/feature-summary_and_usage.md)
+- 产品/路线图上下文：[`docs/zen-claw功能补足开发计划.md`](docs/zen-claw功能补足开发计划.md)
 
 ## 开发验证
 
-以 `docs/verify_profile.md` 为准，默认顺序：
+以 [`docs/verify_profile.md`](docs/verify_profile.md) 为准，当前基线：
 
 ```powershell
-E:\zen-claw-public\.venv\Scripts\python.exe -m ruff check .
-E:\zen-claw-public\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 ## 许可证
