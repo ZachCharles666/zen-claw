@@ -829,3 +829,34 @@ async def test_rag_pipeline_run_retention_uses_notebook_policy_defaults(tmp_path
     assert first["document_id"] in retained["document_ids"]
     assert second["document_id"] not in retained["document_ids"]
     assert remaining["total_documents"] == 1
+
+
+async def test_rag_pipeline_run_retention_prefers_first_ingested_when_timestamps_collide(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from zen_claw.knowledge.pipeline import RAGPipeline
+
+    doc_a = tmp_path / "a.txt"
+    doc_b = tmp_path / "b.txt"
+    doc_a.write_text("Alpha policy", encoding="utf-8")
+    doc_b.write_text("Beta policy", encoding="utf-8")
+
+    fixed_now = datetime(2026, 3, 7, 12, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr("zen_claw.knowledge.notebook.datetime", type("_FixedDateTime", (), {
+        "now": staticmethod(lambda _tz=None: fixed_now),
+        "fromisoformat": staticmethod(datetime.fromisoformat),
+        "min": datetime.min,
+    }))
+
+    pipeline = RAGPipeline(tmp_path, store_kind="memory")
+    first = await pipeline.ingest(str(doc_a), notebook_id="kb")
+    second = await pipeline.ingest(str(doc_b), notebook_id="kb")
+
+    retained = pipeline.run_retention(notebook_id="kb", max_documents=1, max_age_days=0)
+
+    assert retained["documents_removed"] == 1
+    assert first["document_id"] in retained["document_ids"]
+    assert second["document_id"] not in retained["document_ids"]

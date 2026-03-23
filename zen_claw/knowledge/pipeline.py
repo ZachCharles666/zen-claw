@@ -675,6 +675,15 @@ class RAGPipeline:
             # For persistent backends attempt a metadata reset
             actions_taken.append("metadata_reset_attempted")
         except Exception as exc:  # noqa: BLE001
+            if int(getattr(nb, "doc_count", 0) or 0) <= 0:
+                actions_taken.append("no_repair_needed")
+                errors.append(str(exc))
+                return {
+                    "ok": True,
+                    "notebook_id": notebook_id,
+                    "actions_taken": actions_taken,
+                    "errors": errors,
+                }
             errors.append(str(exc))
             if effective_store == "memory":
                 actions_taken.append("no_repair_needed_memory_ephemeral")

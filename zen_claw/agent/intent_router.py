@@ -772,6 +772,16 @@ class IntentRouter:
                         now=fallback_now,
                         label=label or candidate,
                     )
+                    if fuzzy_candidate is not None:
+                        return self._direct_success_with_plan(
+                            intent_name="time",
+                            content=content,
+                            plan=self._build_timezone_fuzzy_alias_resolution_plan(),
+                            contract=self._TIME_CONTRACT,
+                            diagnostic=(
+                                f"timezone_fuzzy_alias_resolved_via_fallback:{fuzzy_candidate}"
+                            ),
+                        )
                     return self._direct_success_with_plan(
                         intent_name="time",
                         content=content,

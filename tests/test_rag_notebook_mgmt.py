@@ -123,6 +123,25 @@ class TestRepairNotebook:
         result = pipeline.repair_notebook("healthy_nb")
         assert "no_repair_needed" in result["actions_taken"]
 
+    def test_repair_notebook_empty_backend_init_failure_is_still_no_repair_needed(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """Empty notebook should not report repair work when backend init fails."""
+        from zen_claw.knowledge import pipeline as pipeline_mod
+
+        pipeline = _pipeline(tmp_path, tenant_id="default")
+        pipeline.ensure_notebook("healthy_nb")
+
+        def _raise_backend_init(*_args, **_kwargs):
+            raise RuntimeError("backend unavailable")
+
+        monkeypatch.setattr(pipeline_mod.HybridRetriever, "from_notebook", _raise_backend_init)
+
+        result = pipeline.repair_notebook("healthy_nb")
+
+        assert result["ok"] is True
+        assert "no_repair_needed" in result["actions_taken"]
+
     def test_repair_notebook_memory_unsupported(self, tmp_path: Path) -> None:
         """Memory backend → actions indicate ephemeral, ok=True."""
         pipeline = _pipeline(tmp_path, tenant_id="default")

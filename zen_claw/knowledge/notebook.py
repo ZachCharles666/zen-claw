@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +73,19 @@ class NotebookManager:
         self._sources_index.write_text(
             json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
         )
+
+    @staticmethod
+    def _parse_created_at(value: Any) -> datetime:
+        raw = str(value or "").strip()
+        if not raw:
+            return datetime.min.replace(tzinfo=UTC)
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return datetime.min.replace(tzinfo=UTC)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
 
     def list(self) -> list[Notebook]:
         raw = self._load().get("notebooks", [])
@@ -201,11 +214,20 @@ class NotebookManager:
                     row["metadata"] = normalized_metadata
                 self._save_sources(data)
                 return str(document_id)
+        latest_created_at = datetime.min.replace(tzinfo=UTC)
+        for row in rows.values():
+            if not isinstance(row, dict):
+                continue
+            latest_created_at = max(
+                latest_created_at,
+                self._parse_created_at(row.get("created_at", "")),
+            )
+        created_at = max(datetime.now(UTC), latest_created_at + timedelta(microseconds=1))
         document_id = str(uuid.uuid4())
         rows[document_id] = {
             "source": clean_source,
             "doc_units": int(doc_units),
-            "created_at": datetime.now(UTC).isoformat(),
+            "created_at": created_at.isoformat(),
             "metadata": normalized_metadata,
         }
         self._save_sources(data)
