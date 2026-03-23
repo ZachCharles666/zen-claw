@@ -66,6 +66,7 @@ jobs:
           if ($pytestExit -ne 0) {
             exit $pytestExit
           }
+          $global:LASTEXITCODE = 0
 
   memory-recall:
     runs-on: windows-latest
