@@ -59,7 +59,7 @@ jobs:
           if ($selected.Count -eq 0) {
             throw "No tests selected for shard $index"
           }
-          Write-Host "Running shard $($index + 1)/$total: $($selected -join ' ')"
+          Write-Host ("Running shard {0}/{1}: {2}" -f ($index + 1), $total, ($selected -join ' '))
           & python -m pytest -p no:timeout -q @selected
           exit $LASTEXITCODE
 
