@@ -37,9 +37,8 @@ jobs:
           CI_SHARD_INDEX: "${{ matrix.shard }}"
         run: |
           import os
-          import subprocess
-          import sys
           from pathlib import Path
+          import pytest
 
           exclude = {
               "tests/test_webchat_channel.py",
@@ -60,12 +59,9 @@ jobs:
           if not selected:
               raise SystemExit(f"No tests selected for shard {index}")
           print(f"Running shard {index + 1}/{total}: {' '.join(selected)}")
-          result = subprocess.run(
-              [sys.executable, "-m", "pytest", "-p", "no:timeout", "-q", *selected],
-              check=False,
-          )
-          print(f"Pytest exit code: {result.returncode}")
-          raise SystemExit(result.returncode)
+          pytest_exit = pytest.main(["-p", "no:timeout", "-q", *selected])
+          print(f"Pytest exit code: {pytest_exit}")
+          raise SystemExit(int(pytest_exit))
 
   memory-recall:
     runs-on: windows-latest
