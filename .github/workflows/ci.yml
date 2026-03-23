@@ -30,43 +30,42 @@ jobs:
           pip install "chardet<5.3"
           
       - name: Core Tests (Shard ${{ matrix.shard }})
-        shell: pwsh
+        shell: python
         env:
           PYTEST_ADDOPTS: ""
           CI_TOTAL_SHARDS: "4"
           CI_SHARD_INDEX: "${{ matrix.shard }}"
         run: |
-          $exclude = @(
-            "tests/test_webchat_channel.py",
-            "tests/test_webhook_trigger.py",
-            "tests/test_slack_channel.py",
-            "tests/test_signal_channel.py",
-            "tests/test_matrix_channel.py",
-            "tests/test_memory_recall.py"
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          exclude = {
+              "tests/test_webchat_channel.py",
+              "tests/test_webhook_trigger.py",
+              "tests/test_slack_channel.py",
+              "tests/test_signal_channel.py",
+              "tests/test_matrix_channel.py",
+              "tests/test_memory_recall.py",
+          }
+          files = sorted(
+              f"tests/{path.name}"
+              for path in Path("tests").glob("test_*.py")
+              if f"tests/{path.name}" not in exclude
           )
-          $files = Get-ChildItem tests -Filter "test_*.py" -File |
-            ForEach-Object { "tests/$($_.Name)" } |
-            Where-Object { $exclude -notcontains $_ } |
-            Sort-Object
-          $total = [int]$env:CI_TOTAL_SHARDS
-          $index = [int]$env:CI_SHARD_INDEX
-          $selected = @()
-          for ($i = 0; $i -lt $files.Count; $i++) {
-            if (($i % $total) -eq $index) {
-              $selected += $files[$i]
-            }
-          }
-          if ($selected.Count -eq 0) {
-            throw "No tests selected for shard $index"
-          }
-          Write-Host ("Running shard {0}/{1}: {2}" -f ($index + 1), $total, ($selected -join ' '))
-          & python -m pytest -p no:timeout -q @selected
-          $pytestExit = if (Test-Path variable:LASTEXITCODE) { [int]$LASTEXITCODE } else { 0 }
-          Write-Host ("Pytest exit code: {0}" -f $pytestExit)
-          if ($pytestExit -ne 0) {
-            exit $pytestExit
-          }
-          $global:LASTEXITCODE = 0
+          total = int(os.environ["CI_TOTAL_SHARDS"])
+          index = int(os.environ["CI_SHARD_INDEX"])
+          selected = [path for i, path in enumerate(files) if i % total == index]
+          if not selected:
+              raise SystemExit(f"No tests selected for shard {index}")
+          print(f"Running shard {index + 1}/{total}: {' '.join(selected)}")
+          result = subprocess.run(
+              [sys.executable, "-m", "pytest", "-p", "no:timeout", "-q", *selected],
+              check=False,
+          )
+          print(f"Pytest exit code: {result.returncode}")
+          raise SystemExit(result.returncode)
 
   memory-recall:
     runs-on: windows-latest
