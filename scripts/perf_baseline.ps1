@@ -48,7 +48,7 @@ New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 try {
     $startupPy = Join-Path $tmpDir "startup_check.py"
     @'
-import nano-claw.cli.commands
+import zen_claw.cli.commands
 '@ | Set-Content -Path $startupPy -Encoding UTF8
 
     $toolPy = Join-Path $tmpDir "tool_call_check.py"
@@ -56,7 +56,7 @@ import nano-claw.cli.commands
 import asyncio
 from pathlib import Path
 
-from nano-claw.agent.tools.filesystem import ListDirTool
+from zen_claw.agent.tools.filesystem import ListDirTool
 
 async def _run():
     tool = ListDirTool(allowed_dir=Path("."))
