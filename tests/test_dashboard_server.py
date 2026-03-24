@@ -103,6 +103,20 @@ def test_dashboard_healthz(monkeypatch, tmp_path: Path) -> None:
     assert body == "ok"
 
 
+def test_dashboard_api_health(monkeypatch, tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    _prepare_data_dir(data_dir)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setenv("zen_claw_DASHBOARD_TOKEN", "")
+    port = _free_port()
+    _start_server(Config(), port)
+    status, body = _request(f"http://127.0.0.1:{port}/api/v1/health")
+    assert status == 200
+    assert isinstance(body, dict)
+    assert body["status"] == "ok"
+    assert body["service"] == "zen-claw"
+
+
 def test_dashboard_status_endpoint(monkeypatch, tmp_path: Path) -> None:
     data_dir = tmp_path / "data"
     _prepare_data_dir(data_dir)

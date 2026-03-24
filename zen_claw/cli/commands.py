@@ -6,7 +6,9 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
 
@@ -19,6 +21,44 @@ from zen_claw import __logo__, __version__
 from zen_claw.utils.netguard import is_public_ip, resolve_safe_ip
 
 console = Console()
+
+
+def _gateway_health_payload() -> dict[str, str]:
+    return {"status": "ok", "service": "zen-claw", "surface": "gateway"}
+
+
+def _start_gateway_health_server(*, port: int, host: str = "127.0.0.1") -> ThreadingHTTPServer:
+    class _GatewayHealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path == "/api/v1/health":
+                body = json.dumps(_gateway_health_payload(), ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/healthz":
+                body = b"ok"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"not found")
+
+        def log_message(self, format, *args):  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer((host, port), _GatewayHealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
 
 
 def _display_logo() -> str:
@@ -815,6 +855,8 @@ def gateway(
         logging.basicConfig(level=logging.DEBUG)
 
     console.print(f"{_display_logo()} Starting zen-claw gateway on port {port}...")
+    health_server = _start_gateway_health_server(port=port)
+    console.print(f"[green]✓[/green] Gateway health: http://127.0.0.1:{port}/api/v1/health")
 
     config = load_config()
     bus = MessageBus()
@@ -1068,7 +1110,11 @@ def gateway(
             if sidecar_supervisor:
                 await sidecar_supervisor.stop()
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        health_server.shutdown()
+        health_server.server_close()
 
 
 # ============================================================================
