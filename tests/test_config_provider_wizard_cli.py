@@ -53,15 +53,28 @@ def test_config_wizard_interactive_profile_defaults_openrouter(tmp_path: Path) -
     out = CliRunner().invoke(
         app,
         ["config", "wizard", "--config", str(cfg)],
-        input="\n\nsk-or-test\ny\n",
+        input="\n\n\n\nsk-or-test\ny\n",
     )
     assert out.exit_code == 0
     assert "Step 1/4" in out.output
+    assert "Step 3/4" in out.output
     assert "setup_profile" in out.output
     payload = json.loads(cfg.read_text(encoding="utf-8"))
     assert payload["providers"]["openrouter"]["apiKey"] == "sk-or-test"
     assert payload["providers"]["openrouter"]["apiBase"] == "https://openrouter.ai/api/v1"
     assert payload["agents"]["defaults"]["model"] == "openrouter/anthropic/claude-3.5-sonnet"
+
+
+def test_config_wizard_accepts_openrouter_profile_alias(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.json"
+    out = CliRunner().invoke(
+        app,
+        ["config", "wizard", "--config", str(cfg)],
+        input="openrouter\n\nopenrouter/stepfun/step-3.5-flash:free\n\nsk-or-test\ny\n",
+    )
+    assert out.exit_code == 0
+    payload = json.loads(cfg.read_text(encoding="utf-8"))
+    assert payload["agents"]["defaults"]["model"] == "openrouter/stepfun/step-3.5-flash:free"
 
 
 def test_config_wizard_dry_run_keeps_file_unchanged(tmp_path: Path) -> None:
@@ -99,6 +112,17 @@ def test_config_wizard_dry_run_keeps_file_unchanged(tmp_path: Path) -> None:
     assert "key_length" in out.output
     assert "key_pattern" in out.output
     assert cfg.read_text(encoding="utf-8") == before
+
+
+def test_config_wizard_shows_stepfun_recommendation_for_openrouter(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.json"
+    out = CliRunner().invoke(
+        app,
+        ["config", "wizard", "--config", str(cfg)],
+        input="\n\n\n\nsk-or-test\ny\n",
+    )
+    assert out.exit_code == 0
+    assert "openrouter/stepfun/step-3.5-flash:free" in out.output
 
 
 def test_config_wizard_scripted_provider_model_mismatch_requires_interactive_review(tmp_path: Path) -> None:

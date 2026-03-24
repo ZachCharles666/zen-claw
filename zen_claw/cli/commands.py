@@ -1524,6 +1524,7 @@ def _provider_recommended_models(provider: str) -> list[str]:
         "openrouter": [
             "openrouter/anthropic/claude-3.5-sonnet",
             "openrouter/deepseek/deepseek-chat",
+            "openrouter/stepfun/step-3.5-flash:free",
         ],
         "openai": [
             "openai/gpt-4o-mini",
@@ -1540,6 +1541,20 @@ def _provider_recommended_models(provider: str) -> list[str]:
         "moonshot": ["moonshot/moonshot-v1-8k"],
     }
     return rows.get(str(provider or "").strip().lower(), [])
+
+
+def _normalize_wizard_profile(profile: str) -> str:
+    raw = str(profile or "").strip().lower()
+    aliases = {
+        "openrouter": "global-openrouter",
+        "global": "global-openrouter",
+        "deepseek": "china-deepseek",
+        "china": "china-deepseek",
+        "vllm": "custom-openai-compatible",
+        "custom": "custom-openai-compatible",
+        "openai-compatible": "custom-openai-compatible",
+    }
+    return aliases.get(raw, raw)
 
 
 def _looks_like_duplicated_secret(value: str) -> bool:
@@ -1858,6 +1873,8 @@ def config_wizard(
     provider_was_explicit = bool(provider.strip())
     model_was_explicit = bool(model.strip())
     api_base_was_explicit = bool(api_base.strip())
+    profile_default_model = ""
+    profile_default_base = ""
 
     if not provider_was_explicit:
         profile_rows = _wizard_profile_catalog()
@@ -1868,7 +1885,9 @@ def config_wizard(
         for row in profile_rows:
             profile_table.add_row(row["id"], row["provider"], row["summary"])
         console.print(profile_table)
-        selected_profile = typer.prompt("Setup profile", default="global-openrouter").strip().lower()
+        selected_profile = _normalize_wizard_profile(
+            typer.prompt("Setup profile", default="global-openrouter")
+        )
         profile_row = next((row for row in profile_rows if row["id"] == selected_profile), None)
         if profile_row is None:
             console.print(f"[red]Unsupported setup profile:[/red] {selected_profile}")
@@ -1878,10 +1897,8 @@ def config_wizard(
             raise typer.Exit(1)
         template_defaults = _config_template_catalog().get(selected_profile, {})
         provider = str(profile_row["provider"])
-        if not model_was_explicit:
-            model = str(template_defaults.get("model", "") or "")
-        if not api_base_was_explicit:
-            api_base = str(template_defaults.get("api_base", "") or "")
+        profile_default_model = str(template_defaults.get("model", "") or "")
+        profile_default_base = str(template_defaults.get("api_base", "") or "")
 
         table = Table(title="Config Wizard - Step 2/4: Confirm provider")
         table.add_column("ID", style="cyan")
@@ -1905,10 +1922,12 @@ def config_wizard(
     current_model = str(config.agents.defaults.model or "")
     current_base = str(provider_cfg.api_base or _default_api_base_for_provider(provider) or "")
 
-    if not model:
+    if not model_was_explicit:
         recommended_models = _provider_recommended_models(provider)
         effective_default_model = ""
-        if current_model and (
+        if profile_default_model:
+            effective_default_model = profile_default_model
+        elif current_model and (
             _infer_provider_id(current_model) == provider
             or current_model.lower().startswith(f"{provider}/")
         ):
@@ -1922,17 +1941,22 @@ def config_wizard(
                 table.add_row(recommended)
             console.print(table)
         model = typer.prompt("Default model", default=effective_default_model)
-    if not api_base:
-        if current_base:
+    if not api_base_was_explicit:
+        effective_default_base = profile_default_base or current_base
+        if effective_default_base:
             console.print(
-                f"Default API base for `{provider}`: {current_base}"
+                f"Default API base for `{provider}`: {effective_default_base}"
             )
-        api_base = typer.prompt("API base (leave blank to use provider default)", default=current_base)
+        api_base = typer.prompt(
+            "API base (leave blank to use provider default)",
+            default=effective_default_base,
+        )
     if not api_key:
         if current_key:
             console.print(
                 f"Existing API key detected for `{provider}`. Leave blank to keep the current key."
             )
+        console.print("Config Wizard - Step 4/4: API key")
         api_key = (
             typer.prompt("API key", default="", hide_input=True, show_default=False).strip()
             or current_key
