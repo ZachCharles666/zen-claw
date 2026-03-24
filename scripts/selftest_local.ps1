@@ -3,6 +3,7 @@ param(
     [string]$PythonExe = "python",
     [string]$GoExe = "go",
     [switch]$SkipIntegration,
+    [switch]$FullPythonTests,
     [switch]$FailOnHighRiskConfig,
     [switch]$FailOnLegacyConfig,
     [switch]$FailOnInvalidSkillManifest
@@ -195,7 +196,19 @@ Step "Python tests"
 Push-Location $RepoRoot
 try {
     $env:PYTHONPATH = "."
-    Invoke-Checked -Command { & $PythonExe -m pytest -q } -ErrorMessage "Python tests failed"
+    $pytestArgs = @("-m", "pytest", "-q")
+    if (-not $FullPythonTests) {
+        $pytestArgs += @(
+            "tests/test_config_loader.py",
+            "tests/test_config_doctor_cli.py",
+            "tests/test_dashboard_server.py",
+            "tests/test_skill_bulk_ops.py",
+            "tests/test_time_direct_response.py",
+            "tests/test_tool_validation.py",
+            "tests/test_web_fetch_proxy.py"
+        )
+    }
+    Invoke-Checked -Command { & $PythonExe @pytestArgs } -ErrorMessage "Python tests failed"
 } finally {
     Pop-Location
 }
