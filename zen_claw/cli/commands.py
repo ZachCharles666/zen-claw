@@ -1489,6 +1489,250 @@ def _config_template_catalog() -> dict[str, dict[str, str]]:
     }
 
 
+def _wizard_profile_catalog() -> list[dict[str, str]]:
+    return [
+        {
+            "id": "global-openrouter",
+            "label": "Global gateway (recommended)",
+            "summary": "OpenRouter with a ready-to-use gateway model prefix",
+            "provider": "openrouter",
+        },
+        {
+            "id": "china-deepseek",
+            "label": "China mainstream",
+            "summary": "Direct DeepSeek setup for a simple mainland-first path",
+            "provider": "deepseek",
+        },
+        {
+            "id": "custom-openai-compatible",
+            "label": "Custom OpenAI-compatible",
+            "summary": "Self-hosted or third-party OpenAI-compatible endpoint",
+            "provider": "vllm",
+        },
+    ]
+
+
+def _default_api_base_for_provider(provider: str) -> str:
+    return {
+        "openrouter": "https://openrouter.ai/api/v1",
+        "aihubmix": "https://aihubmix.com/v1",
+    }.get(str(provider or "").strip().lower(), "")
+
+
+def _provider_recommended_models(provider: str) -> list[str]:
+    rows = {
+        "openrouter": [
+            "openrouter/anthropic/claude-3.5-sonnet",
+            "openrouter/deepseek/deepseek-chat",
+        ],
+        "openai": [
+            "openai/gpt-4o-mini",
+            "openai/gpt-4o",
+        ],
+        "anthropic": [
+            "anthropic/claude-3-5-sonnet-20241022",
+            "anthropic/claude-opus-4-5",
+        ],
+        "gemini": ["gemini/gemini-1.5-pro"],
+        "deepseek": ["deepseek/deepseek-chat"],
+        "zhipu": ["zhipu/glm-4-plus"],
+        "dashscope": ["dashscope/qwen-plus"],
+        "moonshot": ["moonshot/moonshot-v1-8k"],
+    }
+    return rows.get(str(provider or "").strip().lower(), [])
+
+
+def _looks_like_duplicated_secret(value: str) -> bool:
+    token = str(value or "").strip()
+    if len(token) < 20 or len(token) % 2 != 0:
+        return False
+    half = len(token) // 2
+    return token[:half] == token[half:]
+
+
+def _infer_provider_id(model_name: str) -> str:
+    m = (model_name or "").lower()
+    if "openrouter" in m:
+        return "openrouter"
+    if "aihubmix" in m:
+        return "aihubmix"
+    if "anthropic" in m or "claude" in m:
+        return "anthropic"
+    if "openai" in m or "gpt" in m:
+        return "openai"
+    if "gemini" in m:
+        return "gemini"
+    if "deepseek" in m:
+        return "deepseek"
+    if "zhipu" in m or "glm" in m or "zai" in m:
+        return "zhipu"
+    if "dashscope" in m or "qwen" in m:
+        return "dashscope"
+    if "moonshot" in m or "kimi" in m:
+        return "moonshot"
+    if "groq" in m:
+        return "groq"
+    if "vllm" in m or "hosted_vllm/" in m:
+        return "vllm"
+    return ""
+
+
+def _provider_id_from_config(config_obj, provider_obj) -> str:
+    for row in _provider_catalog():
+        pid = row["id"]
+        if getattr(config_obj.providers, pid) is provider_obj:
+            return pid
+    return ""
+
+
+def _describe_key_pattern(provider: str, api_key: str) -> str:
+    key = str(api_key or "").strip()
+    pid = str(provider or "").strip().lower()
+    if not key:
+        return "empty"
+    if pid == "openrouter":
+        return "looks like OpenRouter key" if key.startswith("sk-or-") else "prefix does not look like OpenRouter"
+    if pid == "anthropic":
+        return "looks like Anthropic key" if key.startswith("sk-ant-") else "prefix not recognized for Anthropic"
+    if pid == "openai":
+        return "looks like OpenAI key" if key.startswith("sk-") else "prefix not recognized for OpenAI"
+    return "no provider-specific key check"
+
+
+def _provider_alignment_issues(
+    *,
+    model: str,
+    selected_provider: str,
+    api_base: str,
+    api_key: str,
+    fallback_word: str,
+) -> list[tuple[str, str, str]]:
+    issues: list[tuple[str, str, str]] = []
+    model = str(model or "").strip()
+    provider = str(selected_provider or "").strip().lower()
+    base = str(api_base or "").strip()
+    inferred_id = _infer_provider_id(model)
+
+    if not model:
+        issues.append(
+            (
+                "FAIL",
+                "agents.defaults.model is empty.",
+                "Set a model in provider/model form, for example `openrouter/anthropic/claude-3.5-sonnet`.",
+            )
+        )
+    elif inferred_id and provider and inferred_id != provider:
+        issues.append(
+            (
+                "WARN",
+                f"Model suggests `{inferred_id}` but provider selection currently resolves to `{provider}`.",
+                "Keep provider/model/apiBase on the same route, or switch back to a recommended model for the selected provider.",
+            )
+        )
+    elif provider and not inferred_id:
+        issues.append(
+            (
+                "WARN",
+                f"Model prefix is not recognized, so provider selection currently {fallback_word} `{provider}`.",
+                "Use an explicit `provider/model` prefix to avoid provider fallback ambiguity.",
+            )
+        )
+
+    if provider == "vllm" and not base:
+        issues.append(
+            (
+                "FAIL",
+                "vLLM / self-hosted setup requires an explicit apiBase.",
+                "Set providers.vllm.apiBase to your OpenAI-compatible endpoint.",
+            )
+        )
+
+    if provider in {"openrouter", "aihubmix"} and not base:
+        issues.append(
+            (
+                "WARN",
+                f"`{provider}` apiBase is empty; the built-in gateway default will be used.",
+                "Keep the default if intentional, or set apiBase explicitly for a private proxy.",
+            )
+        )
+
+    if provider == "openrouter" and base and "openrouter" not in base.lower():
+        issues.append(
+            (
+                "WARN",
+                "openrouter selected but apiBase does not look like OpenRouter.",
+                "Check providers.openrouter.apiBase.",
+            )
+        )
+    if provider == "aihubmix" and base and "aihubmix" not in base.lower():
+        issues.append(
+            (
+                "WARN",
+                "aihubmix selected but apiBase does not look like AiHubMix.",
+                "Check providers.aihubmix.apiBase.",
+            )
+        )
+
+    if provider in {"openrouter", "aihubmix"} and _looks_like_duplicated_secret(api_key):
+        issues.append(
+            (
+                "FAIL",
+                f"`providers.{provider}.apiKey` appears to contain the same secret twice.",
+                "Paste the API key once only, then rerun the wizard.",
+            )
+        )
+
+    if provider and not str(api_key or "").strip():
+        issues.append(
+            (
+                "FAIL",
+                f"`providers.{provider}.apiKey` is empty.",
+                "Set the provider key in `zen-claw config wizard` before running `agent -m`.",
+            )
+        )
+
+    return issues
+
+
+def _troubleshooting_hints(
+    *,
+    model_name: str,
+    inferred_pid: str,
+    matched_pid: str,
+    key_ids: list[str],
+    config_path: Path,
+    duplicated_key_providers: list[str],
+) -> list[str]:
+    hints: list[str] = [f"当前读取的配置文件是 `{config_path}`。该路径与当前工作目录无关。"]
+    if not key_ids:
+        hints.append(
+            "未配置任何 API Key：先运行 `zen-claw config wizard`，再执行 `zen-claw config doctor --strict`。"
+        )
+    if model_name and not inferred_pid:
+        hints.append(
+            "模型前缀未识别：建议使用 `provider/model` 形式（例如 `openrouter/...` 或 `deepseek/...`）。"
+        )
+    if inferred_pid and matched_pid and inferred_pid != matched_pid:
+        hints.append(
+            f"模型前缀与实际 provider 不一致：当前模型更像 `{inferred_pid}`，但解析到 `{matched_pid}`。请检查 model/apiKey/apiBase 三者是否同源。"
+        )
+    if duplicated_key_providers:
+        hints.append(
+            "检测到疑似重复粘贴的 API Key：该 key 看起来像把同一个 secret 粘贴了两次。"
+        )
+    if inferred_pid in {"openrouter", "aihubmix"} and inferred_pid in key_ids:
+        hints.append("网关类 provider 建议显式设置 apiBase，避免在多环境切换时指向错误。")
+    if inferred_pid == "vllm":
+        hints.append(
+            "vLLM 场景务必配置 `providers.vllm.apiBase` 指向 OpenAI-compatible endpoint。"
+        )
+    if len(hints) == 1:
+        hints.append(
+            "未发现典型配置冲突。若调用仍失败，请先执行 `zen-claw status -v` 查看实际生效后端。"
+        )
+    return hints
+
+
 def _build_config_template(profile: str) -> dict[str, object] | None:
     catalog = _config_template_catalog()
     row = catalog.get(profile)
@@ -1603,20 +1847,43 @@ def config_wizard(
         False, "--dry-run", help="Preview changes only; do not write file"
     ),
 ):
-    """Guided provider configuration wizard (interactive or scripted)."""
+    """Step-by-step provider setup wizard (interactive or scripted)."""
     from zen_claw.config.loader import get_config_path, load_config, save_config
 
     path = config_path or get_config_path()
     config = load_config(path)
     catalog = _provider_catalog()
     valid_ids = [row["id"] for row in catalog]
-    defaults = {
-        "openrouter": "https://openrouter.ai/api/v1",
-        "aihubmix": "https://aihubmix.com/v1",
-    }
+    selected_profile = ""
+    provider_was_explicit = bool(provider.strip())
+    model_was_explicit = bool(model.strip())
+    api_base_was_explicit = bool(api_base.strip())
 
-    if not provider.strip():
-        table = Table(title="Choose Provider")
+    if not provider_was_explicit:
+        profile_rows = _wizard_profile_catalog()
+        profile_table = Table(title="Config Wizard - Step 1/4: Choose setup profile")
+        profile_table.add_column("Profile", style="cyan")
+        profile_table.add_column("Default provider")
+        profile_table.add_column("When to use")
+        for row in profile_rows:
+            profile_table.add_row(row["id"], row["provider"], row["summary"])
+        console.print(profile_table)
+        selected_profile = typer.prompt("Setup profile", default="global-openrouter").strip().lower()
+        profile_row = next((row for row in profile_rows if row["id"] == selected_profile), None)
+        if profile_row is None:
+            console.print(f"[red]Unsupported setup profile:[/red] {selected_profile}")
+            console.print(
+                "Valid profiles: " + ", ".join(sorted(row["id"] for row in profile_rows))
+            )
+            raise typer.Exit(1)
+        template_defaults = _config_template_catalog().get(selected_profile, {})
+        provider = str(profile_row["provider"])
+        if not model_was_explicit:
+            model = str(template_defaults.get("model", "") or "")
+        if not api_base_was_explicit:
+            api_base = str(template_defaults.get("api_base", "") or "")
+
+        table = Table(title="Config Wizard - Step 2/4: Confirm provider")
         table.add_column("ID", style="cyan")
         table.add_column("Provider")
         table.add_column("Coverage")
@@ -1624,7 +1891,8 @@ def config_wizard(
         for row in catalog:
             table.add_row(row["id"], row["label"], row["coverage"], row["models"])
         console.print(table)
-        provider = typer.prompt("Provider ID", default="openrouter")
+        provider = typer.prompt("Provider ID", default=provider)
+
     provider = provider.strip().lower()
 
     if provider not in valid_ids:
@@ -1635,19 +1903,100 @@ def config_wizard(
     provider_cfg = getattr(config.providers, provider)
     current_key = str(provider_cfg.api_key or "")
     current_model = str(config.agents.defaults.model or "")
-    current_base = str(provider_cfg.api_base or defaults.get(provider, "") or "")
+    current_base = str(provider_cfg.api_base or _default_api_base_for_provider(provider) or "")
 
-    if not api_key:
-        masked = "(set)" if current_key else ""
-        api_key = typer.prompt(
-            "API Key (leave empty to keep current)", default=masked, hide_input=True
-        )
-        if api_key == "(set)":
-            api_key = current_key
     if not model:
-        model = typer.prompt("Default model", default=current_model)
+        recommended_models = _provider_recommended_models(provider)
+        effective_default_model = ""
+        if current_model and (
+            _infer_provider_id(current_model) == provider
+            or current_model.lower().startswith(f"{provider}/")
+        ):
+            effective_default_model = current_model
+        elif recommended_models:
+            effective_default_model = recommended_models[0]
+        if recommended_models:
+            table = Table(title="Config Wizard - Step 3/4: Choose model")
+            table.add_column("Recommended model", style="cyan")
+            for recommended in recommended_models:
+                table.add_row(recommended)
+            console.print(table)
+        model = typer.prompt("Default model", default=effective_default_model)
     if not api_base:
-        api_base = typer.prompt("API base (optional)", default=current_base)
+        if current_base:
+            console.print(
+                f"Default API base for `{provider}`: {current_base}"
+            )
+        api_base = typer.prompt("API base (leave blank to use provider default)", default=current_base)
+    if not api_key:
+        if current_key:
+            console.print(
+                f"Existing API key detected for `{provider}`. Leave blank to keep the current key."
+            )
+        api_key = (
+            typer.prompt("API key", default="", hide_input=True, show_default=False).strip()
+            or current_key
+        )
+
+    alignment_issues = _provider_alignment_issues(
+        model=model,
+        selected_provider=provider,
+        api_base=api_base,
+        api_key=api_key,
+        fallback_word="falls back to",
+    )
+    fail_issues = [issue for issue in alignment_issues if issue[0] == "FAIL"]
+    warn_issues = [issue for issue in alignment_issues if issue[0] == "WARN"]
+
+    key_pattern = _describe_key_pattern(provider, api_key)
+    key_length = len(str(api_key or "").strip())
+    key_duplicate = "yes" if _looks_like_duplicated_secret(api_key) else "no"
+    if current_key and api_key == current_key:
+        key_source = "kept existing"
+    elif api_key:
+        key_source = "new input"
+    else:
+        key_source = "empty"
+
+    summary = Table(title="Config Wizard Summary")
+    summary.add_column("Field", style="cyan")
+    summary.add_column("Value", overflow="fold")
+    summary.add_row("config_path", str(path))
+    if selected_profile:
+        summary.add_row("setup_profile", selected_profile)
+    summary.add_row("provider", provider)
+    summary.add_row("default_model", str(model or "").strip() or "(empty)")
+    summary.add_row("api_base", api_base.strip() or "(default/none)")
+    summary.add_row("api_key", "set" if bool(str(api_key or "").strip()) else "empty")
+    summary.add_row("key_source", key_source)
+    summary.add_row("key_length", str(key_length))
+    summary.add_row("key_pattern", key_pattern)
+    summary.add_row("key_duplicate_check", key_duplicate)
+    summary.add_row("written", "no (dry-run)" if dry_run else "pending")
+    console.print(summary)
+
+    if alignment_issues:
+        issue_table = Table(title="Config Wizard Preflight")
+        issue_table.add_column("Level", style="cyan")
+        issue_table.add_column("Check")
+        issue_table.add_column("Guidance", overflow="fold")
+        for level, msg, fix in alignment_issues:
+            style = {"FAIL": "red", "WARN": "yellow"}.get(level, "white")
+            issue_table.add_row(f"[{style}]{level}[/{style}]", msg, fix)
+        console.print(issue_table)
+
+    if fail_issues:
+        raise typer.Exit(1)
+    if warn_issues and yes and not dry_run:
+        console.print(
+            "[red]Refusing to write config with unresolved warnings in non-interactive --yes mode.[/red]"
+        )
+        console.print("Re-run without `--yes` to review and confirm the warnings interactively.")
+        raise typer.Exit(1)
+    if warn_issues and not dry_run:
+        if not typer.confirm("Continue with these warnings?"):
+            console.print("Cancelled.")
+            raise typer.Exit(1)
 
     # Apply non-empty values only.
     if api_key.strip():
@@ -1662,21 +2011,9 @@ def config_wizard(
             console.print("Cancelled.")
             raise typer.Exit(0)
         save_config(config, path)
-
-    summary = Table(title="Config Wizard Summary")
-    summary.add_column("Field", style="cyan")
-    summary.add_column("Value", overflow="fold")
-    summary.add_row("config_path", str(path))
-    summary.add_row("provider", provider)
-    summary.add_row(
-        "api_key", "set" if bool(getattr(config.providers, provider).api_key) else "empty"
-    )
-    summary.add_row("api_base", getattr(config.providers, provider).api_base or "(default/none)")
-    summary.add_row("default_model", config.agents.defaults.model)
-    summary.add_row("written", "no (dry-run)" if dry_run else "yes")
-    console.print(summary)
+        console.print(f"[green]Config written:[/green] {path}")
     console.print(
-        '\nNext: [cyan]zen-claw status -v[/cyan] then [cyan]zen-claw agent -m "Hello"[/cyan]'
+        '\nNext: [cyan]zen-claw config doctor --strict[/cyan] then [cyan]zen-claw agent -m "Hello"[/cyan]'
     )
 
 
@@ -1696,70 +2033,6 @@ def config_doctor(
     """Validate provider/model/api_base consistency and show fix guidance."""
     from zen_claw.config.loader import get_config_path, load_config
 
-    def _infer_provider_id(model_name: str) -> str:
-        m = (model_name or "").lower()
-        if "openrouter" in m:
-            return "openrouter"
-        if "aihubmix" in m:
-            return "aihubmix"
-        if "anthropic" in m or "claude" in m:
-            return "anthropic"
-        if "openai" in m or "gpt" in m:
-            return "openai"
-        if "gemini" in m:
-            return "gemini"
-        if "deepseek" in m:
-            return "deepseek"
-        if "zhipu" in m or "glm" in m or "zai" in m:
-            return "zhipu"
-        if "dashscope" in m or "qwen" in m:
-            return "dashscope"
-        if "moonshot" in m or "kimi" in m:
-            return "moonshot"
-        if "groq" in m:
-            return "groq"
-        if "vllm" in m or "hosted_vllm/" in m:
-            return "vllm"
-        return ""
-
-    def _provider_id_from_config(config_obj, provider_obj) -> str:
-        for row in _provider_catalog():
-            pid = row["id"]
-            if getattr(config_obj.providers, pid) is provider_obj:
-                return pid
-        return ""
-
-    def _troubleshooting_hints(
-        model_name: str,
-        inferred_pid: str,
-        matched_pid: str,
-        key_ids: list[str],
-    ) -> list[str]:
-        hints: list[str] = []
-        if not key_ids:
-            hints.append(
-                "未配置任何 API Key：先运行 `zen-claw config wizard`，再执行 `zen-claw config doctor --strict`。"
-            )
-        if model_name and not inferred_pid:
-            hints.append(
-                "模型前缀未识别：建议使用 `provider/model` 形式（例如 `openrouter/...` 或 `deepseek/...`）。"
-            )
-        if inferred_pid and matched_pid and inferred_pid != matched_pid:
-            hints.append(
-                f"模型前缀与实际 provider 不一致：当前模型更像 `{inferred_pid}`，但解析到 `{matched_pid}`。请检查 model/apiKey/apiBase 三者是否同源。"
-            )
-        if inferred_pid in {"openrouter", "aihubmix"} and inferred_pid in key_ids:
-            hints.append("网关类 provider 建议显式设置 apiBase，避免在多环境切换时指向错误。")
-        if inferred_pid == "vllm":
-            hints.append(
-                "vLLM 场景务必配置 `providers.vllm.apiBase` 指向 OpenAI-compatible endpoint。"
-            )
-        if not hints:
-            hints.append(
-                "未发现典型配置冲突。若调用仍失败，请先执行 `zen-claw status -v` 查看实际生效后端。"
-            )
-        return hints
-
     path = config_path or get_config_path()
     config = load_config(path)
     model = str(config.agents.defaults.model or "")
@@ -1775,7 +2048,14 @@ def config_doctor(
         pid = row["id"]
         if str(getattr(config.providers, pid).api_key or "").strip():
             key_enabled.append(pid)
+    duplicated_key_providers = [
+        pid
+        for pid in ("openrouter", "aihubmix")
+        if _looks_like_duplicated_secret(str(getattr(config.providers, pid).api_key or "").strip())
+    ]
+    selected_cfg = getattr(config.providers, matched_id) if matched_id else None
     infos.append("providers_with_key=" + (", ".join(key_enabled) if key_enabled else "(none)"))
+    infos.append("config_path=" + str(path))
     infos.append("default_model=" + (model or "(empty)"))
     infos.append("inferred_provider=" + (inferred_id or "(unknown)"))
     infos.append("selected_provider=" + (matched_id or "(none)"))
@@ -1789,23 +2069,15 @@ def config_doctor(
             )
         )
 
-    if not model.strip():
-        issues.append(
-            (
-                "FAIL",
-                "agents.defaults.model is empty.",
-                "Set a model via `zen-claw config wizard --model ...`.",
-            )
+    issues.extend(
+        _provider_alignment_issues(
+            model=model,
+            selected_provider=matched_id,
+            api_base=str(getattr(selected_cfg, "api_base", "") or ""),
+            api_key=str(getattr(selected_cfg, "api_key", "") or ""),
+            fallback_word="falls back to",
         )
-
-    if inferred_id and matched_id and inferred_id != matched_id:
-        issues.append(
-            (
-                "WARN",
-                f"Model suggests `{inferred_id}` but key selection currently resolves to `{matched_id}`.",
-                "Ensure the intended provider has apiKey configured or switch model prefix.",
-            )
-        )
+    )
 
     if inferred_id:
         inferred_cfg = getattr(config.providers, inferred_id)
@@ -1815,47 +2087,6 @@ def config_doctor(
                     "WARN",
                     f"Inferred provider `{inferred_id}` has no apiKey.",
                     f"Set `providers.{inferred_id}.apiKey` or change model prefix.",
-                )
-            )
-
-    if inferred_id == "vllm":
-        vllm_cfg = config.providers.vllm
-        if not str(vllm_cfg.api_base or "").strip():
-            issues.append(
-                (
-                    "FAIL",
-                    "vLLM model detected but providers.vllm.apiBase is empty.",
-                    "Set `providers.vllm.apiBase` to your OpenAI-compatible endpoint.",
-                )
-            )
-
-    if matched_id in {"openrouter", "aihubmix"}:
-        base = str(getattr(config.providers, matched_id).api_base or "").strip()
-        if not base:
-            issues.append(
-                (
-                    "WARN",
-                    f"`{matched_id}` apiBase not set; default URL will be used.",
-                    "Set apiBase explicitly if you use a private gateway/proxy.",
-                )
-            )
-
-    if matched_id:
-        base = str(getattr(config.providers, matched_id).api_base or "").lower()
-        if matched_id == "openrouter" and base and "openrouter" not in base:
-            issues.append(
-                (
-                    "WARN",
-                    "openrouter selected but apiBase does not look like OpenRouter.",
-                    "Check providers.openrouter.apiBase.",
-                )
-            )
-        if matched_id == "aihubmix" and base and "aihubmix" not in base:
-            issues.append(
-                (
-                    "WARN",
-                    "aihubmix selected but apiBase does not look like AiHubMix.",
-                    "Check providers.aihubmix.apiBase.",
                 )
             )
 
@@ -2165,7 +2396,14 @@ def config_doctor(
     has_warn = any(level == "WARN" for level, _, _ in issues)
 
     console.print("\n[cyan]Troubleshooting[/cyan]")
-    for hint in _troubleshooting_hints(model, inferred_id, matched_id, key_enabled):
+    for hint in _troubleshooting_hints(
+        model_name=model,
+        inferred_pid=inferred_id,
+        matched_pid=matched_id,
+        key_ids=key_enabled,
+        config_path=path,
+        duplicated_key_providers=duplicated_key_providers,
+    ):
         console.print(f"  - {hint}")
 
     console.print("\n[cyan]Config Self-check Commands[/cyan]")
@@ -2251,8 +2489,14 @@ def config_troubleshoot(
             selected_provider = pid
             break
 
-    issues: list[tuple[str, str, str]] = []
-    if not prefix_ok:
+    issues = _provider_alignment_issues(
+        model=model,
+        selected_provider=selected_provider,
+        api_base=str(getattr(config.providers, selected_provider).api_base or "") if selected_provider else "",
+        api_key=str(getattr(config.providers, selected_provider).api_key or "") if selected_provider else "",
+        fallback_word="falls back to",
+    )
+    if not prefix_ok and not any("Model prefix is not recognized" in msg for _, msg, _ in issues):
         issues.append(
             (
                 "WARN",
@@ -2260,7 +2504,6 @@ def config_troubleshoot(
                 "示例：openrouter/anthropic/claude-3.5-sonnet",
             )
         )
-
     if provider_by_model and selected_provider and provider_by_model != selected_provider:
         issues.append(
             (
@@ -2269,33 +2512,6 @@ def config_troubleshoot(
                 "检查 model 前缀、对应 provider 的 apiKey/apiBase 是否同源",
             )
         )
-
-    if selected_provider:
-        api_base = str(getattr(config.providers, selected_provider).api_base or "").strip().lower()
-        if selected_provider == "openrouter" and api_base and "openrouter.ai" not in api_base:
-            issues.append(
-                (
-                    "WARN",
-                    "apiBase 与 provider 不匹配：openrouter 但 apiBase 不含 openrouter.ai",
-                    "检查 providers.openrouter.apiBase",
-                )
-            )
-        if selected_provider == "aihubmix" and api_base and "aihubmix" not in api_base:
-            issues.append(
-                (
-                    "WARN",
-                    "apiBase 与 provider 不匹配：aihubmix 但 apiBase 不含 aihubmix",
-                    "检查 providers.aihubmix.apiBase",
-                )
-            )
-        if selected_provider == "vllm" and not api_base:
-            issues.append(
-                (
-                    "FAIL",
-                    "vllm provider 需要显式 apiBase",
-                    "设置 providers.vllm.apiBase 指向 OpenAI-compatible endpoint",
-                )
-            )
 
     table = Table(title="Config Troubleshoot")
     table.add_column("Level", style="cyan")
@@ -2312,6 +2528,7 @@ def config_troubleshoot(
             style = "red" if level == "FAIL" else "yellow"
             table.add_row(f"[{style}]{level}[/{style}]", issue, suggestion)
     console.print(table)
+    console.print(f"\nConfig source: {path}")
 
     has_fail = any(level == "FAIL" for level, _, _ in issues)
     has_warn = any(level == "WARN" for level, _, _ in issues)

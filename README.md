@@ -91,6 +91,8 @@ zen-claw config wizard
 zen-claw config doctor --strict
 ```
 
+The wizard writes the active config to `~/.zen-claw/config.json`. This path is global for the current user and does not change with your working directory.
+
 ### 3. Run A Local Agent Prompt
 
 ```powershell
@@ -254,6 +256,8 @@ pip install -e .[dev]
 zen-claw config wizard
 zen-claw config doctor --strict
 ```
+
+向导会把当前生效配置写入 `~/.zen-claw/config.json`。这是当前用户的全局配置路径，不会随着你切换工作目录而改变。
 
 ### 3. 本地运行一个 Agent Prompt
 

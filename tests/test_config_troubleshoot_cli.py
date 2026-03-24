@@ -41,6 +41,7 @@ def test_config_troubleshoot_warns_on_unrecognized_model_prefix(tmp_path: Path) 
     out = CliRunner().invoke(app, ["config", "troubleshoot", "--config", str(cfg), "--strict"])
     assert out.exit_code == 1
     assert "模型名前缀未识别" in out.output
+    assert "Config source:" in out.output
 
 
 def test_config_troubleshoot_warns_on_provider_model_mismatch(tmp_path: Path) -> None:
@@ -60,3 +61,25 @@ def test_config_troubleshoot_warns_on_provider_model_mismatch(tmp_path: Path) ->
     out = CliRunner().invoke(app, ["config", "troubleshoot", "--config", str(cfg), "--strict"])
     assert out.exit_code == 1
     assert "selected->anthropic" in out.output
+
+
+def test_config_troubleshoot_fails_on_duplicated_gateway_key(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.json"
+    duplicated = "sk-or-v1-demo-key" * 2
+    cfg.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": duplicated,
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = CliRunner().invoke(app, ["config", "troubleshoot", "--config", str(cfg)])
+    assert out.exit_code == 1
+    assert "secret twice" in out.output.lower()

@@ -59,7 +59,7 @@ def test_config_doctor_strict_fails_on_warning(tmp_path: Path) -> None:
 
     out = CliRunner().invoke(app, ["config", "doctor", "--config", str(cfg), "--strict"])
     assert out.exit_code == 1
-    assert "default URL will be used" in out.output
+    assert "built-in gateway default" in out.output
 
 
 def test_config_doctor_prints_troubleshooting_and_production_suggestions(tmp_path: Path) -> None:
@@ -80,6 +80,59 @@ def test_config_doctor_prints_troubleshooting_and_production_suggestions(tmp_pat
     assert "Config Self-check Commands" in out.output
     assert "Production Suggestions" in out.output
     assert "zen-claw config wizard --dry-run" in out.output
+    assert "config_path=" in out.output
+
+
+def test_config_doctor_strict_fails_when_model_prefix_is_unknown_and_provider_falls_back(
+    tmp_path: Path,
+) -> None:
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "stepfun/step-3.5-flash:free"}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": "sk-or-test",
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = CliRunner().invoke(app, ["config", "doctor", "--config", str(cfg), "--strict"])
+    assert out.exit_code == 1
+    lowered = out.output.lower()
+    assert "falls back to `openrouter`" in lowered
+    assert "provider/model" in lowered
+
+
+def test_config_doctor_fails_on_duplicated_gateway_key(tmp_path: Path) -> None:
+    duplicated = "sk-or-v1-demo-key" * 2
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": "openrouter/anthropic/claude-3.5-sonnet"}},
+                "providers": {
+                    "openrouter": {
+                        "apiKey": duplicated,
+                        "apiBase": "https://openrouter.ai/api/v1",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = CliRunner().invoke(app, ["config", "doctor", "--config", str(cfg)])
+    assert out.exit_code == 1
+    lowered = out.output.lower()
+    assert "secret twice" in lowered
+    assert "paste the api key once" in lowered
+    assert "该 key 看起来像把同一个 secret 粘贴了两次" in out.output
 
 
 def test_config_doctor_warns_when_browser_sidecar_allowlist_missing(tmp_path: Path) -> None:

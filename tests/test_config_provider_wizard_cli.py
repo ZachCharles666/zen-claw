@@ -48,6 +48,22 @@ def test_config_wizard_write_creates_or_updates_config(tmp_path: Path) -> None:
     assert payload["agents"]["defaults"]["model"] == "openrouter/anthropic/claude-3.5-sonnet"
 
 
+def test_config_wizard_interactive_profile_defaults_openrouter(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.json"
+    out = CliRunner().invoke(
+        app,
+        ["config", "wizard", "--config", str(cfg)],
+        input="\n\nsk-or-test\ny\n",
+    )
+    assert out.exit_code == 0
+    assert "Step 1/4" in out.output
+    assert "setup_profile" in out.output
+    payload = json.loads(cfg.read_text(encoding="utf-8"))
+    assert payload["providers"]["openrouter"]["apiKey"] == "sk-or-test"
+    assert payload["providers"]["openrouter"]["apiBase"] == "https://openrouter.ai/api/v1"
+    assert payload["agents"]["defaults"]["model"] == "openrouter/anthropic/claude-3.5-sonnet"
+
+
 def test_config_wizard_dry_run_keeps_file_unchanged(tmp_path: Path) -> None:
     cfg = tmp_path / "config.json"
     cfg.write_text(
@@ -80,4 +96,58 @@ def test_config_wizard_dry_run_keeps_file_unchanged(tmp_path: Path) -> None:
     )
     assert out.exit_code == 0
     assert "Dry-run" in out.output
+    assert "key_length" in out.output
+    assert "key_pattern" in out.output
     assert cfg.read_text(encoding="utf-8") == before
+
+
+def test_config_wizard_scripted_provider_model_mismatch_requires_interactive_review(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.json"
+    out = CliRunner().invoke(
+        app,
+        [
+            "config",
+            "wizard",
+            "--config",
+            str(cfg),
+            "--provider",
+            "openrouter",
+            "--api-key",
+            "sk-or-test",
+            "--model",
+            "stepfun/step-3.5-flash:free",
+            "--api-base",
+            "https://openrouter.ai/api/v1",
+            "--yes",
+        ],
+    )
+    assert out.exit_code == 1
+    assert "Model prefix is not recognized" in out.output
+    assert "Refusing to write config with unresolved warnings" in out.output
+    assert not cfg.exists()
+
+
+def test_config_wizard_rejects_duplicated_gateway_key(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.json"
+    duplicated = "sk-or-v1-demo-key" * 2
+    out = CliRunner().invoke(
+        app,
+        [
+            "config",
+            "wizard",
+            "--config",
+            str(cfg),
+            "--provider",
+            "openrouter",
+            "--api-key",
+            duplicated,
+            "--model",
+            "openrouter/anthropic/claude-3.5-sonnet",
+            "--api-base",
+            "https://openrouter.ai/api/v1",
+            "--yes",
+        ],
+    )
+    assert out.exit_code == 1
+    assert "secret twice" in out.output.lower()
+    assert not cfg.exists()
