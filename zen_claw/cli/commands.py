@@ -8,9 +8,11 @@ import os
 import secrets
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 import typer
 from loguru import logger
@@ -28,18 +30,24 @@ def _gateway_health_payload() -> dict[str, str]:
 
 
 def _start_gateway_health_server(*, port: int, host: str = "127.0.0.1") -> ThreadingHTTPServer:
+    from zen_claw.dashboard.server import _invoke_agent_text, verify_api_key
+
     class _GatewayHealthHandler(BaseHTTPRequestHandler):
+        def _send_json(self, status: int, payload: dict[str, Any]) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self):  # noqa: N802
-            if self.path == "/api/v1/health":
-                body = json.dumps(_gateway_health_payload(), ensure_ascii=False).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+            path = urlparse(self.path).path
+            if path == "/api/v1/health":
+                self._send_json(200, _gateway_health_payload())
                 return
-            if self.path == "/healthz":
+            if path == "/healthz":
                 body = b"ok"
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -51,6 +59,46 @@ def _start_gateway_health_server(*, port: int, host: str = "127.0.0.1") -> Threa
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
             self.wfile.write(b"not found")
+
+        def do_POST(self):  # noqa: N802
+            path = urlparse(self.path).path
+            if path != "/api/v1/agent/invoke":
+                self.send_response(404)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"not found")
+                return
+
+            api_key = str(self.headers.get("X-API-Key", ""))
+            if not api_key or not verify_api_key(api_key):
+                self._send_json(
+                    401,
+                    {
+                        "error": "invalid_api_key",
+                        "detail": "Provide a valid API key via the X-API-Key header.",
+                    },
+                )
+                return
+
+            try:
+                content_length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                content_length = 0
+            raw_body = self.rfile.read(content_length)
+            try:
+                payload = json.loads(raw_body.decode("utf-8") or "{}")
+            except Exception:
+                self._send_json(400, {"error": "invalid_json"})
+                return
+
+            message = str(payload.get("message", ""))
+            if not message.strip():
+                self._send_json(400, {"error": "message_required"})
+                return
+
+            session_id = str(payload.get("session_id") or uuid.uuid4())
+            text = asyncio.run(_invoke_agent_text(message, session_id))
+            self._send_json(200, {"response": text, "session_id": session_id})
 
         def log_message(self, format, *args):  # noqa: A003
             return
