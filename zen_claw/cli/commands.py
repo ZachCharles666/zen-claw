@@ -3567,7 +3567,12 @@ app.add_typer(skills_app, name="skills")
 
 @skills_app.command("list")
 def skills_list(
-    show_all: bool = typer.Option(False, "--all", "-a", help="Include disabled/unavailable skills"),
+    show_all: bool = typer.Option(
+        False,
+        "--all",
+        "-a",
+        help="Include unavailable skills with unmet requirements (disabled skills are always listed)",
+    ),
     json_out: bool = typer.Option(False, "--json", help="Output JSON instead of a table"),
     only_enforce_ready: bool = typer.Option(
         False,
@@ -3581,7 +3586,7 @@ def skills_list(
 
     config = load_config()
     loader = SkillsLoader(config.workspace_path)
-    skills = loader.list_skills(filter_unavailable=not show_all)
+    skills = loader.list_skills(filter_unavailable=False)
 
     if not skills:
         console.print("No skills found.")
@@ -3594,6 +3599,8 @@ def skills_list(
             enabled = loader.is_skill_enabled(name)
             available = loader._check_requirements(loader._get_skill_meta(name))
             manifest_data, manifest_load_errors = loader.get_skill_manifest(name)
+            if not show_all and not available:
+                continue
             if manifest_load_errors and any(
                 "manifest.json missing" in e for e in manifest_load_errors
             ):
@@ -3646,7 +3653,7 @@ def skills_list(
         return
 
     table = Table(title="Skills")
-    table.add_column("Name", style="cyan")
+    table.add_column("Skill", style="cyan")
     table.add_column("Source")
     table.add_column("Enabled")
     table.add_column("Available")
@@ -3660,6 +3667,8 @@ def skills_list(
         name = s["name"]
         enabled = loader.is_skill_enabled(name)
         available = loader._check_requirements(loader._get_skill_meta(name))
+        if not show_all and not available:
+            continue
         manifest_data, manifest_load_errors = loader.get_skill_manifest(name)
         perms_count = ""
         scopes_count = ""
@@ -3690,8 +3699,8 @@ def skills_list(
         table.add_row(
             name,
             s["source"],
-            "yes" if enabled else "no",
-            "yes" if available else "no",
+            "[green]yes[/green]" if enabled else "[red]no[/red]",
+            "[green]yes[/green]" if available else "[yellow]no[/yellow]",
             manifest_status,
             enforce_ready,
             perms_count,

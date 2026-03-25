@@ -59,6 +59,24 @@ def test_skills_cli_enable_disable_roundtrip(tmp_path: Path, monkeypatch) -> Non
     assert loader.is_skill_enabled("alpha") is True
 
 
+def test_skills_cli_list_shows_disabled_skill_with_no(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    workspace = tmp_path / "ws"
+    builtin = tmp_path / "builtin"
+    workspace.mkdir(parents=True)
+    builtin.mkdir(parents=True)
+    _write_skill(workspace, "alpha")
+    _patch_workspace(monkeypatch, workspace, builtin)
+
+    out_disable = runner.invoke(app, ["skills", "disable", "alpha"])
+    assert out_disable.exit_code == 0
+
+    out_list = runner.invoke(app, ["skills", "list"])
+    assert out_list.exit_code == 0
+    assert "alpha" in out_list.output
+    assert "no" in out_list.output
+
+
 def test_skills_cli_validate_strict_fails_without_manifest(tmp_path: Path, monkeypatch) -> None:
     runner = CliRunner()
     workspace = tmp_path / "ws"

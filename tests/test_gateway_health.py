@@ -4,6 +4,7 @@ import hmac
 import json
 import socket
 import time
+import urllib
 import urllib.error
 import urllib.request
 
@@ -21,8 +22,15 @@ def _free_port() -> int:
 
 
 def _request(url: str) -> tuple[int, str]:
-    with urllib.request.urlopen(url, timeout=5) as resp:
-        return int(resp.status), resp.read().decode("utf-8")
+    last_error: Exception | None = None
+    for _ in range(5):
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                return int(resp.status), resp.read().decode("utf-8")
+        except (urllib.error.URLError, TimeoutError, ConnectionAbortedError) as exc:
+            last_error = exc
+            time.sleep(0.05)
+    raise last_error if last_error is not None else RuntimeError("request failed")
 
 
 def _post(url: str, payload: dict[str, object], *, api_key: str | None = None) -> tuple[int, str]:
@@ -31,22 +39,34 @@ def _post(url: str, payload: dict[str, object], *, api_key: str | None = None) -
     req.add_header("Content-Type", "application/json")
     if api_key:
         req.add_header("X-API-Key", api_key)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return int(resp.status), resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        return int(exc.code), exc.read().decode("utf-8")
+    last_error: Exception | None = None
+    for _ in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return int(resp.status), resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            return int(exc.code), exc.read().decode("utf-8")
+        except (urllib.error.URLError, TimeoutError, ConnectionAbortedError) as exc:
+            last_error = exc
+            time.sleep(0.05)
+    raise last_error if last_error is not None else RuntimeError("request failed")
 
 
 def _post_raw(url: str, body: bytes, headers: dict[str, str] | None = None) -> tuple[int, str]:
     req = urllib.request.Request(url, data=body, method="POST")
     for key, value in (headers or {}).items():
         req.add_header(key, value)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return int(resp.status), resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        return int(exc.code), exc.read().decode("utf-8")
+    last_error: Exception | None = None
+    for _ in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return int(resp.status), resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            return int(exc.code), exc.read().decode("utf-8")
+        except (urllib.error.URLError, TimeoutError, ConnectionAbortedError) as exc:
+            last_error = exc
+            time.sleep(0.05)
+    raise last_error if last_error is not None else RuntimeError("request failed")
 
 
 def _sign(secret: str, body: bytes, ts: int, nonce: str) -> str:
