@@ -29,13 +29,85 @@ def _gateway_health_payload() -> dict[str, str]:
     return {"status": "ok", "service": "zen-claw", "surface": "gateway"}
 
 
+def _require_gateway_api_key(headers: Any, send_json: Any) -> bool:
+    from zen_claw.dashboard.server import verify_api_key
+
+    api_key = str(headers.get("X-API-Key", ""))
+    if api_key and verify_api_key(api_key):
+        return True
+    send_json(
+        401,
+        {
+            "error": "invalid_api_key",
+            "detail": "Provide a valid API key via the X-API-Key header.",
+        },
+    )
+    return False
+
+
+def _gateway_agents_payload() -> dict[str, Any]:
+    from zen_claw.agent.pool import list_agent_profiles
+    from zen_claw.config.loader import get_data_dir, load_config
+    from zen_claw.dashboard.server import _collect_pending_apply_state
+
+    cfg = load_config()
+    data_dir = get_data_dir()
+    rows = [
+        {
+            "agent_id": row.agent_id,
+            "display_name": row.display_name,
+            "description": row.description,
+            "model": row.model,
+            "vision_model": row.vision_model,
+            "thinking_model": row.thinking_model,
+            "fallback_model": row.fallback_model,
+            "cost_model": row.cost_model,
+            "stability_model": row.stability_model,
+            "planning_enabled": bool(row.enable_planning),
+            "workspace": str(row.workspace),
+            "registered": bool(row.is_registered),
+            "intent_model_overrides": dict(row.intent_model_overrides or {}),
+            "task_type_model_overrides": dict(row.task_type_model_overrides or {}),
+            "allowed_models": list(row.allowed_models or []),
+            "routing_keywords": list(
+                getattr(cfg.agents.profiles.get(row.agent_id), "routing_keywords", []) or []
+            ),
+            "routing_keywords_count": len(
+                getattr(cfg.agents.profiles.get(row.agent_id), "routing_keywords", []) or []
+            ),
+            "skill_names": list(row.skill_names or []),
+            "skill_count": len(row.skill_names or []),
+            "allowed_tools_count": len(row.allowed_tools or []),
+            "denied_tools_count": len(row.denied_tools or []),
+        }
+        for row in list_agent_profiles(cfg)
+    ]
+    pending_state = _collect_pending_apply_state(
+        data_dir=data_dir,
+        actions_path=data_dir / "dashboard" / "agent_actions.log.jsonl",
+        apply_path=data_dir / "dashboard" / "agent_apply.log.jsonl",
+        target_field="agent_id",
+    )
+    recent_actions = list(pending_state["recent_actions"])
+    pending = list(pending_state["pending"])
+    return {
+        "agents": rows,
+        "total": len(rows),
+        "recent_actions": recent_actions[:5],
+        "actions_total": len(recent_actions),
+        "pending_reload": len(pending) > 0,
+        "pending_reload_count": len(pending),
+        "last_apply": pending_state["last_apply"],
+    }
+
+
 def _start_gateway_health_server(
     *,
     port: int,
     host: str = "127.0.0.1",
     webhook_trigger_channel: Any | None = None,
 ) -> ThreadingHTTPServer:
-    from zen_claw.dashboard.server import _invoke_agent_text, verify_api_key
+    from zen_claw.dashboard.server import _invoke_agent_text, _read_agent_profile_detail
     from zen_claw.dashboard.webhooks import _append_workflow_webhook_event
 
     class _GatewayHealthHandler(BaseHTTPRequestHandler):
@@ -52,6 +124,32 @@ def _start_gateway_health_server(
             path = urlparse(self.path).path
             if path == "/api/v1/health":
                 self._send_json(200, _gateway_health_payload())
+                return
+            if path == "/api/v1/agents":
+                if not _require_gateway_api_key(self.headers, self._send_json):
+                    return
+                self._send_json(200, _gateway_agents_payload())
+                return
+            agents_prefix = "/api/v1/agents/"
+            if path.startswith(agents_prefix):
+                if not _require_gateway_api_key(self.headers, self._send_json):
+                    return
+                agent_id = path[len(agents_prefix) :].strip("/")
+                if not agent_id or "/" in agent_id:
+                    self.send_response(404)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b"not found")
+                    return
+                try:
+                    detail = json.loads(_read_agent_profile_detail(agent_id=agent_id).body.decode("utf-8"))
+                except Exception:
+                    self.send_response(404)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(b"not found")
+                    return
+                self._send_json(200, detail)
                 return
             if path == "/healthz":
                 body = b"ok"
@@ -98,15 +196,7 @@ def _start_gateway_health_server(
                 self.wfile.write(b"not found")
                 return
 
-            api_key = str(self.headers.get("X-API-Key", ""))
-            if not api_key or not verify_api_key(api_key):
-                self._send_json(
-                    401,
-                    {
-                        "error": "invalid_api_key",
-                        "detail": "Provide a valid API key via the X-API-Key header.",
-                    },
-                )
+            if not _require_gateway_api_key(self.headers, self._send_json):
                 return
 
             try:

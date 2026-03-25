@@ -21,12 +21,17 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _request(url: str) -> tuple[int, str]:
+def _request(url: str, *, headers: dict[str, str] | None = None) -> tuple[int, str]:
+    req = urllib.request.Request(url, method="GET")
+    for key, value in (headers or {}).items():
+        req.add_header(key, value)
     last_error: Exception | None = None
     for _ in range(5):
         try:
-            with urllib.request.urlopen(url, timeout=5) as resp:
+            with urllib.request.urlopen(req, timeout=5) as resp:
                 return int(resp.status), resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            return int(exc.code), exc.read().decode("utf-8")
         except (urllib.error.URLError, TimeoutError, ConnectionAbortedError) as exc:
             last_error = exc
             time.sleep(0.05)
@@ -143,6 +148,108 @@ def test_gateway_invoke_returns_response_with_key(monkeypatch, tmp_path) -> None
         payload = json.loads(body)
         assert payload["response"] == "echo:invoke-ok"
         assert payload["session_id"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gateway_agents_require_api_key(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: tmp_path)
+    port = _free_port()
+    server = _start_gateway_health_server(port=port)
+    try:
+        status, body = _request(f"http://127.0.0.1:{port}/api/v1/agents")
+        assert status == 401
+        payload = json.loads(body)
+        assert payload["error"] == "invalid_api_key"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_gateway_agents_endpoints_return_dashboard_shapes(monkeypatch, tmp_path) -> None:
+    from zen_claw.config.schema import Config
+
+    cfg = Config.model_validate(
+        {
+            "agents": {
+                "defaults": {
+                    "workspace": str(tmp_path / "default-ws"),
+                    "model": "default-model",
+                    "enable_planning": True,
+                },
+                "profiles": {
+                    "finance_writer": {
+                        "display_name": "Finance Writer",
+                        "description": "Handles finance copy",
+                        "workspace": str(tmp_path / "finance-ws"),
+                        "model": "deepseek-chat",
+                        "system_prompt": "You are the finance agent.",
+                        "skill_names": ["content_gen"],
+                        "allowed_tools": ["rag_retrieve", "content_gen"],
+                        "denied_tools": ["exec"],
+                        "allowed_models": ["deepseek-chat", "gpt-4.1-mini"],
+                        "cost_model": "gpt-4.1-nano",
+                        "stability_model": "gpt-4.1",
+                        "intent_model_overrides": {"finance": "gpt-4.1-mini"},
+                        "task_type_model_overrides": {"message.send": "gpt-4.1-nano"},
+                        "routing_keywords": ["finance", "bank campaign"],
+                    }
+                },
+            },
+            "channels": {
+                "webchat": {
+                    "enabled": True,
+                    "agent_profile": "finance_writer",
+                }
+            },
+        }
+    )
+    monkeypatch.setattr("zen_claw.config.loader.load_config", lambda: cfg)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: tmp_path)
+    raw, _ = generate_api_key()
+    store_api_key(raw)
+    port = _free_port()
+    server = _start_gateway_health_server(port=port)
+    try:
+        status, body = _request(
+            f"http://127.0.0.1:{port}/api/v1/agents",
+            headers={"X-API-Key": raw},
+        )
+        assert status == 200
+        payload = json.loads(body)
+        assert payload["total"] == 2
+        assert payload["agents"][1]["agent_id"] == "finance_writer"
+        assert payload["agents"][1]["model"] == "deepseek-chat"
+        assert payload["agents"][1]["routing_keywords"] == ["finance", "bank campaign"]
+        assert payload["actions_total"] == 0
+        assert payload["pending_reload"] is False
+        assert payload["pending_reload_count"] == 0
+
+        detail_status, detail_body = _request(
+            f"http://127.0.0.1:{port}/api/v1/agents/finance_writer",
+            headers={"X-API-Key": raw},
+        )
+        assert detail_status == 200
+        detail = json.loads(detail_body)
+        assert detail["agent_id"] == "finance_writer"
+        assert detail["display_name"] == "Finance Writer"
+        assert detail["effective"]["workspace"] == str((tmp_path / "finance-ws").resolve())
+        assert detail["effective"]["model"] == "deepseek-chat"
+        assert detail["effective"]["system_prompt"] == "You are the finance agent."
+        assert detail["effective"]["skill_names"] == ["content_gen"]
+        assert detail["effective"]["allowed_tools"] == ["rag_retrieve", "content_gen"]
+        assert detail["effective"]["denied_tools"] == ["exec"]
+        assert detail["effective"]["allowed_models"] == ["deepseek-chat", "gpt-4.1-mini"]
+        assert detail["effective"]["cost_model"] == "gpt-4.1-nano"
+        assert detail["effective"]["stability_model"] == "gpt-4.1"
+        assert detail["effective"]["intent_model_overrides"] == {"finance": "gpt-4.1-mini"}
+        assert detail["effective"]["task_type_model_overrides"] == {
+            "message.send": "gpt-4.1-nano"
+        }
+        assert detail["profile_overrides"]["routing_keywords"] == ["finance", "bank campaign"]
+        assert detail["profile_overrides"]["skill_names"] == ["content_gen"]
+        assert detail["channel_references"] == [{"channel": "webchat", "display_name": "WebChat"}]
     finally:
         server.shutdown()
         server.server_close()
