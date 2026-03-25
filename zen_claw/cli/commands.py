@@ -12,7 +12,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlparse
 
 import typer
 from loguru import logger
@@ -29,8 +29,14 @@ def _gateway_health_payload() -> dict[str, str]:
     return {"status": "ok", "service": "zen-claw", "surface": "gateway"}
 
 
-def _start_gateway_health_server(*, port: int, host: str = "127.0.0.1") -> ThreadingHTTPServer:
+def _start_gateway_health_server(
+    *,
+    port: int,
+    host: str = "127.0.0.1",
+    webhook_trigger_channel: Any | None = None,
+) -> ThreadingHTTPServer:
     from zen_claw.dashboard.server import _invoke_agent_text, verify_api_key
+    from zen_claw.dashboard.webhooks import _append_workflow_webhook_event
 
     class _GatewayHealthHandler(BaseHTTPRequestHandler):
         def _send_json(self, status: int, payload: dict[str, Any]) -> None:
@@ -61,8 +67,31 @@ def _start_gateway_health_server(*, port: int, host: str = "127.0.0.1") -> Threa
             self.wfile.write(b"not found")
 
         def do_POST(self):  # noqa: N802
-            path = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            path = parsed.path
             if path != "/api/v1/agent/invoke":
+                webhook_prefix = "/webhook/trigger/"
+                if path.startswith(webhook_prefix):
+                    agent_id = path[len(webhook_prefix) :].strip("/")
+                    if not agent_id:
+                        self.send_response(404)
+                        self.send_header("Content-Type", "text/plain; charset=utf-8")
+                        self.end_headers()
+                        self.wfile.write(b"not found")
+                        return
+                    if webhook_trigger_channel is None:
+                        self._send_json(
+                            503,
+                            {"success": False, "reason": "webhook_trigger_channel_not_enabled"},
+                        )
+                        return
+                    self._handle_webhook_trigger(
+                        agent_id=agent_id,
+                        parsed=parsed,
+                        webhook_trigger_channel=webhook_trigger_channel,
+                        append_audit=_append_workflow_webhook_event,
+                    )
+                    return
                 self.send_response(404)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.end_headers()
@@ -99,6 +128,71 @@ def _start_gateway_health_server(*, port: int, host: str = "127.0.0.1") -> Threa
             session_id = str(payload.get("session_id") or uuid.uuid4())
             text = asyncio.run(_invoke_agent_text(message, session_id))
             self._send_json(200, {"response": text, "session_id": session_id})
+
+        def _handle_webhook_trigger(
+            self,
+            *,
+            agent_id: str,
+            parsed: Any,
+            webhook_trigger_channel: Any,
+            append_audit: Any,
+        ) -> None:
+            try:
+                content_length = int(self.headers.get("Content-Length", "0") or "0")
+            except ValueError:
+                content_length = 0
+            body_bytes = self.rfile.read(content_length)
+            headers = {str(k).lower(): str(v) for k, v in self.headers.items()}
+            client_ip = str(self.client_address[0] if self.client_address else "")
+            ok, reason = webhook_trigger_channel.validate_request(
+                body=body_bytes,
+                headers=headers,
+                client_ip=client_ip,
+            )
+            if not ok:
+                self._send_json(403, {"success": False, "reason": reason})
+                return
+
+            payload: Any = {}
+            if body_bytes:
+                ctype = str(self.headers.get("Content-Type", "")).lower()
+                try:
+                    if "application/json" in ctype:
+                        payload = json.loads(body_bytes.decode("utf-8"))
+                    elif (
+                        "application/x-www-form-urlencoded" in ctype
+                        or "multipart/form-data" in ctype
+                    ):
+                        payload = {k: v for k, v in parse_qsl(body_bytes.decode("utf-8"))}
+                    else:
+                        text = body_bytes.decode("utf-8", errors="ignore").strip()
+                        if text:
+                            payload = {"content": text}
+                except Exception:
+                    payload = {"content": body_bytes.decode("utf-8", errors="ignore")}
+            query_map = {str(k): str(v) for k, v in parse_qsl(parsed.query, keep_blank_values=True)}
+            accepted = asyncio.run(
+                webhook_trigger_channel.ingest_trigger(
+                    agent_id=agent_id,
+                    payload=payload,
+                    headers=headers,
+                    query=query_map,
+                    client_ip=client_ip,
+                    metadata={"source": "gateway.webhooks.trigger"},
+                )
+            )
+            append_audit(agent_id, accepted, client_ip)
+            self._send_json(
+                202,
+                {
+                    "success": True,
+                    "agent_id": agent_id,
+                    "trace_id": accepted.get("trace_id", ""),
+                    "workflow_source": accepted.get("workflow_source", ""),
+                    "workflow_run_id": accepted.get("workflow_run_id", ""),
+                    "workflow_step": accepted.get("workflow_step", ""),
+                },
+            )
 
         def log_message(self, format, *args):  # noqa: A003
             return
@@ -903,9 +997,6 @@ def gateway(
         logging.basicConfig(level=logging.DEBUG)
 
     console.print(f"{_display_logo()} Starting zen-claw gateway on port {port}...")
-    health_server = _start_gateway_health_server(port=port)
-    console.print(f"[green]✓[/green] Gateway health: http://127.0.0.1:{port}/api/v1/health")
-
     config = load_config()
     bus = MessageBus()
     provider = _make_provider(config)
@@ -1039,6 +1130,11 @@ def gateway(
 
     # Create channel manager before routing callbacks so gateway can reuse sticky routes.
     channels = ChannelManager(config, bus)
+    health_server = _start_gateway_health_server(
+        port=port,
+        webhook_trigger_channel=channels.get_channel("webhook_trigger"),
+    )
+    console.print(f"[green]✓[/green] Gateway health: http://127.0.0.1:{port}/api/v1/health")
     agent_router = AgentRouter(
         config,
         resolve_bound_agent=lambda channel, chat_id, user_id: channels.resolve_agent(
