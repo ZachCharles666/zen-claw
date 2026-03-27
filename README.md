@@ -1,6 +1,8 @@
-# zen-claw
+# zen-claw · 小馋虾
 
 [中文版](#中文版)
+
+**中文名：小馋虾** — 本地优先的企业级 AI Agent 框架
 
 zen-claw is a local-first AI agent framework for developers who need controllable tool execution, multi-agent orchestration, multi-channel delivery, and traceable operator workflows in one codebase.
 
@@ -161,7 +163,10 @@ Use [`docs/verify_profile.md`](docs/verify_profile.md) as the source of truth. C
 
 ## License
 
-MIT
+BUSL-1.1 (Business Source License 1.1)
+
+Commercial use is restricted until 2030-04-01, after which this software is available under Apache 2.0.
+During the restriction period, use is permitted for evaluation, testing, and non-production purposes.
 
 ---
 
@@ -327,4 +332,7 @@ zen-claw crawler run --source https://example.com --notebook demo
 
 ## 许可证
 
-MIT
+BUSL-1.1（Business Source License 1.1）
+
+商业限制期至 2030-04-01，到期后自动转为 Apache 2.0。
+限制期内允许用于评估、测试及非生产目的。
