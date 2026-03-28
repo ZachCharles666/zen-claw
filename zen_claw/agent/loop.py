@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         WebSearchConfig,
     )
     from zen_claw.cron.service import CronService
+    from zen_claw.observability.audit import AuditWorker
     from zen_claw.session.manager import Session
 
 from loguru import logger
@@ -129,6 +130,7 @@ class AgentLoop:
         skill_names: list[str] | None = None,
         skill_permissions_mode: str = "off",  # off|warn|enforce
         allowed_models: list[str] | None = None,
+        audit_worker: "AuditWorker | None" = None,
     ):
         from zen_claw.config.schema import (
             BrowserToolConfig,
@@ -217,10 +219,12 @@ class AgentLoop:
         except Exception:
             self.approval_gate = None
 
+        self._audit_worker = audit_worker
         self.tools = ToolRegistry(
             policy=ToolPolicyEngine(
                 default_deny_tools=set(self.tool_policy_config.default_deny_tools)
-            )
+            ),
+            audit_worker=audit_worker,
         )
         self.tools.set_kill_switch(
             self.tool_policy_config.kill_switch_enabled,
@@ -453,6 +457,36 @@ class AgentLoop:
             tts_cfg = load_config()
             if getattr(tts_cfg.providers, "tts", "edge") != "off":
                 self.tools.register(TextToSpeechTool(workspace=self.workspace, config=tts_cfg))
+        except Exception:
+            pass
+
+        # Daily-assistant tools (email, calendar, gdrive, notion) — all optional
+        try:
+            from zen_claw.config.loader import load_config as _load_cfg
+
+            _da_cfg = _load_cfg()
+            _tools_cfg = _da_cfg.tools
+
+            if _tools_cfg.email.enabled:
+                from zen_claw.agent.tools.email import EmailTool
+
+                self.tools.register(EmailTool(config=_tools_cfg.email))
+
+            _cal_cfg = _tools_cfg.calendar
+            if _cal_cfg.google.enabled or _cal_cfg.outlook.enabled or _cal_cfg.apple.enabled:
+                from zen_claw.agent.tools.calendar import CalendarTool
+
+                self.tools.register(CalendarTool(config=_cal_cfg))
+
+            if _tools_cfg.gdrive.enabled:
+                from zen_claw.agent.tools.gdrive import GDriveTool
+
+                self.tools.register(GDriveTool(config=_tools_cfg.gdrive))
+
+            if _tools_cfg.notion.enabled:
+                from zen_claw.agent.tools.notion import NotionTool
+
+                self.tools.register(NotionTool(config=_tools_cfg.notion))
         except Exception:
             pass
 
@@ -728,6 +762,17 @@ class AgentLoop:
             The response message, or None if no response needed.
         """
         trace_id, msg.metadata = TraceContext.ensure_trace_id(msg.metadata)
+
+        if self._audit_worker:
+            await self._audit_worker.audit_turn(
+                trace_id,
+                {
+                    "event_type": "message.inbound",
+                    "channel": msg.channel,
+                    "chat_id": msg.chat_id,
+                    "sender_id": getattr(msg, "sender_id", None),
+                },
+            )
 
         # Resolve session early so runtime commands can be session-local.
         session = self.sessions.get_or_create(msg.session_key)
@@ -2361,33 +2406,3 @@ class AgentLoop:
 
     _CHANNEL_USER_ALLOW_TOOLS = ["read_file", "web_search"]
     _HIGH_RISK_SKILL_SCOPES = {"exec", "message", "cron", "sessions"}
-        # Daily-assistant tools (email, calendar, gdrive, notion) — all optional
-        try:
-            from zen_claw.config.loader import load_config as _load_cfg
-
-            _da_cfg = _load_cfg()
-            _tools_cfg = _da_cfg.tools
-
-            if _tools_cfg.email.enabled:
-                from zen_claw.agent.tools.email import EmailTool
-
-                self.tools.register(EmailTool(config=_tools_cfg.email))
-
-            _cal_cfg = _tools_cfg.calendar
-            if _cal_cfg.google.enabled or _cal_cfg.outlook.enabled or _cal_cfg.apple.enabled:
-                from zen_claw.agent.tools.calendar import CalendarTool
-
-                self.tools.register(CalendarTool(config=_cal_cfg))
-
-            if _tools_cfg.gdrive.enabled:
-                from zen_claw.agent.tools.gdrive import GDriveTool
-
-                self.tools.register(GDriveTool(config=_tools_cfg.gdrive))
-
-            if _tools_cfg.notion.enabled:
-                from zen_claw.agent.tools.notion import NotionTool
-
-                self.tools.register(NotionTool(config=_tools_cfg.notion))
-        except Exception:
-            pass
-
