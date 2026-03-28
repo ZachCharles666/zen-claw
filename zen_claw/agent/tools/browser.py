@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from zen_claw.agent.tools._url_guard import is_domain_blocked
 from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 
@@ -122,6 +123,16 @@ class _BrowserSidecarBase(Tool):
                 ToolErrorKind.RUNTIME,
                 str(data.get("error") or "browser action failed"),
                 code=str(data.get("error_code") or "browser_action_failed"),
+            )
+
+        # Response-layer domain guard: validate the URL the sidecar actually landed on
+        # (may differ from the requested URL due to redirects).
+        final_url = str(data.get("finalUrl") or data.get("url") or "")
+        if final_url and self.blocked_domains and is_domain_blocked(final_url, self.blocked_domains):
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                f"Browser response URL '{final_url}' is blocked by domain policy",
+                code="browser_blocked_domain",
             )
 
         return ToolResult.success(json.dumps(data, ensure_ascii=False))
