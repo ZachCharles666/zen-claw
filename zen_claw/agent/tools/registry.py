@@ -9,6 +9,7 @@ from loguru import logger
 from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.policy import ToolPolicyEngine
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
+from zen_claw.observability.audit import AuditWorker
 from zen_claw.observability.trace import TraceContext
 
 
@@ -19,10 +20,16 @@ class ToolRegistry:
     Allows dynamic registration and execution of tools.
     """
 
-    def __init__(self, policy: ToolPolicyEngine | None = None, quota_engine: Any = None):
+    def __init__(
+        self,
+        policy: ToolPolicyEngine | None = None,
+        quota_engine: Any = None,
+        audit_worker: AuditWorker | None = None,
+    ):
         self._tools: dict[str, Tool] = {}
         self._policy = policy or ToolPolicyEngine()
         self._quota_engine = quota_engine
+        self._audit_worker = audit_worker
         self._kill_switch_enabled: bool = False
         self._kill_switch_reason: str = ""
         # Optional additional gate (e.g. when a specific skill/plugin is loaded).
@@ -346,6 +353,18 @@ class ToolRegistry:
                     skill_permissions_mode=self._skill_permissions_mode,
                 )
             )
+            if self._audit_worker and trace_id:
+                await self._audit_worker.audit_turn(
+                    trace_id,
+                    {
+                        "event_type": "tool.executed",
+                        "tool": name,
+                        "ok": result.ok,
+                        "elapsed_ms": elapsed_ms,
+                        "error_kind": result.error.kind.value if result.error else None,
+                        "skill_names": self._active_skill_names or None,
+                    },
+                )
             return result
         except PermissionError as e:
             elapsed_ms = int((time.perf_counter() - started) * 1000)

@@ -14,6 +14,7 @@ from zen_claw.channels.base import BaseChannel
 from zen_claw.channels.registry import get_channel_config, iter_channel_specs
 from zen_claw.channels.routing import AgentRouteStore
 from zen_claw.config.schema import Config
+from zen_claw.observability.audit import AuditWorker
 from zen_claw.observability.trace import TraceContext
 
 
@@ -66,10 +67,17 @@ class ChannelManager:
     - Route outbound messages
     """
 
-    def __init__(self, config: Config, bus: MessageBus, rate_stats_path: Any | None = None):
+    def __init__(
+        self,
+        config: Config,
+        bus: MessageBus,
+        rate_stats_path: Any | None = None,
+        audit_worker: AuditWorker | None = None,
+    ):
         self.config = config
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
+        self._audit_worker = audit_worker
         self._dispatch_task: asyncio.Task | None = None
         self._route_store = self._init_route_store()
         self._route_gc_ttl_ms = 24 * 60 * 60 * 1000
@@ -369,6 +377,16 @@ class ChannelManager:
                             )
                         )
                         await channel.send(msg)
+                        if self._audit_worker:
+                            await self._audit_worker.audit_turn(
+                                trace_id,
+                                {
+                                    "event_type": "message.outbound",
+                                    "channel": msg.channel,
+                                    "chat_id": msg.chat_id,
+                                    "content_length": len(msg.content or ""),
+                                },
+                            )
                     except Exception as e:
                         logger.error(
                             f"Error sending to {msg.channel}: {e} "
