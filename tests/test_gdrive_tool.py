@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from zen_claw.agent.tools.gdrive import GDriveTool, _GOOGLE_DOC_MIME, _GOOGLE_SHEET_MIME
+from zen_claw.agent.tools.gdrive import _GOOGLE_DOC_MIME, _GOOGLE_SHEET_MIME, GDriveTool
 from zen_claw.agent.tools.result import ToolErrorKind
 from zen_claw.config.schema import GDriveConfig
 

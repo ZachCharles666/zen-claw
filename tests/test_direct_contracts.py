@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
 import zen_claw.agent.direct_contracts as dc
 from zen_claw.agent.direct_contracts import (
-    DirectResult,
     _extract_calculator,
     _extract_color,
     _extract_encode,
@@ -16,18 +13,9 @@ from zen_claw.agent.direct_contracts import (
     _extract_text_stats,
     _extract_timezone_list,
     _extract_unit_convert,
-    _handle_calculator,
-    _handle_color,
-    _handle_encode,
-    _handle_hash,
     _handle_ip_lookup,
-    _handle_json_format,
-    _handle_text_stats,
-    _handle_timezone_list,
-    _handle_unit_convert,
     route,
 )
-
 
 # ── Calculator ────────────────────────────────────────────────────────────────
 

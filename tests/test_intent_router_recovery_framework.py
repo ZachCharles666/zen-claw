@@ -168,6 +168,24 @@ def test_needs_constrained_replan_with_plan_preserves_structured_recovery() -> N
     assert result.recovery_outcome.plan.blocker.kind == "upstream_unavailable"
 
 
+def test_needs_constrained_replan_preserves_route_candidate_metadata() -> None:
+    result = IntentRouter._needs_constrained_replan(
+        intent_name="daily_workflow",
+        contract=IntentRouter._WEATHER_CONTRACT,
+        diagnostic="candidate_passthrough",
+        route_candidate={
+            "match": "daily_workflow",
+            "source": "declarative",
+            "raw_confidence": 0.75,
+        },
+    )
+
+    assert result.route_candidate is not None
+    assert result.route_candidate["match"] == "daily_workflow"
+    assert result.route_candidate["source"] == "declarative"
+    assert result.route_candidate["raw_confidence"] == 0.75
+
+
 def test_needs_explicit_approval_with_plan_preserves_structured_recovery() -> None:
     plan = RecoveryPlan(
         blocker=RecoveryBlocker(

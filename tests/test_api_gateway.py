@@ -770,6 +770,9 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert resp_list.json()["runtime_mode_breakdown"]["skill_first"] == 1
     assert resp_list.json()["checks_total"] == 0
     assert resp_list.json()["exports_total"] == 0
+    assert resp_list.json()["skills"][0]["intake_status"] == "local"
+    assert resp_list.json()["skills"][0]["promote_status"] == "candidate"
+    assert resp_list.json()["skills"][0]["intake_summary"]["verdict"] == "accept"
 
     incoming_dir = tmp_path / "incoming" / "beta"
     incoming_dir.mkdir(parents=True, exist_ok=True)
@@ -782,13 +785,21 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     resp_install = client.post(
         "/api/v1/skills/install",
         headers={"X-API-Key": valid_key},
-        json={"source": str(incoming_dir), "strict_manifest": True},
+        json={
+            "source": str(incoming_dir),
+            "strict_manifest": True,
+            "source_url": "https://example.com/beta.zip",
+            "source_version": "1.0.0",
+            "last_sync_checked_at": "2026-03-28T15:30:00Z",
+            "intake_status": "intake_review",
+        },
     )
     assert resp_install.status_code == 200
     installed = resp_install.json()
     assert installed["ok"] is True
     assert installed["name"] == "beta"
     assert installed["source_kind"] == "dir"
+    assert installed["governance"]["source_url"] == "https://example.com/beta.zip"
     assert (cfg.workspace_path / "skills" / "beta" / "SKILL.md").exists()
 
     action_rows = (tmp_path / "dashboard" / "skills_actions.log.jsonl").read_text(
@@ -896,6 +907,8 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert detail["package_policy"]["retention_hours"] == 24
     assert detail["package_policy"]["require_export_for_restore"] is True
     assert detail["package_policy"]["restore_ready"] is False
+    assert detail["governance"]["intake_status"] == "local"
+    assert detail["governance"]["promote_status"] == "candidate"
     resp_restore_plan = client.get("/api/v1/skills/alpha/restore-plan", headers={"X-API-Key": valid_key})
     assert resp_restore_plan.status_code == 200
     assert resp_restore_plan.json()["restore_plan"]["ready"] is False
@@ -905,6 +918,10 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert resp_installed_detail.status_code == 200
     installed_detail = resp_installed_detail.json()
     assert installed_detail["name"] == "beta"
+    assert installed_detail["governance"]["source_url"] == "https://example.com/beta.zip"
+    assert installed_detail["governance"]["source_version"] == "1.0.0"
+    assert installed_detail["governance"]["last_sync_checked_at"] == "2026-03-28T15:30:00Z"
+    assert installed_detail["governance"]["intake_status"] == "intake_review"
     assert installed_detail["recent_actions"][0]["action"] in {"install", "enable", "disable"}
     assert any(
         row["action"] == "install" and "installed skill: beta" in row["detail"]
@@ -1058,6 +1075,25 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
         row["action"] == "package_policy" for row in resp_detail.json()["recent_actions"]
     )
 
+    resp_promote = client.post(
+        "/api/v1/skills/alpha/promote",
+        headers={"X-API-Key": valid_key},
+        json={
+            "declarative_intent": "alpha_lookup",
+            "note": "ready for manual Gate 1 registration",
+        },
+    )
+    assert resp_promote.status_code == 200
+    assert resp_promote.json()["declarative_intent"] == "alpha_lookup"
+
+    resp_detail = client.get("/api/v1/skills/alpha", headers={"X-API-Key": valid_key})
+    assert resp_detail.status_code == 200
+    assert resp_detail.json()["governance"]["promote_status"] == "promoted"
+    assert resp_detail.json()["governance"]["promote_target_intent"] == "alpha_lookup"
+    assert any(
+        row["action"] == "promote" for row in resp_detail.json()["recent_actions"]
+    )
+
     resp_uninstall = client.post("/api/v1/skills/beta/uninstall", headers={"X-API-Key": valid_key})
     assert resp_uninstall.status_code == 200
     assert resp_uninstall.json()["name"] == "beta"
@@ -1066,7 +1102,7 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     action_rows = (tmp_path / "dashboard" / "skills_actions.log.jsonl").read_text(
         encoding="utf-8"
     ).splitlines()
-    assert len(action_rows) == 13
+    assert len(action_rows) == 14
     assert '"action": "uninstall"' in action_rows[-1]
 
     resp_list = client.get("/api/v1/skills", headers={"X-API-Key": valid_key})

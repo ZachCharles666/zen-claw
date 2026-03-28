@@ -1412,6 +1412,12 @@ class SkillsLoader:
             trust = ""
             runtime_intent = ""
             runtime_intent_mode = ""
+            source_url = ""
+            source_version = ""
+            last_sync_checked_at = ""
+            intake_status = ""
+            promote_status = ""
+            intake_summary: dict[str, object] = {}
             tests_present = Path(item["path"]).parent.joinpath("tests").is_dir()
             if isinstance(manifest, dict):
                 raw_permissions = manifest.get("permissions")
@@ -1425,6 +1431,13 @@ class SkillsLoader:
                 if isinstance(runtime_contract, dict):
                     runtime_intent = str(runtime_contract.get("intent") or "").strip()
                     runtime_intent_mode = str(runtime_contract.get("intent_mode") or "").strip()
+                metadata = self._read_skill_governance_metadata(manifest)
+                source_url = metadata["source_url"]
+                source_version = metadata["source_version"]
+                last_sync_checked_at = metadata["last_sync_checked_at"]
+                intake_status = metadata["intake_status"]
+                promote_status = metadata["promote_status"]
+                intake_summary = self.evaluate_skill_intake(manifest, manifest_status=manifest_status)
 
             for permission in permissions:
                 permission_breakdown[permission] = permission_breakdown.get(permission, 0) + 1
@@ -1454,6 +1467,12 @@ class SkillsLoader:
                     "scopes": scopes,
                     "runtime_intent": runtime_intent,
                     "runtime_intent_mode": runtime_intent_mode,
+                    "source_url": source_url,
+                    "source_version": source_version,
+                    "last_sync_checked_at": last_sync_checked_at,
+                    "intake_status": intake_status,
+                    "promote_status": promote_status,
+                    "intake_summary": intake_summary,
                     "tests_present": tests_present,
                 }
             )
@@ -1479,6 +1498,68 @@ class SkillsLoader:
             "scope_breakdown": dict(sorted(scope_breakdown.items(), key=lambda item: (-item[1], item[0]))),
             "skills": rows,
         }
+
+    @staticmethod
+    def _read_skill_governance_metadata(manifest: dict[str, object] | None) -> dict[str, str]:
+        payload = manifest if isinstance(manifest, dict) else {}
+        return {
+            "source_url": str(payload.get("source_url") or "").strip(),
+            "source_version": str(payload.get("source_version") or "").strip(),
+            "last_sync_checked_at": str(payload.get("last_sync_checked_at") or "").strip(),
+            "intake_status": str(payload.get("intake_status") or "local").strip(),
+            "promote_status": str(payload.get("promote_status") or "candidate").strip(),
+        }
+
+    def evaluate_skill_intake(
+        self,
+        manifest: dict[str, object] | None,
+        *,
+        manifest_status: str = "",
+    ) -> dict[str, object]:
+        payload = manifest if isinstance(manifest, dict) else {}
+        permissions = payload.get("permissions")
+        dependency_count = 0
+        raw_deps = payload.get("dependencies")
+        if isinstance(raw_deps, list):
+            dependency_count = len([item for item in raw_deps if str(item).strip()])
+        source_url = str(payload.get("source_url") or "").strip()
+        source_quality = "tracked_https" if source_url.startswith("https://") else "unknown"
+        checks = {
+            "format_compatible": manifest_status == "valid",
+            "permissions_declared": isinstance(permissions, list) and len(permissions) > 0,
+            "dependency_risk": "low" if dependency_count <= 5 else "high",
+            "source_quality": source_quality,
+            "activity_status": "tracked" if str(payload.get("last_sync_checked_at") or "").strip() else "unknown",
+        }
+        verdict = "accept"
+        if not checks["format_compatible"] or not checks["permissions_declared"]:
+            verdict = "reject"
+        elif checks["dependency_risk"] == "high":
+            verdict = "review"
+        return {
+            "verdict": verdict,
+            "dependency_count": dependency_count,
+            **checks,
+        }
+
+    def update_skill_governance_metadata(self, name: str, **updates: object) -> tuple[bool, str]:
+        manifest, errors = self.get_skill_manifest(name)
+        if errors or not isinstance(manifest, dict):
+            return False, "; ".join(errors) if errors else f"manifest not found: {name}"
+        path = self.resolve_physical_path(name)
+        if path is None:
+            return False, f"skill not found: {name}"
+        manifest_path = path / "manifest.json"
+        next_manifest = dict(manifest)
+        for key, value in updates.items():
+            if value is None:
+                continue
+            next_manifest[str(key)] = value
+        manifest_path.write_text(
+            json.dumps(next_manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        return True, f"updated governance metadata: {name}"
 
     def _journal_add(self, task: dict) -> None:
         """Add a pending installation task to the HMAC-secured journal."""

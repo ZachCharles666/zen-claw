@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -105,7 +104,7 @@ def test_update_user_profile_refuses_symlink(store: MemoryStore, tmp_path: Path)
 
 def test_build_system_prompt_includes_user_profile(tmp_path: Path):
     """USER_PROFILE.md content appears in system prompt."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
     ws = tmp_path
     mem = MemoryStore(workspace=ws)

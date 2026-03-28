@@ -35,7 +35,6 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-
 # ── Result type ───────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -468,17 +467,17 @@ def _rgb_to_hsl(r: int, g: int, b: int) -> tuple[float, float, float]:
     rf, gf, bf = r / 255, g / 255, b / 255
     cmax, cmin = max(rf, gf, bf), min(rf, gf, bf)
     delta = cmax - cmin
-    L = (cmax + cmin) / 2
-    S = 0.0 if delta == 0 else delta / (1 - abs(2 * L - 1))
+    lightness = (cmax + cmin) / 2
+    saturation = 0.0 if delta == 0 else delta / (1 - abs(2 * lightness - 1))
     if delta == 0:
-        H = 0.0
+        hue = 0.0
     elif cmax == rf:
-        H = 60 * (((gf - bf) / delta) % 6)
+        hue = 60 * (((gf - bf) / delta) % 6)
     elif cmax == gf:
-        H = 60 * ((bf - rf) / delta + 2)
+        hue = 60 * ((bf - rf) / delta + 2)
     else:
-        H = 60 * ((rf - gf) / delta + 4)
-    return round(H, 1), round(S * 100, 1), round(L * 100, 1)
+        hue = 60 * ((rf - gf) / delta + 4)
+    return round(hue, 1), round(saturation * 100, 1), round(lightness * 100, 1)
 
 
 def _handle_color(source_fmt: str, color: tuple, target: str) -> str:
@@ -490,8 +489,8 @@ def _handle_color(source_fmt: str, color: tuple, target: str) -> str:
     if target == "hex":
         return f"HEX: #{r:02X}{g:02X}{b:02X}"
     if target == "hsl":
-        h, s, l = _rgb_to_hsl(r, g, b)
-        return f"HSL: hsl({h}, {s}%, {l}%)"
+        h, s, lightness = _rgb_to_hsl(r, g, b)
+        return f"HSL: hsl({h}, {s}%, {lightness}%)"
     return f"RGB: ({r}, {g}, {b})"
 
 

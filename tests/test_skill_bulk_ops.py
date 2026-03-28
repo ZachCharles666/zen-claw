@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 
 try:
-    from fastapi.testclient import TestClient as _TC
-    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
+    from fastapi.testclient import TestClient as _TestClient
+
     import zen_claw.dashboard.server as _srv_mod
+    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
 
     _FASTAPI_AVAILABLE = api_app is not None
 except Exception:
@@ -163,7 +164,7 @@ class TestBulkActionAPI:
     def test_bulk_enable_action(self, tmp_path: Path, monkeypatch) -> None:
         """bulk-action enable 2 skills → succeeded=2."""
         ws, raw = self._setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/skills/bulk-action",
             json={"names": ["skill_a", "skill_b"], "action": "enable"},
@@ -178,7 +179,7 @@ class TestBulkActionAPI:
     def test_bulk_disable_action(self, tmp_path: Path, monkeypatch) -> None:
         """bulk-action disable 1 skill → skill becomes disabled."""
         ws, raw = self._setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/skills/bulk-action",
             json={"names": ["skill_c"], "action": "disable"},
@@ -191,7 +192,7 @@ class TestBulkActionAPI:
     def test_bulk_preflight_action(self, tmp_path: Path, monkeypatch) -> None:
         """bulk-action preflight → results contain ok field."""
         ws, raw = self._setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/skills/bulk-action",
             json={"names": ["skill_a"], "action": "preflight"},
@@ -208,7 +209,7 @@ class TestBulkActionAPI:
         loader = _make_loader(ws)
         was_enabled = loader.is_skill_enabled("skill_a")
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/skills/bulk-action",
             json={"names": ["skill_a"], "action": "enable", "dry_run": True},
@@ -233,7 +234,7 @@ class TestBulkActionAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/skills/bulk-action",
             json={"names": [f"s{i}" for i in range(21)], "action": "enable"},
@@ -254,7 +255,7 @@ class TestBulkActionAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/skills/bulk-action",
             json={"names": ["a"], "action": "delete"},
@@ -265,7 +266,7 @@ class TestBulkActionAPI:
     def test_bulk_action_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """POST /api/v1/skills/bulk-action → 200 with results list."""
         ws, raw = self._setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/skills/bulk-action",
             json={"names": ["skill_a"], "action": "enable"},
@@ -279,7 +280,7 @@ class TestBulkActionAPI:
     def test_bulk_action_api_unknown_skill(self, tmp_path: Path, monkeypatch) -> None:
         """Unknown skill in names → that result ok=False, others not affected."""
         ws, raw = self._setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/skills/bulk-action",
             json={"names": ["skill_a", "nonexistent_xyz"], "action": "enable"},
@@ -311,7 +312,7 @@ class TestHealthSummaryAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/skills/health-summary", headers={"X-API-Key": raw})
         assert resp.status_code == 200
 
@@ -328,7 +329,7 @@ class TestHealthSummaryAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/skills/health-summary", headers={"X-API-Key": raw})
         data = resp.json()
         for field in ("total", "enabled", "manifest_ok", "trusted", "runtime_covered", "enabled_pct", "trusted_pct", "preflight_ok_pct"):

@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 
 try:
-    from fastapi.testclient import TestClient as _TC
-    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
+    from fastapi.testclient import TestClient as _TestClient
+
     import zen_claw.dashboard.server as _srv_mod
+    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
 
     _FASTAPI_AVAILABLE = api_app is not None
 except Exception:
@@ -122,7 +123,7 @@ class TestDeleteSource:
 class TestSetSourceEnabled:
     def test_set_source_enabled_false(self, tmp_path: Path) -> None:
         """set_source_enabled(..., False) marks source as disabled."""
-        from zen_claw.skills.crawler.scheduler import set_source_enabled, load_sources_json
+        from zen_claw.skills.crawler.scheduler import load_sources_json, set_source_enabled
 
         path = _make_sources_file(tmp_path, ["news"])
         result = set_source_enabled(path, "news", False)
@@ -132,7 +133,7 @@ class TestSetSourceEnabled:
 
     def test_set_source_enabled_true(self, tmp_path: Path) -> None:
         """set_source_enabled(..., True) re-enables a disabled source."""
-        from zen_claw.skills.crawler.scheduler import set_source_enabled, load_sources_json
+        from zen_claw.skills.crawler.scheduler import load_sources_json, set_source_enabled
 
         path = _make_sources_file(tmp_path, ["news"])
         # first disable
@@ -161,7 +162,7 @@ class TestDeleteAPI:
     def test_delete_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """DELETE /api/v1/crawler/sources/{name} → 200, ok=True."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.delete("/api/v1/crawler/sources/news", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
@@ -170,14 +171,14 @@ class TestDeleteAPI:
     def test_delete_api_404_not_found(self, tmp_path: Path, monkeypatch) -> None:
         """DELETE non-existent source → 404."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.delete("/api/v1/crawler/sources/ghost_xyz", headers={"X-API-Key": raw})
         assert resp.status_code == 404
 
     def test_delete_api_writes_audit(self, tmp_path: Path, monkeypatch) -> None:
         """DELETE writes event='crawler.source.delete' to audit log."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         client.delete("/api/v1/crawler/sources/news", headers={"X-API-Key": raw})
         log_path = tmp_path / "dashboard" / "crawler_sources.log.jsonl"
         assert log_path.exists()
@@ -191,7 +192,7 @@ class TestDisableEnableAPI:
     def test_disable_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """POST .../disable → 200, enabled=False."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post("/api/v1/crawler/sources/news/disable", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         data = resp.json()
@@ -201,7 +202,7 @@ class TestDisableEnableAPI:
     def test_enable_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """POST .../enable → 200, enabled=True."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         # disable first
         client.post("/api/v1/crawler/sources/news/disable", headers={"X-API-Key": raw})
         # then enable
@@ -214,14 +215,14 @@ class TestDisableEnableAPI:
     def test_disable_enable_404(self, tmp_path: Path, monkeypatch) -> None:
         """Disable non-existent source → 404."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post("/api/v1/crawler/sources/ghost_xyz/disable", headers={"X-API-Key": raw})
         assert resp.status_code == 404
 
     def test_disable_persists_across_list(self, tmp_path: Path, monkeypatch) -> None:
         """After disable, GET /sources shows enabled=False for that source."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news", "finance"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         client.post("/api/v1/crawler/sources/news/disable", headers={"X-API-Key": raw})
         resp = client.get("/api/v1/crawler/sources", headers={"X-API-Key": raw})
         assert resp.status_code == 200
@@ -235,7 +236,7 @@ class TestStatusAPI:
     def test_status_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """GET .../status → 200, contains source_name and enabled."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/crawler/sources/news/status", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         data = resp.json()
@@ -245,14 +246,14 @@ class TestStatusAPI:
     def test_status_api_404(self, tmp_path: Path, monkeypatch) -> None:
         """Status of non-existent source → 404."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/crawler/sources/ghost_xyz/status", headers={"X-API-Key": raw})
         assert resp.status_code == 404
 
     def test_status_api_fields(self, tmp_path: Path, monkeypatch) -> None:
         """Status response contains run_count and recent_runs fields."""
         sources_path, raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/crawler/sources/news/status", headers={"X-API-Key": raw})
         data = resp.json()
         assert "run_count" in data

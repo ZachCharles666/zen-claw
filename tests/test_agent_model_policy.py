@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 
 try:
-    from fastapi.testclient import TestClient as _TC
-    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
+    from fastapi.testclient import TestClient as _TestClient
+
     import zen_claw.dashboard.server as _srv_mod
+    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
 
     _FASTAPI_AVAILABLE = api_app is not None
 except Exception:
@@ -53,8 +54,8 @@ def _api_setup(tmp_path: Path, monkeypatch, *, config=None):
 class TestBuildReloadPlan:
     def test_build_reload_plan_structure(self, tmp_path: Path) -> None:
         """_build_reload_execute_plan returns entries with required fields."""
-        from zen_claw.dashboard.server import _build_reload_execute_plan
         from zen_claw.config.schema import Config
+        from zen_claw.dashboard.server import _build_reload_execute_plan
 
         cfg = Config.model_validate({"agents": {"defaults": {"workspace": str(tmp_path)}}})
         plan = _build_reload_execute_plan(cfg)
@@ -66,8 +67,8 @@ class TestBuildReloadPlan:
 
     def test_build_reload_plan_has_agent_entry(self, tmp_path: Path) -> None:
         """Plan always includes at least one agent entry with config_reload mode."""
-        from zen_claw.dashboard.server import _build_reload_execute_plan
         from zen_claw.config.schema import Config
+        from zen_claw.dashboard.server import _build_reload_execute_plan
 
         cfg = Config.model_validate({"agents": {"defaults": {"workspace": str(tmp_path)}}})
         plan = _build_reload_execute_plan(cfg)
@@ -76,8 +77,8 @@ class TestBuildReloadPlan:
 
     def test_build_reload_plan_surface_filter(self, tmp_path: Path) -> None:
         """surface filter narrows results."""
-        from zen_claw.dashboard.server import _build_reload_execute_plan
         from zen_claw.config.schema import Config
+        from zen_claw.dashboard.server import _build_reload_execute_plan
 
         cfg = Config.model_validate({"agents": {"defaults": {"workspace": str(tmp_path)}}})
         plan = _build_reload_execute_plan(cfg, surface="agent")
@@ -93,14 +94,14 @@ class TestGetModelPolicy:
     def test_get_model_policy_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """GET /api/v1/agents/default/model-policy → 200."""
         raw, _ = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/agents/default/model-policy", headers={"X-API-Key": raw})
         assert resp.status_code == 200
 
     def test_get_model_policy_fields(self, tmp_path: Path, monkeypatch) -> None:
         """Response contains model / cost_model / stability_model / task_type_model_overrides."""
         raw, _ = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/agents/default/model-policy", headers={"X-API-Key": raw})
         data = resp.json()
         for field in ("agent_id", "model", "cost_model", "stability_model", "task_type_model_overrides"):
@@ -109,14 +110,14 @@ class TestGetModelPolicy:
     def test_get_model_policy_unknown_agent_404(self, tmp_path: Path, monkeypatch) -> None:
         """Nonexistent agent_id → 404."""
         raw, _ = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/agents/ghost_xyz_99/model-policy", headers={"X-API-Key": raw})
         assert resp.status_code == 404
 
     def test_get_model_policy_task_type_overrides_is_dict(self, tmp_path: Path, monkeypatch) -> None:
         """task_type_model_overrides is always a dict (possibly empty)."""
         raw, _ = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/agents/default/model-policy", headers={"X-API-Key": raw})
         data = resp.json()
         assert isinstance(data["task_type_model_overrides"], dict)
@@ -127,11 +128,10 @@ class TestGetModelPolicy:
 
         raw, cfg = _api_setup(tmp_path, monkeypatch)
         # Allow save_config to work with real config file
-        from zen_claw.config.loader import get_config_path
 
         monkeypatch.setattr(loader_mod, "save_config", lambda c, p=None: None)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         # POST update
         client.post(
             "/api/v1/agents/default/model-policy",
@@ -152,7 +152,7 @@ class TestReloadExecute:
     def test_reload_execute_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """POST /api/v1/ops/reload-execute → 200."""
         raw, _ = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/ops/reload-execute",
             json={"dry_run": True},
@@ -165,7 +165,7 @@ class TestReloadExecute:
         raw, _ = _api_setup(tmp_path, monkeypatch)
         log_path = tmp_path / "dashboard" / "reload_execute.log.jsonl"
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/ops/reload-execute",
             json={"dry_run": True},
@@ -182,7 +182,7 @@ class TestReloadExecute:
     def test_reload_execute_returns_results(self, tmp_path: Path, monkeypatch) -> None:
         """dry_run=False → results list non-empty with execution_mode."""
         raw, _ = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/ops/reload-execute",
             json={"dry_run": False},
@@ -200,7 +200,7 @@ class TestReloadExecute:
         raw, _ = _api_setup(tmp_path, monkeypatch)
         (tmp_path / "dashboard").mkdir(parents=True, exist_ok=True)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         client.post(
             "/api/v1/ops/reload-execute",
             json={"dry_run": False},
@@ -208,13 +208,13 @@ class TestReloadExecute:
         )
         log_path = tmp_path / "dashboard" / "reload_execute.log.jsonl"
         assert log_path.exists()
-        lines = [json.loads(l) for l in log_path.read_text().splitlines() if l.strip()]
-        assert any(l.get("event_type") == "reload_execute" for l in lines)
+        lines = [json.loads(line) for line in log_path.read_text().splitlines() if line.strip()]
+        assert any(line.get("event_type") == "reload_execute" for line in lines)
 
     def test_reload_execute_audit_only_surface(self, tmp_path: Path, monkeypatch) -> None:
         """Plan includes at least one audit_only entry (channel.webchat is in_process, others are audit_only)."""
-        from zen_claw.dashboard.server import _build_reload_execute_plan
         from zen_claw.config.schema import Config
+        from zen_claw.dashboard.server import _build_reload_execute_plan
 
         # Create a config with a non-webchat channel
         cfg = Config.model_validate({
@@ -228,7 +228,7 @@ class TestReloadExecute:
     def test_reload_execute_surface_filter(self, tmp_path: Path, monkeypatch) -> None:
         """surface=agent → results only contain agent surface."""
         raw, _ = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/ops/reload-execute",
             json={"surface": "agent", "dry_run": False},

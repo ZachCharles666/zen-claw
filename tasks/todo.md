@@ -1,0 +1,608 @@
+# Active Tasks
+
+## Current Priorities
+
+- [x] Fix GitHub Actions `core-tests` PowerShell shard logging parser error in `.github/workflows/ci.yml`.
+- [x] Fix CI regressions in RAG retention, notebook repair, and fuzzy timezone recovery tests.
+- [x] Rework README into a developer-first, bilingual project entry document based on current implemented capabilities.
+- [x] Add a project overview document under `docs/` summarizing current architecture, subsystems, workflows, operator surfaces, and current boundaries.
+- [x] Daily assistant Gate-based routing rollout: finish production planning docs, phase-1 execution instructions, and the first compatibility-safe runtime slice for route-result/telemetry extensibility.
+- [x] Daily assistant Gate-based routing Phase 2: add production docs/instruction and land candidate-oriented declarative route output without changing route_status semantics.
+- [x] Daily assistant Gate-based routing Phase 3: add production docs/instruction and land the minimal Safety Valve slice with session-local history confidence and correction hard rule.
+- [x] Daily assistant Gate-based routing Phase 4: add production docs/instruction and land Gate 2 classifier integration on top of delegated rule routes.
+- [x] Daily assistant Gate-based routing Phase 5: add production docs/instruction and land explicit Gate 3 entry plus gate-stage telemetry consolidation.
+- [x] Daily assistant Gate routing alignment: publish Word-vs-runtime phase comparison and complete Phase 5 crystallized Gate 1 normalization to match the original planning scope.
+
+- [ ] Start `Phase 3.1: Agent orchestration layer` now that `BUG-009` and `BUG-006` are closed.
+- [ ] Continue `Phase 3.2: Skill registry / business skill` from the new inventory + preflight baseline.
+- [ ] Upgrade the current local-first `RAG` minimum loop toward a production-ready pipeline.
+- [ ] Upgrade `Channel + dashboard business readiness` after `Skill registry` and `RAG` hardening.
+- [ ] Add a future `agent-first payment` requirement discussion item:
+  - this is a product/security discussion task, not an immediate coding task
+  - it should start only after the current mainline backlog is sufficiently closed
+  - the design must remain `agent-first` rather than bolting payment on as a detached module
+  - the eventual module must preserve strong security, fail-closed authorization, and auditable approval flow
+
+## Locked Execution Order
+
+1. Start `Phase 3.1: Agent orchestration layer`.
+2. Then continue in order:
+   - `Skill registry`
+   - `RAG hardening`
+   - `Channel + dashboard business readiness`
+3. Keep `Phase 3.5` optional unless a concrete business project needs it first.
+
+## Ordered Execution Plan
+
+- [x] Phase 1: Unified `recovery framework`
+  - Goal:
+    - finalize blocker classification
+    - finalize strategy selection
+    - finalize result-shaping contract
+    - absorb current representative cases under one mechanism
+  - Done so far:
+    - minimal shared recovery abstractions landed
+    - representative `time / weather / wiki / exchange` cases migrated
+    - `RecoveryOutcome` now covers both guided failures and representative resolved recoveries
+    - resolved recovery traces now expose `recovery_mode` and `recovery_blocker_kind`
+    - guided failures that already return structured `RecoveryOutcome` now also preserve trace metadata instead of dropping it at the route result layer
+    - representative expansion-success paths now also land as resolved recoveries in trace:
+      - timezone fixed-offset fallback
+      - timezone fuzzy alias correction for slight English city misspellings
+      - normal weather forecast fallback from `wttr` to `open_meteo`
+      - recent long-range weather rerouted to archive history
+      - wikipedia same-site search / fallback summary path
+      - exchange fallback source / reverse-solve path
+    - loop-level constrained replan fallback now preserves structured recovery content when present instead of collapsing back to generic non-permission failure text
+    - one real high-risk route now lands on the new runtime-stage recovery interface:
+      - explicit `exec` requests route to `needs_explicit_approval_with_plan(...)`
+      - CLI approval prompt now keeps the structured blocker/gap explanation instead of only showing `/approve`
+      - after approval, the runtime transition into `needs_constrained_replan` is now also appended into `intent_router` trace instead of being invisible in dashboard history
+    - one real low-risk route now lands on the new runtime-stage recovery interface:
+      - weather source exhaustion routes to `needs_constrained_replan_with_plan(...)` when planning is enabled
+      - the same weather failure still stays deterministic/direct when planning is disabled, preserving deferred retry and local direct semantics
+      - fixed-site / wikipedia source exhaustion now also routes to runtime constrained replan when planning is enabled
+      - exchange source exhaustion now also routes to runtime constrained replan when planning is enabled
+  - Remaining:
+    - future extensions should be tracked as general runtime/product enhancements, not as an open blocker behind `BUG-009`
+
+- [x] Phase 2: Bug and local acceptance closure
+  - Goal:
+    - keep bug tracker aligned with runtime reality
+    - close only what is truly finished
+  - Current status:
+    - `BUG-005`: closed
+    - `BUG-006`: closed after unified-mechanism re-evaluation
+    - `BUG-009`: closed after direct-intent + runtime-stage recovery closure
+
+- [ ] Phase 3: Business-Readiness Gap Closure
+  - Goal:
+    - align the active backlog with `docs/zen-claw功能补足开发计划.md`
+    - turn `zen-claw` from runtime foundation into a directly project-ready agent platform
+  - Current repo reality:
+    - `multi-agent orchestration` is still the largest visible gap
+    - `skills` / `knowledge` / `dashboard` / `channels` already have partial foundations
+    - the new roadmap should build on those existing foundations instead of restarting them
+  - Delivery order:
+    - `Phase 3.1`: Agent orchestration layer
+    - `Phase 3.2`: Skill registry + business skill base
+    - `Phase 3.3`: RAG pipeline hardening
+    - `Phase 3.4`: Channel and dashboard business-readiness upgrades
+    - `Phase 3.5`: Optional business accelerators (`content_gen` / crawler)
+  - Start condition:
+    - `BUG-009` and `BUG-006` closure condition has been met; `Phase 3.x` can proceed
+
+- [ ] Phase 3.1: Agent Orchestration Layer
+  - Why:
+    - the new planning doc marks this as the highest-value missing capability
+    - current repo has `AgentPool`, but not a dedicated multi-agent registry/router/config layer
+  - Existing base:
+    - `zen_claw/agent/pool.py`
+    - current single-agent runtime + session/tool/model infrastructure
+  - Done so far:
+    - declarative `agents.profiles` registry landed in config schema
+    - `AgentPool` now resolves effective per-profile runtime settings instead of only raw string ids
+    - registered profiles now support per-agent overrides for:
+      - workspace
+      - model
+      - planning
+      - memory/tool iteration/compression/runtime basics already supported by `AgentLoop`
+    - gateway-side `AgentPool` can now create per-profile providers via model-aware provider factory
+    - CLI now has a minimal orchestration surface:
+      - compatibility alias: `zen-claw agent-list`
+      - compatibility direct chat: `zen-claw agent --agent-profile <id>`
+      - planned-shape subcommands now exist:
+        - `zen-claw agent list`
+        - `zen-claw agent chat <id>`
+        - `zen-claw agent test <id>`
+    - a real registry-aware `AgentRouter` now exists and is already wired into a production runtime path:
+      - gateway inbound messages are no longer hard-wired to the default loop
+      - route priority is now:
+        - explicit agent id
+        - sticky bound route
+        - profile keyword match
+        - channel default `agentProfile`
+        - fallback `default`
+      - non-default auto-routes can now persist sticky bindings for future messages on channel-based conversations
+    - profile-level prompt binding now exists:
+      - `agents.profiles.<id>.systemPrompt`
+      - `agents.profiles.<id>.systemPromptFile`
+      - both now feed the effective system prompt before workspace bootstrap files
+    - profile-level tool binding now exists:
+      - `agents.profiles.<id>.allowedTools`
+      - `agents.profiles.<id>.deniedTools`
+      - the binding now affects both:
+        - tool definitions exposed to the model
+        - runtime execution if a tool call still escapes prompt-level filtering
+    - current isolation status is clearer now:
+      - memory/session/skills/tool state were already isolated by per-profile workspace
+      - prompt and tool binding are now explicit parts of the profile contract
+    - operator visibility now exists in current CLI surfaces:
+      - `zen-claw status -v` prints per-profile isolation summary
+      - `zen-claw config doctor` now checks obvious profile isolation misconfigurations
+    - config doctor now warns when channel `agentProfile` references an unknown profile
+    - API-side orchestration visibility now covers both profile inventory and route preview:
+      - `GET /api/v1/agents`
+      - `GET /api/v1/agents/{id}`
+      - `POST /api/v1/agents/route-preview`
+      - route preview now explains:
+        - final routed agent id
+        - route reason
+        - matched keyword when present
+        - sticky bound route when present
+        - channel default profile when present
+      - profile detail now explains:
+        - effective model/prompt/tool/workspace contract
+        - raw profile overrides as currently configured
+        - channel references currently pointing at that profile
+      - dashboard `Agents` card now exposes a minimal route-preview panel on top of the same API
+      - dashboard `Agents` card now also exposes a minimal `Inspect` action for per-profile detail
+      - agent config apply/reload acknowledgment now exists:
+        - `POST /api/v1/agents/reload-ack`
+        - `/api/v1/agents` and dashboard snapshot now expose:
+          - pending reload
+          - pending reload count
+          - pending agent actions
+          - last apply event
+        - dashboard `Agents` card now exposes `Mark Applied`
+    - profile-level skill preload now exists:
+      - `agents.defaults.skillNames`
+      - `agents.profiles.<id>.skillNames`
+      - resolved profiles now carry preloaded skill slots through pool/CLI/dashboard detail surfaces
+  - Remaining:
+    - optional richer profile contract later if business cases need it:
+
+- [ ] Phase 3.2: Skill Registry + Business Skill Base
+  - Why:
+    - the planning doc requires installable/testable business-facing skills, not only runtime tool wiring
+  - Existing base:
+    - `zen_claw/skills/`
+    - current runtime tool registration
+    - existing local skill workflows and manifests
+  - Done so far:
+    - unified structured skill inventory now exists on top of the current loader/runtime base
+    - dashboard snapshot now exposes skill inventory summary for operator visibility
+    - FastAPI now exposes a read-only `/api/v1/skills` inventory surface
+    - CLI now has a real `zen-claw skills test <name>` preflight entry:
+      - strict manifest validation
+      - optional integrity verification
+      - local `tests/` execution when present
+    - business skill skeletons now exist as built-in skills:
+      - `content_gen`
+      - `compliance_check`
+      - `rag_retrieve`
+    - first real business-skill runtime slices now exist:
+      - `compliance_check` now has a deterministic rules engine with:
+        - finance-sensitive terms
+        - ad-law absolute-term checks
+        - regex-based risk detection
+        - structured score / level / issue output
+      - `rag_retrieve` now has a product-facing retrieval bridge on top of the existing `NotebookManager + HybridRetriever`
+      - `content_gen` now has a real generation module with:
+        - channel template loading
+        - deterministic offline fallback
+        - optional LLM provider path
+        - optional `rag_retrieve` grounding
+        - built-in `compliance_check` preflight on every version
+      - `skills test <name>` can now execute real local skill tests for these built-in skills
+    - skill management API now has minimal mutation support:
+      - `POST /api/v1/skills/{name}/enable`
+      - `POST /api/v1/skills/{name}/disable`
+    - dashboard skill management is no longer read-only:
+      - the `Skills` card now supports enable/disable actions through the existing authenticated API
+  - Missing:
+    - richer skill management surfaces beyond basic toggles:
+        - more complete management UX than inline toggle actions
+    - deeper business skill implementations behind the new skeletons:
+      - tighter content generation orchestration around richer operator workflow and management UX
+
+- [ ] Phase 3.3: RAG Pipeline Hardening
+  - Why:
+    - the new doc asks for production-ready `RAG`, while current repo has a minimum usable local-first loop
+  - Existing base:
+    - `zen_claw/knowledge/ingestor.py`
+    - `zen_claw/knowledge/retriever.py`
+    - `zen_claw/agent/tools/knowledge.py`
+    - current cron + dashboard visibility for local knowledge ingest
+  - Done so far:
+    - a reusable `RAGPipeline` contract now exists on top of the current knowledge stack:
+      - `ingest(...)`
+      - `search(...)`
+      - `stats(...)`
+    - knowledge tools now delegate through the shared pipeline instead of duplicating ingest/search flow
+    - FastAPI now exposes a first real RAG API surface:
+      - `POST /api/v1/rag/ingest`
+      - `POST /api/v1/rag/search`
+      - `GET /api/v1/rag/stats`
+    - CLI now has a real pipeline-shaped operator surface:
+      - `zen-claw knowledge stats`
+      - `zen-claw rag ingest`
+      - `zen-claw rag search`
+      - `zen-claw rag stats`
+    - metadata/filter contract is now stronger than the minimum loop:
+      - ingest metadata can now flow through chunking into vector-store metadata
+      - search now supports exact-match metadata filters
+      - CLI and API now accept structured metadata/filter JSON
+    - store abstraction is no longer hard-wired to direct Chroma construction:
+      - `VectorStore` protocol now defines the retrieval persistence contract
+      - `create_vector_store(...)` now centralizes backend selection
+      - a shared in-process `memory` backend now exists for tests and fallback-style runtime slices
+      - `HybridRetriever` and `RAGPipeline` now depend on the store abstraction instead of direct `ChromaStore` construction
+    - tenant-aware RAG baseline now exists across pipeline/operator/API surfaces:
+      - `RAGPipeline` now resolves tenant-scoped data roots through `tenant_data_dir(...)`
+      - `knowledge` / `rag` CLI surfaces now accept `--tenant`
+      - `knowledge` tools now accept `tenant_id`
+      - `/api/v1/rag/*` now accepts explicit `tenant_id` and also falls back to authenticated tenant context when present
+    - tenant-aware RAG API policy is now fail-closed for authenticated multi-tenant sessions:
+      - explicit cross-tenant `tenant_id` overrides on `/api/v1/rag/*` now return `403`
+      - authenticated tenant context stays authoritative when present
+    - tenant-aware RAG document lifecycle now has a first real delete path:
+      - `RAGPipeline.delete_document(...)` now deletes by stable `document_id`
+      - ingest now returns `document_id`
+      - `RAGPipeline.list_documents(...)` now exposes notebook document inventory
+      - `RAGPipeline.clear_notebook(...)` now clears all documents while keeping the notebook itself
+      - `RAGPipeline.run_retention(...)` now supports keep-most-recent and max-age cleanup
+      - `/api/v1/rag/doc/{id}` now exists for authenticated/API-key operator use
+      - `/api/v1/rag/documents` now exposes tenant-scoped document listing
+      - `/api/v1/rag/notebook/{id}/documents` now exposes tenant-scoped notebook cleanup
+      - `/api/v1/rag/retention/run` now exposes operator-triggered retention execution
+      - current delete path still resolves through source under the hood, preserving compatibility with the existing store layer
+      - `zen-claw knowledge remove` and `zen-claw rag delete` now expose the same deletion path
+      - `zen-claw knowledge documents` and `zen-claw rag documents` now expose document listing
+      - `zen-claw knowledge clear` and `zen-claw rag clear` now expose notebook cleanup
+      - `zen-claw knowledge retain` and `zen-claw rag retain` now expose retention execution
+      - notebook `doc_count` now has a lightweight source ledger so deletes can reclaim document counts instead of only removing chunks
+      - cron payloads now support scheduled retention through existing knowledge cron execution
+    - backend config surface now exists at the product-config layer:
+      - `KnowledgeConfig.store_backend` now defines the project default vector store backend
+      - `RAGPipeline` now resolves default backend from config when no explicit override is provided
+      - CLI and `/api/v1/rag/*` now accept optional `store_backend` overrides while remaining backward-compatible
+    - backend diagnostics baseline now exists on top of the current store abstraction:
+      - vector-store implementations now expose lightweight backend diagnostics
+      - `RAGPipeline.stats(...)` now returns per-notebook backend diagnostics plus aggregated backend health/capacity summary
+      - dashboard knowledge card now shows configured backend plus backend health/capacity summary
+    - notebook-level backend policy now exists as the next selection layer above config defaults:
+      - `Notebook.store_backend` is now persisted in notebook metadata
+      - `RAGPipeline` now resolves backend priority as:
+        - explicit runtime override
+        - notebook backend policy
+        - tenant backend policy
+        - configured project default backend
+      - knowledge CLI now supports create/update flows for notebook backend policy and exposes it in list/stats visibility
+    - tenant-level backend policy now exists as the shared fallback between notebook and config defaults:
+      - `Tenant.store_backend` is now persisted in `tenant.json`
+      - `tenant create` and `tenant set-backend` now expose the policy in CLI
+      - `RAGPipeline` now resolves backend priority as:
+        - explicit runtime override
+        - notebook backend policy
+        - tenant backend policy
+        - configured project default backend
+    - tenant-aware dashboard/API management surface now exists as a minimal operator layer:
+      - FastAPI now exposes tenant backend policy read/write endpoints
+      - dashboard knowledge card now shows tenant backend policy summary and minimal update action
+      - tenant policy updates still respect the existing fail-closed cross-tenant guard
+    - notebook-aware dashboard/API management surface now exists as a minimal operator layer:
+      - FastAPI now exposes notebook backend policy read/write endpoints
+      - notebook policy updates reuse tenant resolution and can create notebook metadata records when needed
+      - dashboard knowledge card now exposes a minimal notebook backend policy update action
+  - Missing:
+    - deeper tenant-aware policy and backend selection story beyond the new baseline:
+      - richer tenant-aware notebook/document lifecycle beyond current list/delete baseline:
+      - deeper backend configuration beyond current baseline:
+        - backend-specific tuning now has a minimal config baseline:
+          - `chroma_subdir`
+          - `chroma_collection_prefix`
+          - `memory_namespace`
+        - richer backend-specific knobs still missing:
+          - compaction/indexing knobs
+          - active remediation controls on top of the new diagnostics baseline
+      - richer tenant-aware management surface beyond the new minimal baseline:
+          - richer workflow on top of the new unified knowledge activity history baseline
+          - richer policy history filtering beyond the new target/backend export baseline
+
+- [ ] Phase 3.4: Channel + Dashboard Business Readiness
+  - Why:
+    - the planning doc wants customer-facing operational surfaces, not only observability
+  - Existing base:
+    - `zen_claw/channels/feishu.py` already exists
+    - dashboard observability pages already exist
+  - Done so far:
+    - dashboard now has a first unified `Operations Summary` surface:
+      - key agent / skill / channel / model routing signals are aggregated into one operator card
+      - pending reloads, failed skill checks, and recent operator activity are now visible without scanning every card
+      - the same surface now has a first unified control-plane report layer:
+        - snapshot `ops` now carries cross-surface recent activity and pending-apply rows
+        - authenticated `/api/v1/ops/summary` now supports unified recent activity / pending-apply reporting
+        - the API now supports surface/actor/target filtering plus pagination and CSV export
+        - a unified pending-apply acknowledgement action now exists on top of the report:
+          - `POST /api/v1/ops/apply-pending`
+          - dashboard `Operations Summary` now exposes `Mark Pending Applied`
+          - scoped acknowledgement now supports `surface + target` instead of only cross-surface bulk clearing
+        - dashboard `Operations Summary` now also has a first filter/control panel:
+          - `surface / actor / target / pending_only / limit / offset`
+          - `Load ops` now reloads the card from `/api/v1/ops/summary`
+          - export/apply actions now reuse the active filtered scope
+          - pending apply acknowledgement now also honors the active `actor` filter instead of only `surface + target`
+          - apply/reload acknowledgement now returns before/after pending results instead of only a bare audit event
+          - dashboard/API now also expose a first apply preview/plan layer above the acknowledgement flow
+            - grouped preview/result summaries and stepwise acknowledgement plans now exist
+            - preview/result steps now surface per-target execution mode and capability status, so channel runtime support vs audit-only semantics are explicit
+            - grouped preview/result summaries now also break targets down into executable / audit-only / unsupported counts
+            - grouped attention/reporting now also splits pending apply into executable / audit-only / unsupported operator sections
+            - true in-process multi-surface execution semantics are still missing beyond the current channel/webchat baseline
+    - dashboard now has a first business-facing `Model Usage` surface on top of the existing model routing logs:
+      - per-model route counts
+      - per-reason route counts
+      - latest selected model / reason summary
+      - recent routing events now have a first operator-facing slice:
+        - dashboard `Model Usage` card now shows recent routing events
+        - card-level `model/reason` filtering now exists in-page
+        - `/api/v1/model-routing` now exposes filtered recent routing events
+        - dashboard now supports minimal filtered JSON export from the current routing snapshot
+        - `/api/v1/model-routing` now also supports:
+          - `limit`
+          - `offset`
+          - server-side `CSV` export via `format=csv`
+        - dashboard `Model Usage` now also supports:
+          - client-side limit/offset windowing for recent events
+          - `Export CSV`
+    - dashboard and API now have a first `Agent` management-readiness slice:
+      - dashboard `Agents` card shows registered profile inventory
+      - `/api/v1/agents` exposes the same profile summary as a read-only surface
+      - agent planning now has a first config-level operator control slice:
+        - `/api/v1/agents/{id}/planning/enable|disable`
+        - dashboard `Agents` card now supports planning toggle actions
+        - recent agent planning changes are now audited into dashboard JSONL and shown in-page
+      - agent model now has a first config-level operator control slice:
+        - `POST /api/v1/agents/{id}/model`
+        - dashboard `Agents` card now supports minimal `Set model` action
+        - recent agent action history now carries model-change detail
+      - agent routing keywords now have a first config-level operator control slice:
+        - `POST /api/v1/agents/{id}/routing-keywords`
+        - dashboard `Agents` card now supports minimal `Set routing` action for registered profiles
+        - recent agent action history now carries routing-keyword change detail
+    - dashboard and API now have a first `Skill` operations-readiness slice:
+      - existing `/api/v1/skills` inventory now exposes richer readiness summary
+      - dashboard `Skills` card now shows tested / trusted / runtime-intent coverage
+      - operators can see trust and runtime-mode mix without leaving the dashboard
+    - skill management now has a first operator action-history slice:
+      - enable/disable actions are now audited to dashboard JSONL
+      - dashboard `Skills` card now shows recent change history
+    - skill management now has a first operator preflight slice:
+      - `POST /api/v1/skills/{name}/preflight`
+      - dashboard `Skills` card now supports lightweight `Check` actions
+      - recent preflight results are now audited and shown in-page
+      - each skill row now surfaces the latest preflight status
+      - recent preflight rows now carry lightweight detail text instead of only ok/issues
+      - per-skill drill-down now exists:
+        - `GET /api/v1/skills/{name}`
+        - detail now includes:
+          - inventory row
+          - manifest payload
+          - manifest load errors
+          - preflight result with manifest/integrity error lists
+          - recent actions / checks / exports for that skill
+        - dashboard `Skills` card now exposes minimal `Inspect`
+    - skill management now has a first operator export slice:
+      - `POST /api/v1/skills/{name}/export`
+      - dashboard `Skills` card now supports `Export`
+      - recent skill exports are now audited and shown in-page
+  - Missing:
+    - unified channel abstraction cleanup across channel implementations:
+      - a shared registry/spec now drives manager/bootstrap, dashboard snapshot, CLI status, and runtime capability rows
+      - richer channel capability metadata now also lands in the shared registry and dashboard `Channels` card
+      - first channel-specific control actions now exist as config-level enable/disable APIs and dashboard buttons
+      - operator apply/reload acknowledgement now exists as an audited control-plane action
+      - deeper cleanup is still missing for broader multi-channel hot-reload/start-stop semantics beyond the new shared capability registry + in-process `webchat` runtime control/apply baseline
+    - dashboard management surfaces for `Agent / Skill / Model usage` beyond the current first `Model Usage`, `Agent inventory`, `Skill readiness`, and basic skill action history slices
+    - stronger operator-facing control plane beyond the new unified recent-activity / pending-apply report baseline and filtered dashboard control panel
+    - stronger cross-surface reporting beyond the new `Operations Summary` control-plane baseline, filtered dashboard control panel, grouped attention sections, and channel history baseline
+      - deeper skill operator controls beyond the current lifecycle baseline:
+        - richer versioned package policy beyond the new package visibility + preview/run cleanup + export-restore rollback baseline
+          - a first package policy baseline now exists in skill detail/API/dashboard controls:
+            - preferred package dir/version
+            - cleanup retention hours
+            - restore requires export
+          - policy-aware restore now exists via `POST /api/v1/skills/{name}/restore` and dashboard `Restore skill`
+          - restore preview now exists via `GET /api/v1/skills/{name}/restore-plan` and dashboard `Preview restore`
+          - preferred version is now enforced against the exported restore package version
+          - preferred physical dir is now enforced against the exported restore package metadata
+          - deeper rollback safety is still missing
+    - richer `Model Usage` operator tooling beyond the new filtered event/export baseline:
+      - richer historical depth/reporting beyond the new time-range filter + bucketed model/reason/intent/channel summary baseline
+    - deeper agent operator controls beyond the new planning toggle baseline:
+      - richer routing override management beyond the new sticky route bind/clear baseline
+      - broader model policy management beyond the new model-stack policy baseline
+      - richer apply/reload semantics beyond the new scoped pending-apply acknowledgement + filtered dashboard control-panel baseline
+        - the current ops apply flow now honors filtered `actor` scope, but deeper execution semantics are still missing
+          - current acknowledgement flows now return before/after pending results and can trigger a true in-process `webchat` runtime restart for channel apply, but broader multi-surface reload execution is still missing
+          - current control plane now has preview/result pairing with grouped summaries and stepwise acknowledgement plans, but still lacks broader true in-process multi-surface execution semantics
+
+- [ ] Phase 3.5: Optional Business Accelerators
+  - Why:
+    - these are useful project accelerators but should not displace the core platform gaps above
+  - Candidates from the new doc:
+    - built-in `compliance` checking stack
+    - built-in `content_gen` multi-channel skeleton
+    - crawler scheduling / extraction layer on top of existing browser and cron foundations
+  - Done so far:
+    - a first built-in `crawler` skill now exists with:
+      - `extractor.py`
+      - `scheduler.py`
+      - manifest / skill instructions
+    - crawler extraction now has two real runtime paths:
+      - direct HTTP extraction via the existing `Ingestor`
+      - browser-backed extraction via the existing Playwright sidecar tools
+    - `RAGPipeline` now has a minimal `ingest_documents(...)` entry so pre-extracted crawler content can land as first-class RAG documents without temp-file shims
+    - CLI now has a first crawler operator surface:
+      - `zen-claw crawler run`
+      - `zen-claw crawler schedule`
+    - cron payload/service now carry crawler-specific fields
+    - gateway/CLI cron execution now has a real crawler path with JSONL crawl audit:
+      - `dashboard/crawler_cron.log.jsonl`
+    - crawler ingest now has a first dedup/change-detection rule:
+      - unchanged source content is skipped
+      - changed source content replaces the previous document in-place at the crawler layer
+    - crawler source catalog baseline now exists:
+      - shared `crawler/sources.json` flow under the data directory
+      - CLI source management:
+        - `zen-claw crawler source-list`
+        - `zen-claw crawler source-add`
+      - catalog-backed execution:
+        - `zen-claw crawler run-source`
+        - `zen-claw crawler schedule-source`
+    - crawler dashboard/API baseline now exists:
+      - `GET/POST /api/v1/crawler/sources`
+      - `POST /api/v1/crawler/run`
+      - dashboard `Crawler` card now shows shared sources and recent runs
+  - Missing:
+    - richer crawler source management beyond ad hoc CLI parameters:
+      - richer source catalog lifecycle beyond the new local JSON baseline:
+        - delete/disable/status actions
+        - richer dashboard/API management surface beyond list/upsert/run
+      - broader dedup / change detection beyond the current per-source content-hash baseline
+    - dashboard/API surface for crawler scheduling and cron-job lifecycle
+    - extraction policy hardening beyond the first browser/http split:
+      - richer selector strategies
+      - pagination / multi-page crawl flow
+
+- [x] Phase 4: Traceability Dashboard
+  - Delivered:
+    - `Intent Router` visibility
+    - `Approval Timeline`
+    - `Compression Timeline`
+    - `Recent Observability`
+    - workflow webhook visibility
+    - model routing visibility
+
+- [x] Phase 5: Workflow Webhooks
+  - Delivered:
+    - workflow context injection
+    - `trace_id` handoff
+    - dashboard event logging
+    - workflow source aggregation
+
+- [ ] Phase 6: Dynamic Model Routing
+  - Goal:
+    - move from configurable models to explainable dispatch
+  - Done so far:
+    - `thinking_model`
+    - `intent_model_overrides`
+    - routing observability
+    - minimal `fallback_model`
+    - metadata-driven routing policy baseline:
+      - `task_type_model_overrides`
+      - `cost_model`
+      - `stability_model`
+      - model-routing reasons now explain these paths
+    - session-local routing profile baseline:
+      - `/model-profile cheap|stable|auto`
+      - session metadata now feeds the same dynamic routing policy path
+  - Remaining:
+    - finer task/cost/stability routing rules beyond the new metadata-driven baseline
+
+- [x] Phase 7: Local-first `RAG / ingest / cron` — minimum loop
+  - Goal:
+    - establish a usable local knowledge + cron minimum loop before deeper workflow hardening
+  - Done so far:
+    - directory-based local knowledge ingest landed through existing `knowledge add`
+    - dashboard knowledge inventory summary landed
+    - dashboard cron summary now highlights knowledge-related jobs
+    - cron jobs can now trigger explicit local knowledge ingest
+    - dashboard now shows recent knowledge cron execution results
+  - Remaining:
+    - tighten the cron long-running loop around local knowledge workflows
+    - decide whether deeper workflow hardening stays in `Phase 6` or becomes a later enhancement
+
+## Business-Readiness Comparison
+
+- `docs/zen-claw功能补足开发计划.md` is now treated as an active roadmap input, not as a detached reference note.
+- The repo already partially covers several proposed areas:
+  - `skills` foundation exists
+  - `knowledge / RAG` minimum loop exists
+  - `dashboard` observability exists
+  - `Feishu` channel exists
+- The highest confirmed gap versus that doc is still:
+  - no dedicated `multi-agent registry + router + declarative config` layer
+- The most important “partial but not enough” areas versus that doc are:
+  - `skill registry / business skill lifecycle`
+  - `production-grade RAG pipeline abstraction`
+  - `dashboard management surfaces`
+  - `channel abstraction consistency`
+- The recommended execution rule is:
+  - finish `BUG-009`
+  - re-evaluate `BUG-006`
+  - then move into `Phase 3.1 -> 3.4`
+  - keep `Phase 3.5` optional unless a concrete business project needs it first
+
+## Active Bug Status
+
+### BUG-009
+- Status: Closed
+- Why closed:
+  - representative direct intents now preserve both guided and resolved recovery semantics under one mechanism
+  - real runtime-stage exits now also use the same structured recovery model:
+    - `needs_explicit_approval`
+    - `needs_constrained_replan`
+  - approval-to-replan transitions are now visible in trace, so the mechanism is closed across result shape, runtime flow, and observability
+
+### BUG-006
+- Status: Closed
+- Why closed:
+  - recent long-span weather now routes to historical weather instead of hard refusal
+  - future long-span weather now returns stable recovery guidance under the unified mechanism
+  - remaining mechanism-level work is now tracked under `BUG-009`, not as a weather-specific open bug
+
+### BUG-005
+- Status: Closed
+
+## Recently Completed (Still Relevant)
+
+### Workflow Webhooks
+- Added workflow context extraction:
+  - `workflow_source`
+  - `workflow_run_id`
+  - `workflow_step`
+  - `external_request_id`
+- Added `trace_id` handoff in `/webhook/trigger/{agent_id}` responses.
+- Added workflow webhook dashboard events and source distribution summary.
+
+### Dynamic Model Routing
+- Added:
+  - `thinking_model`
+  - `intent_model_overrides`
+  - minimal `fallback_model`
+  - dashboard model-routing trace
+- Current routing priority:
+  - `vision_model`
+  - explicit `/model` override
+  - `intent_model_overrides`
+  - `thinking_model`
+  - default `model`
+
+## Archive Notes
+
+- Full historical `tasks/todo.md` before the split is preserved at:
+  - `tasks/archive/todo-pre-split-2026-03-10.md`
+- Summary-level completed work now lives in:
+  - `tasks/done.md`

@@ -2,10 +2,7 @@
 
 from pathlib import Path
 
-import pytest
-
 from zen_claw.telemetry.token_usage import TokenUsageRecord, TokenUsageTracker
-
 
 # ── TokenUsageRecord ──────────────────────────────────────────────────────────
 
@@ -71,7 +68,7 @@ def test_tracker_record_appends_to_jsonl(tmp_path: Path) -> None:
 
     log_path = tmp_path / "dashboard" / "token_usage.log.jsonl"
     assert log_path.exists()
-    lines = [l for l in log_path.read_text().splitlines() if l.strip()]
+    lines = [line for line in log_path.read_text().splitlines() if line.strip()]
     assert len(lines) == 1
 
 

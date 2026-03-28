@@ -2,16 +2,12 @@
 
 from pathlib import Path
 
-import pytest
-
 from zen_claw.auth.api_keys import (
     ApiKeyStore,
-    ROLE_WEIGHTS,
     generate_api_key,
     is_admin_path,
     is_write_path,
 )
-
 
 # ── generate_api_key ─────────────────────────────────────────────────────────
 

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import zipfile
 from pathlib import Path
 
 import pytest
 
 try:
-    from fastapi.testclient import TestClient as _TC
-    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
+    from fastapi.testclient import TestClient as _TestClient
+
     import zen_claw.dashboard.server as _srv_mod
+    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
 
     _FASTAPI_AVAILABLE = api_app is not None
 except Exception:
@@ -218,7 +218,6 @@ class TestRestoreWithPolicy:
     def _setup(self, tmp_path: Path, tamper: bool = False):
         """Build a workspace with a skill and a (possibly tampered) export."""
         from zen_claw.dashboard.server import _append_skill_export_audit
-        from zen_claw.config.schema import Config
 
         ws = tmp_path / "ws"
         _make_skill_dir(ws, "epsilon")
@@ -245,8 +244,9 @@ class TestRestoreWithPolicy:
     def test_restore_blocked_when_hash_mismatch(self, tmp_path: Path, monkeypatch) -> None:
         """_restore_skill_with_policy must raise 409 when zip is tampered."""
         from fastapi import HTTPException
-        import zen_claw.dashboard.server as srv
+
         import zen_claw.config.loader as loader_mod
+        import zen_claw.dashboard.server as srv
 
         ws, _ = self._setup(tmp_path, tamper=True)
 
@@ -260,8 +260,8 @@ class TestRestoreWithPolicy:
 
     def test_restore_includes_integrity_check(self, tmp_path: Path, monkeypatch) -> None:
         """Successful restore response must include integrity_check field."""
-        import zen_claw.dashboard.server as srv
         import zen_claw.config.loader as loader_mod
+        import zen_claw.dashboard.server as srv
 
         ws, _ = self._setup(tmp_path, tamper=False)
 
@@ -300,7 +300,6 @@ class TestExportRestoreAPI:
         ws = tmp_path / "ws"
         _make_skill_dir(ws, "zeta")
 
-        from zen_claw.agent.skills import SkillsLoader
         import zen_claw.config.loader as loader_mod
 
         monkeypatch.setattr(loader_mod, "get_data_dir", lambda: tmp_path)
@@ -309,7 +308,7 @@ class TestExportRestoreAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post("/api/v1/skills/zeta/export", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         data = resp.json()
@@ -320,8 +319,8 @@ class TestExportRestoreAPI:
         """GET /api/v1/skills/{name}/restore-plan must include hash_verified field."""
         _skip_no_fastapi()
 
-        from zen_claw.dashboard.server import _append_skill_export_audit
         import zen_claw.config.loader as loader_mod
+        from zen_claw.dashboard.server import _append_skill_export_audit
 
         ws = tmp_path / "ws"
         _make_skill_dir(ws, "eta")
@@ -344,7 +343,7 @@ class TestExportRestoreAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/skills/eta/restore-plan", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         data = resp.json()

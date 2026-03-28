@@ -30,6 +30,7 @@ from zen_claw.agent.intent_router import (
     IntentRouteResult,
     IntentToolContract,
 )
+from zen_claw.agent.intent_router_classifier import IntentRouterClassifier
 from zen_claw.agent.memory_extractor import MemoryExtractor
 from zen_claw.agent.subagent import SubagentManager
 from zen_claw.agent.tools.browser import (
@@ -237,6 +238,7 @@ class AgentLoop:
         self.intent_router = IntentRouter(
             allow_runtime_constrained_replan=self.enable_planning,
         )
+        self.intent_router_classifier = IntentRouterClassifier()
         self.compressor = ContextCompressor(
             trigger_ratio=self.compression_trigger_ratio,
             hysteresis_ratio=self.compression_hysteresis_ratio,
@@ -885,16 +887,37 @@ class AgentLoop:
             all_active.extend(self.context.skills.get_always_skills())
             session.metadata["skill_pins"] = self.context.skills.build_session_pins(all_active)
 
-        route_result = await self.intent_router.route(
-            msg.content,
-            tools=self.tools,
-            trace_id=trace_id,
-        )
-        self._append_intent_router_event(
-            trace_id=trace_id,
-            msg=msg,
-            route_result=route_result,
-        )
+        self.intent_router.set_control_context(session.metadata)
+        try:
+            route_result = await self.intent_router.route(
+                msg.content,
+                tools=self.tools,
+                trace_id=trace_id,
+            )
+        finally:
+            self.intent_router.set_control_context(None)
+        gate2_instruction: str | None = None
+        clarification_reply: str | None = None
+        if route_result.safety_valve_outcome == "delegate":
+            route_result, gate2_instruction, clarification_reply = await self._run_gate2_classifier(
+                msg=msg,
+                session=session,
+                route_result=route_result,
+                trace_id=trace_id,
+            )
+
+        self._append_intent_router_event(trace_id=trace_id, msg=msg, route_result=route_result)
+        self._update_intent_router_control_state(session.metadata, route_result)
+        if clarification_reply is not None:
+            session.add_message("user", msg.content)
+            session.add_message("assistant", clarification_reply)
+            self.sessions.save(session)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=clarification_reply,
+                metadata=TraceContext.child_metadata(trace_id),
+            )
         explicit_approved_tools: set[str] = set()
         if route_result.route_status == "needs_explicit_approval":
             explicit_approved_tools, approval_reply = await self._resolve_one_shot_explicit_approval(
@@ -923,6 +946,11 @@ class AgentLoop:
                     diagnostic=route_result.diagnostic,
                     skip_planning=route_result.skip_planning,
                     recovery_outcome=route_result.recovery_outcome,
+                    route_candidate=route_result.route_candidate,
+                    delegate_reason=route_result.delegate_reason,
+                    safety_valve_outcome=route_result.safety_valve_outcome,
+                    arbitration_result=route_result.arbitration_result,
+                    safety_valve_trace=route_result.safety_valve_trace,
                 )
                 self._append_intent_router_event(
                     trace_id=trace_id,
@@ -970,6 +998,8 @@ class AgentLoop:
                 extra_allow=route_result.contract.allowed_tools,
                 extra_deny=route_result.contract.denied_tools,
             )
+        if gate2_instruction:
+            messages.append({"role": "system", "content": gate2_instruction})
         if bool(session.metadata.get("think_enabled", False)):
             messages.append(
                 {
@@ -1007,22 +1037,45 @@ class AgentLoop:
         self._last_run_model_used = run_model
         self._last_run_model_reason = run_model_reason
         try:
-            if not route_result.skip_planning:
-                messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
-            usage: dict[str, int] = {}
-            final_content, _ = await self._run_execute_reflect_loop(
-                messages,
-                trace_id,
-                session=session,
-                model=run_model,
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                usage_collector=usage,
-                tool_definitions=constrained_tools,
-                approved_one_shot_tools=explicit_approved_tools,
-                active_intent_contract=route_result.contract,
-                allow_model_fallback=allow_model_fallback,
-            )
+            if str(route_result.arbitration_result or "").strip().lower() == "unclassified":
+                route_result.diagnostic = (
+                    f"{route_result.diagnostic}:gate3_entry"
+                    if route_result.diagnostic
+                    else "gate3:entry"
+                )
+                final_content, usage = await self._enter_gate3_agent_loop(
+                    messages=messages,
+                    msg=msg,
+                    session=session,
+                    trace_id=trace_id,
+                    route_result=route_result,
+                    run_model=run_model,
+                    explicit_approved_tools=explicit_approved_tools,
+                    constrained_tools=constrained_tools,
+                    allow_model_fallback=allow_model_fallback,
+                )
+                self._append_intent_router_event(
+                    trace_id=trace_id,
+                    msg=msg,
+                    route_result=route_result,
+                )
+            else:
+                if not route_result.skip_planning:
+                    messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
+                usage: dict[str, int] = {}
+                final_content, _ = await self._run_execute_reflect_loop(
+                    messages,
+                    trace_id,
+                    session=session,
+                    model=run_model,
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    usage_collector=usage,
+                    tool_definitions=constrained_tools,
+                    approved_one_shot_tools=explicit_approved_tools,
+                    active_intent_contract=route_result.contract,
+                    allow_model_fallback=allow_model_fallback,
+                )
         finally:
             self.tools.clear_policy_scope("intent_contract")
 
@@ -1341,11 +1394,211 @@ class AgentLoop:
                     and route_result.recovery_outcome.plan is not None
                     else ""
                 ),
+                "delegate_reason": str(route_result.delegate_reason or ""),
+                "safety_valve_outcome": str(route_result.safety_valve_outcome or ""),
+                "arbitration_result": str(route_result.arbitration_result or ""),
+                "route_candidate_match": "",
+                "route_candidate_source": "",
+                "route_candidate_raw_confidence": "",
+                "route_candidate_crystallized_route": "",
+                "safety_valve_weighted_confidence": "",
+                "safety_valve_final_confidence": "",
+                "safety_valve_residual_ratio": "",
+                "safety_valve_matched_candidates_count": "",
+                "safety_valve_has_context_pronoun": False,
+                "safety_valve_length_outlier": False,
+                "routing_stage": "",
+                "entered_gate3": False,
             }
+            routing_stage, entered_gate3 = self._resolve_intent_router_stage(route_result)
+            event["routing_stage"] = routing_stage
+            event["entered_gate3"] = entered_gate3
+            candidate = route_result.route_candidate if isinstance(route_result.route_candidate, dict) else None
+            if candidate is not None:
+                event["route_candidate_match"] = str(candidate.get("match") or "")
+                event["route_candidate_source"] = str(candidate.get("source") or "")
+                event["route_candidate_crystallized_route"] = str(
+                    candidate.get("crystallized_route") or ""
+                )
+                raw_confidence = candidate.get("raw_confidence")
+                if raw_confidence is not None:
+                    event["route_candidate_raw_confidence"] = raw_confidence
+            trace = route_result.safety_valve_trace if isinstance(route_result.safety_valve_trace, dict) else None
+            if trace is not None:
+                event["safety_valve_weighted_confidence"] = trace.get("weighted_confidence", "")
+                event["safety_valve_final_confidence"] = trace.get("final_confidence", "")
+                event["safety_valve_residual_ratio"] = trace.get("residual_ratio", "")
+                event["safety_valve_matched_candidates_count"] = trace.get(
+                    "matched_candidates_count", ""
+                )
+                event["safety_valve_has_context_pronoun"] = bool(trace.get("has_context_pronoun"))
+                event["safety_valve_length_outlier"] = bool(trace.get("length_outlier"))
             with (dashboard_dir / "intent_router.log.jsonl").open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, ensure_ascii=False) + "\n")
         except Exception:
             return
+
+    @staticmethod
+    def _update_intent_router_control_state(
+        metadata: dict[str, Any],
+        route_result: IntentRouteResult,
+    ) -> None:
+        candidate = route_result.route_candidate if isinstance(route_result.route_candidate, dict) else None
+        source = str(candidate.get("source") or "").strip().lower() if candidate else ""
+        intent_name = str(route_result.intent_name or "").strip()
+        crystallized_name = str(candidate.get("crystallized_route") or "").strip() if candidate else ""
+
+        if route_result.route_status in {"direct_success", "direct_failed"} and source:
+            history = metadata.get("intent_router_history")
+            if not isinstance(history, dict):
+                history = {}
+                metadata["intent_router_history"] = history
+            intent_history = history.get(intent_name)
+            if not isinstance(intent_history, dict):
+                intent_history = {"success": 0, "failure": 0}
+                history[intent_name] = intent_history
+            success = max(int(intent_history.get("success", 0) or 0), 0)
+            failure = max(int(intent_history.get("failure", 0) or 0), 0)
+            if route_result.route_status == "direct_success":
+                success += 1
+            else:
+                failure += 1
+            intent_history["success"] = success
+            intent_history["failure"] = failure
+            metadata["intent_router_last_rule"] = {
+                "intent_name": intent_name,
+                "source": source,
+                "route_status": route_result.route_status,
+            }
+            if source == "crystallized" and crystallized_name:
+                state_map = metadata.get("intent_router_crystallized_state")
+                if not isinstance(state_map, dict):
+                    state_map = {}
+                    metadata["intent_router_crystallized_state"] = state_map
+                route_state = state_map.get(crystallized_name)
+                if not isinstance(route_state, dict):
+                    route_state = {"success": 0, "failure": 0, "consecutive_failures": 0}
+                    state_map[crystallized_name] = route_state
+                route_success = max(int(route_state.get("success", 0) or 0), 0)
+                route_failure = max(int(route_state.get("failure", 0) or 0), 0)
+                if route_result.route_status == "direct_success":
+                    route_success += 1
+                    route_state["consecutive_failures"] = 0
+                else:
+                    route_failure += 1
+                    route_state["consecutive_failures"] = max(
+                        int(route_state.get("consecutive_failures", 0) or 0),
+                        0,
+                    ) + 1
+                route_state["success"] = route_success
+                route_state["failure"] = route_failure
+            return
+
+        metadata.pop("intent_router_last_rule", None)
+
+    @staticmethod
+    def _resolve_intent_router_stage(route_result: IntentRouteResult) -> tuple[str, bool]:
+        arbitration = str(route_result.arbitration_result or "").strip().lower()
+        diagnostic = str(route_result.diagnostic or "")
+        if arbitration == "request_clarification":
+            return "gate2_clarify", False
+        if arbitration == "unclassified" and "gate3_entry" in diagnostic:
+            return "gate3_plan", True
+        if route_result.safety_valve_outcome == "delegate" or arbitration in {
+            "confirm_candidate",
+            "select_skill",
+            "unclassified",
+        }:
+            return "gate2_delegate", False
+        if route_result.route_status in {"direct_success", "direct_failed"}:
+            return "gate1_execute", False
+        return "", False
+
+    async def _run_gate2_classifier(
+        self,
+        *,
+        msg: InboundMessage,
+        session: "Session",
+        route_result: IntentRouteResult,
+        trace_id: str,
+    ) -> tuple[IntentRouteResult, str | None, str | None]:
+        history = session.get_history(max_messages=6)
+        session_override_model = str(session.metadata.get("override_model") or "").strip()
+        classifier_model = session_override_model or self.model
+        arbitration = await self.intent_router_classifier.classify(
+            provider=self.provider,
+            model=classifier_model,
+            content=msg.content,
+            history=history,
+            route_candidate=route_result.route_candidate,
+            delegate_reason=route_result.delegate_reason,
+            available_skills=self.skill_names,
+        )
+        route_result.arbitration_result = arbitration.kind
+
+        if arbitration.kind == "confirm_candidate":
+            return route_result, None, None
+
+        if arbitration.kind == "select_skill":
+            skill_name = str(arbitration.skill_name or "").strip()
+            instruction = (
+                f"Gate 2 selected skill `{skill_name}`. Prefer that skill if it is relevant and available. "
+                "Do not ignore the delegated routing hint."
+            )
+            return route_result, instruction, None
+
+        if arbitration.kind == "request_clarification":
+            question = str(arbitration.clarification_question or "").strip()
+            if not question:
+                question = "我需要一点澄清：你具体是想让我做哪一种？"
+            return route_result, None, question
+
+        route_result.contract = None
+        route_result.skip_planning = False
+        route_result.diagnostic = (
+            f"{route_result.diagnostic}:gate2_unclassified"
+            if route_result.diagnostic
+            else "gate2:unclassified"
+        )
+        route_result.contract = self._GATE3_DEFAULT_CONTRACT
+        return route_result, None, None
+
+    async def _enter_gate3_agent_loop(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        msg: InboundMessage,
+        session: "Session",
+        trace_id: str,
+        route_result: IntentRouteResult,
+        run_model: str,
+        explicit_approved_tools: set[str],
+        constrained_tools: list[dict[str, Any]] | None,
+        allow_model_fallback: bool,
+    ) -> tuple[str | None, dict[str, int]]:
+        gate3_messages = list(messages)
+        usage: dict[str, int] = {}
+        if not route_result.skip_planning:
+            gate3_messages = await self._run_plan_phase(
+                gate3_messages,
+                msg.content,
+                trace_id,
+                model=run_model,
+            )
+        final_content, _ = await self._run_execute_reflect_loop(
+            gate3_messages,
+            trace_id,
+            session=session,
+            model=run_model,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            usage_collector=usage,
+            tool_definitions=constrained_tools,
+            approved_one_shot_tools=explicit_approved_tools,
+            active_intent_contract=route_result.contract,
+            allow_model_fallback=allow_model_fallback,
+        )
+        return final_content, usage
 
     def _append_model_selection_event(
         self,
@@ -1528,11 +1781,15 @@ class AgentLoop:
             self._apply_channel_role_tool_policy(msg.metadata)
             self._apply_session_tool_policy(session.metadata)
 
-            retry_result = await self.intent_router.route(
-                msg.content,
-                tools=self.tools,
-                trace_id=trace_id,
-            )
+            self.intent_router.set_control_context(session.metadata)
+            try:
+                retry_result = await self.intent_router.route(
+                    msg.content,
+                    tools=self.tools,
+                    trace_id=trace_id,
+                )
+            finally:
+                self.intent_router.set_control_context(None)
             if retry_result.route_status == "direct_success" and retry_result.content:
                 followup_content = self._build_deferred_retry_followup(retry_result.content)
                 await self._publish_followup_reply(
@@ -2406,3 +2663,24 @@ class AgentLoop:
 
     _CHANNEL_USER_ALLOW_TOOLS = ["read_file", "web_search"]
     _HIGH_RISK_SKILL_SCOPES = {"exec", "message", "cron", "sessions"}
+    _GATE3_DEFAULT_CONTRACT = IntentToolContract(
+        intent_name="default_contract",
+        preferred_tools=["read_file", "list_dir", "web_search", "web_fetch", "message"],
+        allowed_tools={"read_file", "list_dir", "web_search", "web_fetch", "message"},
+        denied_tools={
+            "exec",
+            "spawn",
+            "write_file",
+            "edit_file",
+            "cron",
+            "sessions_spawn",
+            "sessions_kill",
+            "sessions_write",
+            "sessions_signal",
+            "sessions_resize",
+        },
+        intent_mode="skill_first",
+        allow_constrained_replan=True,
+        allow_high_risk_escalation=False,
+        response_mode="llm_assisted",
+    )

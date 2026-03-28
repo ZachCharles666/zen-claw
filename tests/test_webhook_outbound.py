@@ -5,15 +5,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
 
-import pytest
-
 from zen_claw.webhooks.outbound import WebhookDispatcher, WebhookDispatchRecord
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

@@ -13,11 +13,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from zen_claw.telemetry.token_usage import TokenUsageRecord, TokenUsageTracker
-
 
 # ── Built-in pricing table ─────────────────────────────────────────────────
 # USD per 1 000 output tokens.  Input token price = output * INPUT_RATIO.

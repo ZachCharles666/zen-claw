@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 
 try:
-    from fastapi.testclient import TestClient as _TC
-    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
+    from fastapi.testclient import TestClient as _TestClient
+
     import zen_claw.dashboard.server as _srv_mod
+    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
 
     _FASTAPI_AVAILABLE = api_app is not None
 except Exception:
@@ -83,7 +84,7 @@ def _setup_api(tmp_path: Path, monkeypatch, source_names: list[str] | None = Non
 class TestUpsertSchedule:
     def test_upsert_schedule_creates_entry(self, tmp_path: Path) -> None:
         """upsert_schedule creates a new entry in schedules.json."""
-        from zen_claw.skills.crawler.scheduler import upsert_schedule, load_schedules_json
+        from zen_claw.skills.crawler.scheduler import load_schedules_json, upsert_schedule
 
         path = _schedules_path(tmp_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +95,7 @@ class TestUpsertSchedule:
 
     def test_upsert_schedule_overwrites(self, tmp_path: Path) -> None:
         """Second upsert with same source_name replaces the first entry."""
-        from zen_claw.skills.crawler.scheduler import upsert_schedule, load_schedules_json
+        from zen_claw.skills.crawler.scheduler import load_schedules_json, upsert_schedule
 
         path = _schedules_path(tmp_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,7 +109,11 @@ class TestUpsertSchedule:
 class TestDeleteSchedule:
     def test_delete_schedule_found(self, tmp_path: Path) -> None:
         """delete_schedule removes entry, returns True."""
-        from zen_claw.skills.crawler.scheduler import upsert_schedule, delete_schedule, load_schedules_json
+        from zen_claw.skills.crawler.scheduler import (
+            delete_schedule,
+            load_schedules_json,
+            upsert_schedule,
+        )
 
         path = _schedules_path(tmp_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +135,11 @@ class TestDeleteSchedule:
 class TestSetScheduleEnabled:
     def test_set_schedule_enabled_pause(self, tmp_path: Path) -> None:
         """set_schedule_enabled(False) pauses the schedule."""
-        from zen_claw.skills.crawler.scheduler import upsert_schedule, set_schedule_enabled, load_schedules_json
+        from zen_claw.skills.crawler.scheduler import (
+            load_schedules_json,
+            set_schedule_enabled,
+            upsert_schedule,
+        )
 
         path = _schedules_path(tmp_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -142,7 +151,11 @@ class TestSetScheduleEnabled:
 
     def test_set_schedule_enabled_resume(self, tmp_path: Path) -> None:
         """set_schedule_enabled(True) resumes a paused schedule."""
-        from zen_claw.skills.crawler.scheduler import upsert_schedule, set_schedule_enabled, load_schedules_json
+        from zen_claw.skills.crawler.scheduler import (
+            load_schedules_json,
+            set_schedule_enabled,
+            upsert_schedule,
+        )
 
         path = _schedules_path(tmp_path)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -162,7 +175,7 @@ class TestSchedulesListAPI:
     def test_schedules_list_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """GET /api/v1/crawler/schedules → 200, contains schedules/total."""
         raw = _setup_api(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/crawler/schedules", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         data = resp.json()
@@ -174,7 +187,7 @@ class TestCreateScheduleAPI:
     def test_create_schedule_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """POST /api/v1/crawler/schedules → 200, ok=True."""
         raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/crawler/schedules",
             json={"source_name": "news", "cron": "0 */6 * * *"},
@@ -186,7 +199,7 @@ class TestCreateScheduleAPI:
     def test_create_schedule_api_source_not_found_404(self, tmp_path: Path, monkeypatch) -> None:
         """POST schedule for non-existent source → 404."""
         raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/crawler/schedules",
             json={"source_name": "ghost_xyz", "cron": "0 */6 * * *"},
@@ -197,7 +210,7 @@ class TestCreateScheduleAPI:
     def test_schedule_audit_written(self, tmp_path: Path, monkeypatch) -> None:
         """POST schedule writes event='crawler.schedule.upsert' to audit log."""
         raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         client.post(
             "/api/v1/crawler/schedules",
             json={"source_name": "news", "cron": "0 */6 * * *"},
@@ -214,7 +227,7 @@ class TestDeleteScheduleAPI:
     def test_delete_schedule_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """DELETE /api/v1/crawler/schedules/{name} → 200."""
         raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         # Create first
         client.post(
             "/api/v1/crawler/schedules",
@@ -227,7 +240,7 @@ class TestDeleteScheduleAPI:
     def test_delete_schedule_api_404(self, tmp_path: Path, monkeypatch) -> None:
         """DELETE non-existent schedule → 404."""
         raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.delete("/api/v1/crawler/schedules/ghost_xyz", headers={"X-API-Key": raw})
         assert resp.status_code == 404
 
@@ -243,7 +256,7 @@ class TestPauseResumeAPI:
     def test_pause_schedule_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """POST .../pause → 200, enabled=False."""
         raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         self._create_schedule(client, raw)
         resp = client.post("/api/v1/crawler/schedules/news/pause", headers={"X-API-Key": raw})
         assert resp.status_code == 200
@@ -252,7 +265,7 @@ class TestPauseResumeAPI:
     def test_resume_schedule_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """POST .../resume → 200, enabled=True."""
         raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         self._create_schedule(client, raw)
         client.post("/api/v1/crawler/schedules/news/pause", headers={"X-API-Key": raw})
         resp = client.post("/api/v1/crawler/schedules/news/resume", headers={"X-API-Key": raw})
@@ -262,6 +275,6 @@ class TestPauseResumeAPI:
     def test_pause_missing_schedule_404(self, tmp_path: Path, monkeypatch) -> None:
         """Pause non-existent schedule → 404."""
         raw = _setup_api(tmp_path, monkeypatch, ["news"])
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post("/api/v1/crawler/schedules/ghost_xyz/pause", headers={"X-API-Key": raw})
         assert resp.status_code == 404

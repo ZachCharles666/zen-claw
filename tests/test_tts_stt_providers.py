@@ -1,15 +1,12 @@
 """Tests for TTS/STT providers and tool — PA3."""
 
-from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from zen_claw.providers.transcription import GroqTranscriptionProvider, is_supported_audio_file
-from zen_claw.providers.tts import EdgeTTSProvider, OpenAITTSProvider, get_tts_provider
 from zen_claw.agent.tools.tts import TextToSpeechTool
-
+from zen_claw.providers.transcription import GroqTranscriptionProvider, is_supported_audio_file
+from zen_claw.providers.tts import EdgeTTSProvider, get_tts_provider
 
 # ── EdgeTTSProvider ───────────────────────────────────────────────────────────
 

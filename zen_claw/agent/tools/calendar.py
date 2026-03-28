@@ -10,7 +10,6 @@ from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 
 if TYPE_CHECKING:
-    from zen_claw.auth.credentials import CredentialVault
     from zen_claw.config.schema import CalendarConfig
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────

@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
-import pytest
-
 from zen_claw.telemetry.savings import (
-    BUILTIN_PRICES,
     SavingsCalculator,
-    SavingsReport,
     _price_per_k,
     _token_cost_usd,
 )
 from zen_claw.telemetry.token_usage import TokenUsageTracker
-
 
 # ── pricing helpers ───────────────────────────────────────────────────────────
 

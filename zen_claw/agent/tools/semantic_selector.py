@@ -15,7 +15,6 @@ import math
 import re
 from typing import Any
 
-
 # ── Tokeniser ─────────────────────────────────────────────────────────────────
 
 def _tokenise(text: str) -> list[str]:
@@ -43,11 +42,11 @@ def _bm25_scores(
     query_tokens: list[str],
 ) -> list[float]:
     """Return a BM25 score for each document in *corpus_tokens*."""
-    N = len(corpus_tokens)
-    if N == 0:
+    corpus_size = len(corpus_tokens)
+    if corpus_size == 0:
         return []
 
-    avg_dl = sum(len(d) for d in corpus_tokens) / N
+    avg_dl = sum(len(d) for d in corpus_tokens) / corpus_size
 
     # Build IDF: how many documents contain each query term
     df: dict[str, int] = {}
@@ -70,7 +69,7 @@ def _bm25_scores(
             df_t = df.get(qt, 0)
             if df_t == 0:
                 continue
-            idf = math.log((N - df_t + 0.5) / (df_t + 0.5) + 1)
+            idf = math.log((corpus_size - df_t + 0.5) / (df_t + 0.5) + 1)
             tf_norm = (tf * (_K1 + 1)) / (tf + _K1 * (1 - _B + _B * dl / avg_dl))
             score += idf * tf_norm
         scores.append(score)

@@ -9,7 +9,6 @@ from zen_claw.agent.tools._url_guard import is_domain_blocked
 from zen_claw.agent.tools.browser import BrowserOpenTool
 from zen_claw.agent.tools.result import ToolErrorKind
 
-
 # ---------------------------------------------------------------------------
 # _url_guard unit tests
 # ---------------------------------------------------------------------------

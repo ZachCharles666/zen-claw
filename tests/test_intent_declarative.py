@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from zen_claw.agent.intent_router_contracts import IntentToolContract
+from zen_claw.agent.intent_router_contracts import ControlSignals, IntentToolContract
 from zen_claw.agent.intent_router_daily import (
     CALENDAR_CHECK,
     DAILY_INTENTS,
@@ -20,7 +20,6 @@ from zen_claw.agent.intent_router_declarative import (
     DeclarativeIntentEngine,
     ParamRule,
 )
-
 
 # ── ParamRule tests ──────────────��─────────────────────────────────────────────
 
@@ -46,6 +45,13 @@ def test_param_rule_extract_bool():
 def test_param_rule_no_pattern_returns_default():
     rule = ParamRule(default="google")
     assert rule.extract("anything here") == "google"
+
+
+def test_param_rule_extract_with_trace_returns_consumed_span():
+    rule = ParamRule(pattern=r"from\s+(\S+)", default=None)
+    value, ranges = rule.extract_with_trace("email from alice@test.com")
+    assert value == "alice@test.com"
+    assert ranges == [(11, 25)]
 
 
 # ── DeclarativeIntent matching tests ────────────���──────────────────────────────
@@ -164,6 +170,11 @@ async def test_engine_routes_email_check():
     assert result.route_status == "direct_success"
     assert result.intent_name == "email_check"
     assert "3 unread" in result.content
+    assert result.route_candidate is not None
+    assert result.route_candidate["match"] == "email_check"
+    assert result.route_candidate["source"] == "declarative"
+    assert result.route_candidate["raw_confidence"] == 0.9
+    assert result.safety_valve_outcome == "execute"
     tools.execute.assert_awaited_once()
 
 
@@ -179,6 +190,122 @@ async def test_engine_routes_tool_failure():
     assert result.handled
     assert result.route_status == "direct_failed"
     assert result.recovery_outcome is not None
+    assert result.route_candidate is not None
+    assert result.route_candidate["match"] == "email_check"
+    assert result.route_candidate["source"] == "declarative"
+    assert result.route_candidate["raw_confidence"] == 0.9
+    assert result.safety_valve_outcome == "execute"
+
+
+@pytest.mark.asyncio
+async def test_engine_delegates_direct_intent_on_low_history_confidence():
+    engine = DeclarativeIntentEngine()
+    engine.register(EMAIL_CHECK)
+    tools = _make_tools_mock("You have 3 unread emails.")
+
+    result = await engine.route(
+        "未读邮件",
+        tools=tools,
+        trace_id="t2b",
+        control_signals=ControlSignals(history_confidence={"email_check": 0.5}),
+    )
+
+    assert result is not None
+    assert result.handled
+    assert result.route_status == "needs_constrained_replan"
+    assert result.intent_name == "email_check"
+    assert result.content == "未读邮件"
+    assert result.delegate_reason == "safety_valve_low_confidence"
+    assert result.safety_valve_outcome == "delegate"
+    assert result.safety_valve_trace is not None
+    assert result.safety_valve_trace["weighted_confidence"] == 0.45
+    assert result.route_candidate is not None
+    assert result.route_candidate["match"] == "email_check"
+    tools.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_engine_delegates_when_param_residual_ratio_is_high():
+    intent = DeclarativeIntent(
+        name="mail_from",
+        patterns=[r"email"],
+        params={"sender": ParamRule(pattern=r"from\s+(\S+)", default=None)},
+        tool_name="email",
+        contract=IntentToolContract(
+            intent_name="mail_from",
+            preferred_tools=["email"],
+            allowed_tools={"email"},
+            denied_tools={"exec"},
+        ),
+    )
+    engine = DeclarativeIntentEngine()
+    engine.register(intent)
+    tools = _make_tools_mock("ok")
+
+    result = await engine.route(
+        "check email from alice about budget and summarize the risk",
+        tools=tools,
+        trace_id="t2c",
+        control_signals=ControlSignals(history_confidence={"mail_from": 1.0}),
+    )
+
+    assert result is not None
+    assert result.route_status == "needs_constrained_replan"
+    assert result.delegate_reason == "safety_valve_high_residual_ratio"
+    assert result.safety_valve_trace is not None
+    assert result.safety_valve_trace["residual_ratio"] > 0.45
+    tools.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_engine_delegates_when_multiple_candidates_match():
+    shared_contract = IntentToolContract(
+        intent_name="shared",
+        preferred_tools=["email"],
+        allowed_tools={"email"},
+        denied_tools={"exec"},
+    )
+    engine = DeclarativeIntentEngine()
+    engine.register(
+        DeclarativeIntent(name="alpha", patterns=[r"check"], tool_name="email", contract=shared_contract)
+    )
+    engine.register(
+        DeclarativeIntent(name="beta", patterns=[r"email"], tool_name="email", contract=shared_contract)
+    )
+    tools = _make_tools_mock("ok")
+
+    result = await engine.route(
+        "check email",
+        tools=tools,
+        trace_id="t2d",
+        control_signals=ControlSignals(history_confidence={"alpha": 1.0, "beta": 1.0}),
+    )
+
+    assert result is not None
+    assert result.delegate_reason == "safety_valve_multiple_candidates"
+    assert result.safety_valve_trace is not None
+    assert result.safety_valve_trace["matched_candidates_count"] == 2
+    tools.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_engine_delegates_when_context_pronoun_present():
+    engine = DeclarativeIntentEngine()
+    engine.register(EMAIL_CHECK)
+    tools = _make_tools_mock("ok")
+
+    result = await engine.route(
+        "查一下那个邮件",
+        tools=tools,
+        trace_id="t2e",
+        control_signals=ControlSignals(history_confidence={"email_check": 1.0}),
+    )
+
+    assert result is not None
+    assert result.delegate_reason == "safety_valve_context_pronoun"
+    assert result.safety_valve_trace is not None
+    assert result.safety_valve_trace["has_context_pronoun"] is True
+    tools.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -195,6 +322,10 @@ async def test_engine_routes_hybrid_daily_workflow():
     assert result.intent_name == "daily_workflow"
     assert result.contract is not None
     assert result.contract.intent_mode == "hybrid"
+    assert result.route_candidate is not None
+    assert result.route_candidate["match"] == "daily_workflow"
+    assert result.route_candidate["source"] == "declarative"
+    assert result.route_candidate["raw_confidence"] == 0.75
     # Tool should NOT be called for hybrid intents
     tools.execute.assert_not_awaited()
 
@@ -260,6 +391,8 @@ async def test_intent_router_declarative_before_native():
     assert result.handled
     assert result.intent_name == "email_check"
     assert "declarative" in (result.diagnostic or "")
+    assert result.route_candidate is not None
+    assert result.route_candidate["source"] == "declarative"
 
 
 @pytest.mark.asyncio
@@ -290,3 +423,29 @@ async def test_intent_router_misses_generic_text():
     # Should either be unhandled or not match daily intents
     if result.handled:
         assert result.intent_name not in {"email_check", "calendar_check", "reminder", "notion_query"}
+
+
+@pytest.mark.asyncio
+async def test_intent_router_correction_hard_rule_delegates_before_rules():
+    from zen_claw.agent.intent_router import IntentRouter
+
+    router = IntentRouter(allow_runtime_constrained_replan=True)
+    router.set_control_context(
+        {
+            "intent_router_last_rule": {
+                "intent_name": "email_check",
+                "source": "declarative",
+                "route_status": "direct_success",
+            }
+        }
+    )
+    tools = _make_tools_mock("should not run")
+
+    result = await router.route("不是这个意思", tools=tools, trace_id="t9")
+
+    assert result.handled
+    assert result.route_status == "needs_constrained_replan"
+    assert result.delegate_reason == "correction_override"
+    assert result.safety_valve_outcome == "delegate"
+    assert result.diagnostic == "gate1:correction_override"
+    tools.execute.assert_not_awaited()

@@ -15,7 +15,6 @@ from zen_claw.config.schema import (
     OutlookCalendarConfig,
 )
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 

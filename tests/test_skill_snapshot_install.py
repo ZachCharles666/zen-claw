@@ -13,7 +13,6 @@ import pytest
 from zen_claw.agent.skills import SkillsLoader
 from zen_claw.errors import AgentMidTurnReloadException
 
-
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
 # ---------------------------------------------------------------------------

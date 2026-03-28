@@ -10,9 +10,10 @@ from pathlib import Path
 import pytest
 
 try:
-    from fastapi.testclient import TestClient as _TC
-    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
+    from fastapi.testclient import TestClient as _TestClient
+
     import zen_claw.dashboard.server as _srv_mod
+    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
 
     _FASTAPI_AVAILABLE = api_app is not None
 except Exception:
@@ -192,7 +193,7 @@ class TestActivityHistoryNotebookFilter:
         )
         (log_dir / "knowledge_policy.log.jsonl").write_text("")
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get(
             "/api/v1/rag/activity-history",
             params={"format": "csv"},
@@ -211,7 +212,7 @@ class TestNotebookAPI:
     def test_list_notebooks_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """GET /api/v1/rag/notebooks → 200 with notebooks/total fields."""
         raw = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/rag/notebooks", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         data = resp.json()
@@ -221,7 +222,7 @@ class TestNotebookAPI:
     def test_create_notebook_api_returns_200(self, tmp_path: Path, monkeypatch) -> None:
         """POST /api/v1/rag/notebooks → 200, ok=True."""
         raw = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/rag/notebooks",
             json={"notebook_id": "api_test_kb"},
@@ -234,7 +235,7 @@ class TestNotebookAPI:
     def test_create_notebook_api_duplicate_409(self, tmp_path: Path, monkeypatch) -> None:
         """Duplicate POST /api/v1/rag/notebooks → 409."""
         raw = _api_setup(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         client.post(
             "/api/v1/rag/notebooks",
             json={"notebook_id": "dup_api_kb"},
@@ -254,7 +255,7 @@ class TestNotebookAPI:
         pipeline = _pipeline(tmp_path)
         pipeline.ensure_notebook("default")
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/rag/notebook/default/repair",
             headers={"X-API-Key": raw},
@@ -274,7 +275,7 @@ class TestNotebookAPI:
         )
         (log_dir / "knowledge_policy.log.jsonl").write_text("")
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get(
             "/api/v1/rag/activity-history",
             params={"notebook_id": "special_nb", "limit": 10},

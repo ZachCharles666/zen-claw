@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 try:
-    from fastapi.testclient import TestClient as _TC
-    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
+    from fastapi.testclient import TestClient as _TestClient
+
     import zen_claw.dashboard.server as _srv_mod
+    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
 
     _FASTAPI_AVAILABLE = api_app is not None
 except Exception:
@@ -221,7 +221,7 @@ class TestAgentRoutesAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/agents/routes", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         data = resp.json()
@@ -239,7 +239,7 @@ class TestAgentRoutesAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.request(
             "DELETE",
             "/api/v1/agents/routes",
@@ -258,7 +258,7 @@ class TestAgentRoutesAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.request(
             "DELETE",
             "/api/v1/agents/routes",
@@ -283,7 +283,7 @@ class TestAgentRoutesAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get("/api/v1/agents/routes/audit", headers={"X-API-Key": raw})
         assert resp.status_code == 200
         data = resp.json()
@@ -300,7 +300,7 @@ class TestAgentRoutesAPI:
         raw, _ = generate_api_key()
         store_api_key(raw)
 
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.get(
             "/api/v1/agents/routes/audit?format=csv",
             headers={"X-API-Key": raw},

@@ -7,6 +7,7 @@ daily-assistant queries without LLM reasoning.
 from __future__ import annotations
 
 from zen_claw.agent.intent_router_contracts import IntentToolContract
+from zen_claw.agent.intent_router_crystallized import CrystallizedIntent
 from zen_claw.agent.intent_router_declarative import DeclarativeIntent, ParamRule
 
 # ── Contracts ──────────────────────────────────────────────────────────────────
@@ -229,4 +230,29 @@ DAILY_INTENTS: list[DeclarativeIntent] = [
     REMINDER,
     NOTION_QUERY,
     DAILY_WORKFLOW,
+]
+
+CRYSTALLIZED_DAILY_INTENTS: list[CrystallizedIntent] = [
+    CrystallizedIntent(
+        name="inbox_triage_promoted",
+        target_intent_name="email_check",
+        patterns=[
+            r"(?:看|查)(?:一下)?(?:我的)?未读邮件",
+            r"(?:帮我)?看看(?:我的)?收件箱",
+            r"\bcheck\s+(?:my\s+)?unread\s+(?:email|emails|mail)\b",
+            r"\bshow\s+(?:me\s+)?(?:my\s+)?inbox\b",
+        ],
+        negative_patterns=[
+            r"(?:发|写|回复|转发|send|reply|forward|compose|write|draft)\s*(?:邮件|email|mail)",
+        ],
+    ),
+    CrystallizedIntent(
+        name="today_schedule_promoted",
+        target_intent_name="calendar_check",
+        patterns=[
+            r"(?:看|查)(?:一下)?(?:我)?今天(?:的)?日程",
+            r"(?:今天|今日)(?:的)?安排有哪些",
+            r"\btoday(?:'s)?\s+(?:schedule|agenda|calendar)\b",
+        ],
+    ),
 ]

@@ -1,9 +1,7 @@
 """Tests for SSRF protection in web tools (IPv4 and IPv6)."""
 
-import pytest
 
 from zen_claw.agent.tools.web import _is_private_host, _validate_url
-
 
 # ---------------------------------------------------------------------------
 # IPv4 private ranges

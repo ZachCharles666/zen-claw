@@ -12,7 +12,7 @@ import time
 import uuid
 import zipfile
 from collections import Counter
-from datetime import datetime
+from datetime import UTC, datetime
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -2509,6 +2509,12 @@ if _HAS_FASTAPI:
         overwrite: bool = Field(False)
         strict_manifest: bool = Field(False)
         sanitize: bool = Field(False)
+        source_url: str | None = Field(None, json_schema_extra={"example": "https://example.com/skill.zip"})
+        source_version: str | None = Field(None, json_schema_extra={"example": "1.2.3"})
+        last_sync_checked_at: str | None = Field(
+            None, json_schema_extra={"example": "2026-03-28T15:30:00Z"}
+        )
+        intake_status: str | None = Field(None, json_schema_extra={"example": "intake_review"})
 
     class SkillCleanupRequest(BaseModel):
         retention_hours: int = Field(24, ge=0, le=24 * 365)
@@ -2533,6 +2539,10 @@ if _HAS_FASTAPI:
         names: list[str] = Field(default_factory=list)
         action: str = Field(..., description="enable | disable | preflight")
         dry_run: bool = Field(False)
+
+    class SkillPromoteRequest(BaseModel):
+        declarative_intent: str = Field(..., json_schema_extra={"example": "finance_writer"})
+        note: str | None = Field(None, json_schema_extra={"example": "ready for manual Gate 1 rule registration"})
 
     class AgentModelUpdateRequest(BaseModel):
         model: str = Field(..., json_schema_extra={"example": "deepseek-chat"})
@@ -3202,6 +3212,15 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
         )
         if not ok:
             raise HTTPException(status_code=400, detail=msg)
+        metadata_updates = {
+            "source_url": str(req.source_url or "").strip(),
+            "source_version": str(req.source_version or "").strip(),
+            "last_sync_checked_at": str(req.last_sync_checked_at or "").strip(),
+            "intake_status": str(req.intake_status or ("intake_review" if str(req.source_url or "").strip() else "local")).strip(),
+        }
+        metadata_updates = {key: value for key, value in metadata_updates.items() if value}
+        if metadata_updates:
+            loader.update_skill_governance_metadata(install_name, **metadata_updates)
         event = _append_skill_action_audit(
             data_dir=data_dir,
             skill_name=install_name,
@@ -3219,6 +3238,7 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 "overwrite": bool(req.overwrite),
                 "strict_manifest": bool(req.strict_manifest),
                 "sanitize": bool(req.sanitize),
+                "governance": metadata_updates,
                 "message": msg,
                 "event": event,
             }
@@ -3322,6 +3342,15 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             retention_hours=req.retention_hours,
             require_export_for_restore=req.require_export_for_restore,
         )
+
+    @api_router.post(
+        "/skills/{name}/promote",
+        summary="标记技能 promote 结果",
+        description="记录一个 skill 已通过人工 promote 评审，并附带目标 DeclarativeIntent 名称与审计说明。",
+        tags=["skills"],
+    )
+    async def api_skill_promote(name: str, req: SkillPromoteRequest):
+        return _promote_skill(name=name, declarative_intent=req.declarative_intent, note=req.note)
 
     @api_router.post(
         "/skills/{name}/export",
@@ -6899,6 +6928,50 @@ def _read_skill_package_state(*, loader, skill_name: str, data_dir: Path) -> dic
     }
 
 
+def _promote_skill(*, name: str, declarative_intent: str, note: str | None = None) -> JSONResponse:
+    from zen_claw.agent.skills import SkillsLoader
+    from zen_claw.config.loader import get_data_dir, load_config
+
+    cfg = load_config()
+    data_dir = get_data_dir()
+    loader = SkillsLoader(cfg.workspace_path)
+    skill_name = str(name or "").strip()
+    target_intent = str(declarative_intent or "").strip()
+    if not target_intent:
+        raise HTTPException(status_code=400, detail="declarative_intent is required")
+    ok, msg = loader.update_skill_governance_metadata(
+        skill_name,
+        promote_status="promoted",
+        promote_target_intent=target_intent,
+        promoted_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail=msg)
+    detail = (
+        f"manual promote recorded: declarative_intent={target_intent}; "
+        f"next_step=handwrite DeclarativeIntent and register into Gate 1"
+    )
+    if str(note or "").strip():
+        detail += f"; note={str(note).strip()}"
+    event = _append_skill_action_audit(
+        data_dir=data_dir,
+        skill_name=skill_name,
+        action="promote",
+        enabled=loader.is_skill_enabled(skill_name),
+        actor="api_key",
+        detail=detail,
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "name": skill_name,
+            "declarative_intent": target_intent,
+            "message": msg,
+            "event": event,
+        }
+    )
+
+
 def _preview_skill_gc(*, loader, retention_hours: int) -> dict[str, Any]:
     cutoff = datetime.now().timestamp() - (max(0, int(retention_hours)) * 3600)
     pins = set()
@@ -7224,7 +7297,11 @@ def _read_skill_detail(*, name: str) -> JSONResponse:
     data_dir = get_data_dir()
     loader = SkillsLoader(cfg.workspace_path)
     skill_name = str(name or "").strip()
-    inventory_rows = {row["name"]: row for row in loader.list_skills(filter_unavailable=False)}
+    inventory_rows = {
+        str(row.get("name") or "").strip(): row
+        for row in list(loader.build_skills_inventory().get("skills") or [])
+        if isinstance(row, dict)
+    }
     row = inventory_rows.get(skill_name)
     if row is None:
         raise HTTPException(status_code=404, detail=f"skill not found: {skill_name}")
@@ -7278,6 +7355,15 @@ def _read_skill_detail(*, name: str) -> JSONResponse:
             "recent_exports": recent_exports,
             "package_state": package_state,
             "package_policy": package_policy,
+            "governance": {
+                "source_url": str((manifest or {}).get("source_url") or "") if isinstance(manifest, dict) else "",
+                "source_version": str((manifest or {}).get("source_version") or "") if isinstance(manifest, dict) else "",
+                "last_sync_checked_at": str((manifest or {}).get("last_sync_checked_at") or "") if isinstance(manifest, dict) else "",
+                "intake_status": str((manifest or {}).get("intake_status") or "local") if isinstance(manifest, dict) else "local",
+                "promote_status": str((manifest or {}).get("promote_status") or "candidate") if isinstance(manifest, dict) else "candidate",
+                "promote_target_intent": str((manifest or {}).get("promote_target_intent") or "") if isinstance(manifest, dict) else "",
+                "intake_summary": row.get("intake_summary") if isinstance(row, dict) else {},
+            },
         }
     )
 

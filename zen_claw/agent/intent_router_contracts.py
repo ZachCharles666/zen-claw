@@ -96,6 +96,45 @@ class IntentRouteResult:
     diagnostic: str | None = None
     skip_planning: bool = False
     recovery_outcome: "RecoveryOutcome | None" = None
+    route_candidate: dict[str, Any] | None = None
+    delegate_reason: str | None = None
+    safety_valve_outcome: str | None = None
+    arbitration_result: str | None = None
+    safety_valve_trace: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ControlSignals:
+    """Explicit control-plane contract for Gate 1 / Safety Valve."""
+
+    history_confidence: dict[str, float]
+    emotion_signal: dict[str, Any] | None = None
+    identity_signal: dict[str, Any] | None = None
+    extra: dict[str, Any] | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "history_confidence": dict(self.history_confidence),
+            "emotion_signal": dict(self.emotion_signal or {}),
+            "identity_signal": dict(self.identity_signal or {}),
+            "extra": dict(self.extra or {}),
+        }
+
+
+@dataclass(frozen=True)
+class IntentArbitrationResult:
+    """Structured Gate 2 classification result."""
+
+    kind: Literal[
+        "confirm_candidate",
+        "select_skill",
+        "request_clarification",
+        "unclassified",
+    ]
+    candidate_name: str | None = None
+    skill_name: str | None = None
+    clarification_question: str | None = None
+    diagnostic: str | None = None
 
 
 @dataclass

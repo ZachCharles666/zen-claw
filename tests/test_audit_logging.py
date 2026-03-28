@@ -2,12 +2,8 @@
 
 import asyncio
 import json
-from pathlib import Path
-
-import pytest
 
 from zen_claw.observability.audit import AuditWorker
-
 
 # ---------------------------------------------------------------------------
 # AuditWorker unit tests
@@ -50,7 +46,7 @@ def test_audit_multiple_records_appended(tmp_path):
     asyncio.run(worker.audit_turn("t2", {"event_type": "tool.executed", "tool": "web_fetch", "ok": False}))
 
     log_file = next((tmp_path / "audit_logs").glob("*.jsonl"))
-    lines = [l for l in log_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+    lines = [line for line in log_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 2
     assert json.loads(lines[0])["trace_id"] == "t1"
     assert json.loads(lines[1])["trace_id"] == "t2"
@@ -77,7 +73,6 @@ def test_audit_no_data_dir_creates_no_files(tmp_path):
 
 def test_tool_execution_audit(tmp_path):
     """ToolRegistry emits a tool.executed audit record on successful tool call."""
-    from unittest.mock import AsyncMock
 
     from zen_claw.agent.tools.base import Tool
     from zen_claw.agent.tools.registry import ToolRegistry

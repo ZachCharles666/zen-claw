@@ -24,6 +24,10 @@ class IntentRouterRecoveryMixin:
         contract: IntentToolContract,
         diagnostic: str,
         recovery_outcome: RecoveryOutcome | None = None,
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         return IntentRouteResult(
             handled=True,
@@ -33,6 +37,10 @@ class IntentRouterRecoveryMixin:
             route_status="direct_failed",
             diagnostic=diagnostic,
             recovery_outcome=recovery_outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @staticmethod
@@ -43,6 +51,10 @@ class IntentRouterRecoveryMixin:
         contract: IntentToolContract,
         diagnostic: str | None = None,
         recovery_outcome: RecoveryOutcome | None = None,
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         return IntentRouteResult(
             handled=True,
@@ -52,6 +64,10 @@ class IntentRouterRecoveryMixin:
             route_status="direct_success",
             diagnostic=diagnostic,
             recovery_outcome=recovery_outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @classmethod
@@ -78,6 +94,10 @@ class IntentRouterRecoveryMixin:
         contract: IntentToolContract,
         diagnostic: str,
         mode: Literal["guided", "failed"] = "guided",
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         outcome = cls._recovery_outcome_from_plan(summary=summary, plan=plan, mode=mode)
         return cls._direct_failed(
@@ -86,6 +106,10 @@ class IntentRouterRecoveryMixin:
             contract=contract,
             diagnostic=diagnostic,
             recovery_outcome=outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @staticmethod
@@ -101,6 +125,10 @@ class IntentRouterRecoveryMixin:
         plan: RecoveryPlan,
         contract: IntentToolContract,
         diagnostic: str,
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         return cls._direct_success(
             intent_name=intent_name,
@@ -108,6 +136,10 @@ class IntentRouterRecoveryMixin:
             contract=contract,
             diagnostic=diagnostic,
             recovery_outcome=cls._resolved_outcome(content=content, plan=plan),
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @classmethod
@@ -118,6 +150,10 @@ class IntentRouterRecoveryMixin:
         outcome: RecoveryOutcome,
         contract: IntentToolContract,
         diagnostic: str,
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         return cls._direct_failed(
             intent_name=intent_name,
@@ -125,6 +161,10 @@ class IntentRouterRecoveryMixin:
             contract=contract,
             diagnostic=diagnostic,
             recovery_outcome=outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @staticmethod
@@ -136,6 +176,10 @@ class IntentRouterRecoveryMixin:
         content: str | None = None,
         skip_planning: bool = False,
         recovery_outcome: RecoveryOutcome | None = None,
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         return IntentRouteResult(
             handled=True,
@@ -146,6 +190,10 @@ class IntentRouterRecoveryMixin:
             diagnostic=diagnostic,
             skip_planning=skip_planning,
             recovery_outcome=recovery_outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @staticmethod
@@ -157,6 +205,10 @@ class IntentRouterRecoveryMixin:
         content: str | None = None,
         skip_planning: bool = False,
         recovery_outcome: RecoveryOutcome | None = None,
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         return IntentRouteResult(
             handled=True,
@@ -167,6 +219,10 @@ class IntentRouterRecoveryMixin:
             diagnostic=diagnostic,
             skip_planning=skip_planning,
             recovery_outcome=recovery_outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @classmethod
@@ -179,6 +235,10 @@ class IntentRouterRecoveryMixin:
         diagnostic: str,
         content: str | None = None,
         skip_planning: bool = False,
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         return cls._needs_constrained_replan(
             intent_name=intent_name,
@@ -187,6 +247,10 @@ class IntentRouterRecoveryMixin:
             content=content or outcome.content,
             skip_planning=skip_planning,
             recovery_outcome=outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @classmethod
@@ -201,6 +265,10 @@ class IntentRouterRecoveryMixin:
         content: str | None = None,
         skip_planning: bool = False,
         mode: Literal["guided", "failed"] = "guided",
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         outcome = cls._recovery_outcome_from_plan(summary=summary, plan=plan, mode=mode)
         return cls._needs_constrained_replan(
@@ -210,6 +278,10 @@ class IntentRouterRecoveryMixin:
             content=content or outcome.content,
             skip_planning=skip_planning,
             recovery_outcome=outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @classmethod
@@ -224,6 +296,10 @@ class IntentRouterRecoveryMixin:
         content: str | None = None,
         skip_planning: bool = False,
         mode: Literal["guided", "failed"] = "guided",
+        route_candidate: dict | None = None,
+        delegate_reason: str | None = None,
+        safety_valve_outcome: str | None = None,
+        arbitration_result: str | None = None,
     ) -> IntentRouteResult:
         outcome = cls._recovery_outcome_from_plan(summary=summary, plan=plan, mode=mode)
         return cls._needs_explicit_approval(
@@ -233,6 +309,10 @@ class IntentRouterRecoveryMixin:
             content=content or outcome.content,
             skip_planning=skip_planning,
             recovery_outcome=outcome,
+            route_candidate=route_candidate,
+            delegate_reason=delegate_reason,
+            safety_valve_outcome=safety_valve_outcome,
+            arbitration_result=arbitration_result,
         )
 
     @staticmethod

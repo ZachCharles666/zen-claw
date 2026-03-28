@@ -9,7 +9,6 @@ import pytest
 from zen_claw.knowledge.notebook import NotebookManager
 from zen_claw.knowledge.pipeline import RAGPipeline
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _make_pipeline(tmp_path: Path) -> RAGPipeline:

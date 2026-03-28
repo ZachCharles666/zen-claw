@@ -1209,6 +1209,11 @@ def test_build_skills_inventory_summarizes_status(tmp_path: Path) -> None:
   "permissions": ["read_file"],
   "scopes": ["filesystem"],
   "trust": "trusted",
+  "source_url": "https://example.com/alpha.zip",
+  "source_version": "1.0.0",
+  "last_sync_checked_at": "2026-03-28T15:30:00Z",
+  "intake_status": "intake_review",
+  "promote_status": "candidate",
   "runtime_contract": {
     "intent": "alpha_lookup",
     "intent_mode": "skill_first",
@@ -1234,5 +1239,11 @@ def test_build_skills_inventory_summarizes_status(tmp_path: Path) -> None:
     assert rows["alpha"]["enforce_ready"] is True
     assert rows["alpha"]["runtime_intent"] == "alpha_lookup"
     assert rows["alpha"]["runtime_intent_mode"] == "skill_first"
+    assert rows["alpha"]["source_url"] == "https://example.com/alpha.zip"
+    assert rows["alpha"]["source_version"] == "1.0.0"
+    assert rows["alpha"]["last_sync_checked_at"] == "2026-03-28T15:30:00Z"
+    assert rows["alpha"]["intake_status"] == "intake_review"
+    assert rows["alpha"]["promote_status"] == "candidate"
+    assert rows["alpha"]["intake_summary"]["verdict"] == "accept"
     assert rows["beta"]["enabled"] is False
     assert rows["beta"]["manifest"] == "missing"

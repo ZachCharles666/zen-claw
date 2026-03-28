@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 from zen_claw.agent.intent_cache import IntentCache
-
 
 # ── basic get/put ─────────────────────────────────────────────────────────────
 

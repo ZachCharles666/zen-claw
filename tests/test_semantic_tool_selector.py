@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-
-from zen_claw.agent.tools.semantic_selector import bm25_select, _tokenise
+from zen_claw.agent.tools.semantic_selector import _tokenise, bm25_select
 
 
 def _make_tool(name: str, description: str) -> dict:
@@ -80,8 +78,8 @@ def test_bm25_empty_query_returns_first_k():
 
 def test_registry_query_hint_filters_tools():
     """query_hint triggers BM25 filtering when above threshold."""
-    from zen_claw.agent.tools.registry import ToolRegistry
     from zen_claw.agent.tools.base import Tool
+    from zen_claw.agent.tools.registry import ToolRegistry
     from zen_claw.agent.tools.result import ToolResult
 
     def _make_concrete_tool(tool_name: str, tool_desc: str):

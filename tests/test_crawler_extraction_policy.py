@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 
 try:
-    from fastapi.testclient import TestClient as _TC
-    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
+    from fastapi.testclient import TestClient as _TestClient
+
     import zen_claw.dashboard.server as _srv_mod
+    from zen_claw.dashboard.server import api_app, generate_api_key, store_api_key
 
     _FASTAPI_AVAILABLE = api_app is not None
 except Exception:
@@ -134,8 +135,9 @@ class TestApplySelector:
 
     def test_apply_selector_xpath_fallback(self) -> None:
         """XPath selector with lxml unavailable falls back gracefully."""
-        from zen_claw.skills.crawler.extractor import CrawlerExtractor
         import sys
+
+        from zen_claw.skills.crawler.extractor import CrawlerExtractor
 
         # Patch lxml to be unavailable by temporarily replacing the import
         html = "<html><body><p>fallback</p></body></html>"
@@ -205,7 +207,7 @@ class TestCrawlerSourceRequestValidation:
     def test_source_request_new_fields_defaults(self, tmp_path: Path, monkeypatch) -> None:
         """POST /crawler/sources without new fields → 200 (defaults applied)."""
         raw = _setup_api(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         # Only required fields — new fields should have defaults
         resp = client.post(
             "/api/v1/crawler/sources",
@@ -223,7 +225,7 @@ class TestCrawlerSourceRequestValidation:
     def test_source_request_max_pages_over_limit(self, tmp_path: Path, monkeypatch) -> None:
         """max_pages > 20 → 422 validation error."""
         raw = _setup_api(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/crawler/sources",
             json={"name": "test", "url": "https://example.com", "max_pages": 21},
@@ -234,7 +236,7 @@ class TestCrawlerSourceRequestValidation:
     def test_source_request_max_pages_zero(self, tmp_path: Path, monkeypatch) -> None:
         """max_pages=0 → 422 validation error."""
         raw = _setup_api(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         resp = client.post(
             "/api/v1/crawler/sources",
             json={"name": "test", "url": "https://example.com", "max_pages": 0},
@@ -252,7 +254,7 @@ class TestNewFieldsPersistence:
     def test_upsert_source_persists_selector_type(self, tmp_path: Path, monkeypatch) -> None:
         """POST /crawler/sources with selector_type='regex' → GET sources returns it."""
         raw = _setup_api(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         client.post(
             "/api/v1/crawler/sources",
             json={"name": "news", "url": "https://example.com", "selector_type": "regex"},
@@ -266,7 +268,7 @@ class TestNewFieldsPersistence:
     def test_upsert_source_persists_max_pages(self, tmp_path: Path, monkeypatch) -> None:
         """POST /crawler/sources with max_pages=5 → GET returns max_pages=5."""
         raw = _setup_api(tmp_path, monkeypatch)
-        client = _TC(api_app, raise_server_exceptions=False)
+        client = _TestClient(api_app, raise_server_exceptions=False)
         client.post(
             "/api/v1/crawler/sources",
             json={"name": "finance", "url": "https://example.com", "max_pages": 5},
