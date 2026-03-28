@@ -21,6 +21,7 @@ class MemoryStore:
         self.workspace = workspace
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
+        self.user_profile_file = self.memory_dir / "USER_PROFILE.md"
         self._default_context_max_chars = 4000
         self._default_recent_max_chars = 1800
         self.recall_strategy = recall_strategy or KeywordRecallStrategy()
@@ -424,3 +425,32 @@ class MemoryStore:
                 raise PermissionError(f"Refuse to write through symlink: {file_path}")
         except ValueError:
             raise PermissionError(f"Refuse to write outside memory dir: {file_path}") from None
+
+    def get_user_profile(self) -> str:
+        """Read the user profile (USER_PROFILE.md) for cross-session preference tracking."""
+        if self.user_profile_file.exists() and self._is_safe_memory_file(self.user_profile_file):
+            return self.user_profile_file.read_text(encoding="utf-8")
+        return ""
+
+    def update_user_profile(self, key: str, value: str) -> None:
+        """
+        Upsert a key-value preference in USER_PROFILE.md.
+
+        Stored as bullet lines: ``- key: value``.
+        Existing lines with the same key are replaced; new keys are appended.
+        """
+        self._ensure_safe_write_target(self.user_profile_file)
+        key_clean = re.sub(r"[^a-z0-9_]", "_", (key or "").strip().lower())
+        if not key_clean:
+            return
+        value_clean = (value or "").strip().replace("\n", " ")
+        content = self.get_user_profile()
+        new_line = f"- {key_clean}: {value_clean}"
+        pattern = re.compile(rf"^- {re.escape(key_clean)}:.*$", re.MULTILINE)
+        if pattern.search(content):
+            content = pattern.sub(new_line, content)
+        else:
+            if not content:
+                content = "# User Profile\n\n"
+            content = content.rstrip() + "\n" + new_line + "\n"
+        self.user_profile_file.write_text(content, encoding="utf-8")

@@ -117,6 +117,11 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
+        # User profile (cross-session preferences, timezone, team members, etc.)
+        user_profile = self.memory.get_user_profile()
+        if user_profile:
+            parts.append(f"# User Profile\n\n{user_profile}")
+
         tool_learning = self.memory.get_tool_learning_context(query=memory_query)
         if tool_learning:
             parts.append(f"# Tool Corrections\n\n{tool_learning}")
