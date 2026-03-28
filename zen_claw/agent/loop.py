@@ -2361,3 +2361,33 @@ class AgentLoop:
 
     _CHANNEL_USER_ALLOW_TOOLS = ["read_file", "web_search"]
     _HIGH_RISK_SKILL_SCOPES = {"exec", "message", "cron", "sessions"}
+        # Daily-assistant tools (email, calendar, gdrive, notion) — all optional
+        try:
+            from zen_claw.config.loader import load_config as _load_cfg
+
+            _da_cfg = _load_cfg()
+            _tools_cfg = _da_cfg.tools
+
+            if _tools_cfg.email.enabled:
+                from zen_claw.agent.tools.email import EmailTool
+
+                self.tools.register(EmailTool(config=_tools_cfg.email))
+
+            _cal_cfg = _tools_cfg.calendar
+            if _cal_cfg.google.enabled or _cal_cfg.outlook.enabled or _cal_cfg.apple.enabled:
+                from zen_claw.agent.tools.calendar import CalendarTool
+
+                self.tools.register(CalendarTool(config=_cal_cfg))
+
+            if _tools_cfg.gdrive.enabled:
+                from zen_claw.agent.tools.gdrive import GDriveTool
+
+                self.tools.register(GDriveTool(config=_tools_cfg.gdrive))
+
+            if _tools_cfg.notion.enabled:
+                from zen_claw.agent.tools.notion import NotionTool
+
+                self.tools.register(NotionTool(config=_tools_cfg.notion))
+        except Exception:
+            pass
+

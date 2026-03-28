@@ -1106,7 +1106,7 @@ def test_install_skill_from_zip_rejects_oversized_uncompressed_payload(tmp_path:
     loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
     ok, msg = loader.install_skill_from_zip(zip_path)
     assert ok is False
-    assert "too large after extraction" in msg
+    assert "too large" in msg
 
 
 def test_export_skill_to_zip(tmp_path: Path) -> None:

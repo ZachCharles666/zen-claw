@@ -458,6 +458,85 @@ class WebToolsConfig(BaseModel):
     fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
 
 
+class EmailConfig(BaseModel):
+    """IMAP/SMTP email tool configuration."""
+
+    enabled: bool = False
+    imap_host: str = ""
+    imap_port: int = 993
+    smtp_host: str = ""
+    smtp_port: int = 465
+    username: str = ""
+    use_ssl: bool = True
+    sender_name: str = ""
+    # Credential vault lookup — password stored via: zen-claw credentials set email password <val>
+    credential_platform: str = "email"
+    credential_key: str = "password"
+
+
+class GoogleCalendarConfig(BaseModel):
+    """Google Calendar OAuth2 configuration."""
+
+    enabled: bool = False
+    token_file: str = "~/.zen-claw/google_token.json"
+    credentials_file: str = "~/.zen-claw/google_credentials.json"
+    scopes: list[str] = Field(
+        default_factory=lambda: ["https://www.googleapis.com/auth/calendar"]
+    )
+
+
+class OutlookCalendarConfig(BaseModel):
+    """Outlook Calendar MSAL configuration."""
+
+    enabled: bool = False
+    client_id: str = ""
+    tenant_id: str = "common"
+    # Token cache file written by zen-claw auth outlook
+    token_cache_file: str = "~/.zen-claw/outlook_token_cache.bin"
+
+
+class AppleCalendarConfig(BaseModel):
+    """Apple Calendar / iCloud CalDAV configuration."""
+
+    enabled: bool = False
+    username: str = ""  # Apple ID email
+    # App-Specific Password stored in vault: zen-claw credentials set apple_calendar password <val>
+    credential_platform: str = "apple_calendar"
+    credential_key: str = "password"
+    caldav_url: str = "https://caldav.icloud.com"
+
+
+class CalendarConfig(BaseModel):
+    """Calendar tool configuration (multi-provider)."""
+
+    google: GoogleCalendarConfig = Field(default_factory=GoogleCalendarConfig)
+    outlook: OutlookCalendarConfig = Field(default_factory=OutlookCalendarConfig)
+    apple: AppleCalendarConfig = Field(default_factory=AppleCalendarConfig)
+
+
+class GDriveConfig(BaseModel):
+    """Google Drive tool configuration (shares OAuth credentials with Google Calendar)."""
+
+    enabled: bool = False
+    token_file: str = "~/.zen-claw/google_token.json"
+    credentials_file: str = "~/.zen-claw/google_credentials.json"
+    scopes: list[str] = Field(
+        default_factory=lambda: [
+            "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/drive.file",
+        ]
+    )
+
+
+class NotionConfig(BaseModel):
+    """Notion integration tool configuration."""
+
+    enabled: bool = False
+    # Token stored in vault: zen-claw credentials set notion token <val>
+    credential_platform: str = "notion"
+    credential_key: str = "token"
+
+
 class BrowserToolConfig(BaseModel):
     """Browser automation configuration."""
 
@@ -628,6 +707,10 @@ class ToolsConfig(BaseModel):
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     network: NetworkToolsConfig = Field(default_factory=NetworkToolsConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
+    calendar: CalendarConfig = Field(default_factory=CalendarConfig)
+    gdrive: GDriveConfig = Field(default_factory=GDriveConfig)
+    notion: NotionConfig = Field(default_factory=NotionConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
     sidecar_supervisor: bool = False  # If true, attempt to start and supervise sidecars locally
     sidecar_supervisor_fail_window_sec: int = 120

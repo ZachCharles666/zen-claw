@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
+from packaging.version import InvalidVersion, Version
 
 from zen_claw.agent.intent_router import IntentToolContract
 from zen_claw.errors import AgentMidTurnReloadException
@@ -65,6 +66,10 @@ class SkillsLoader:
             "sessions_write",
             "sessions_signal",
             "sessions_resize",
+            "email",
+            "calendar",
+            "gdrive",
+            "notion",
         }
         self._allowed_scopes = {
             "network",
@@ -78,6 +83,7 @@ class SkillsLoader:
         self._zip_max_files = 100
         self._zip_max_path_depth = 10
         self._zip_max_total_uncompressed_bytes = 10 * 1024 * 1024
+        self._zip_max_single_file_bytes = 5 * 1024 * 1024
         self._install_allowed_roots = self._load_install_allowed_roots()
         self._skill_mapping: dict[str, list[str]] = {}
         self._snapshots: dict[str, dict] = {}  # snapshot_id -> metadata
@@ -124,7 +130,24 @@ class SkillsLoader:
     async def install_skill_by_snapshot(
         self, snapshot_id: str, overwrite: bool = False
     ) -> tuple[bool, str]:
-        """Install a skill using a previously generated trusted snapshot."""
+        """
+        Install a skill using a previously generated trusted snapshot.
+
+        Flow:
+        1. Verify snapshot signature and expiry (replay-safe one-time token).
+        2. Validate download_url: https-only, no private/SSRF addresses.
+        3. Download zip to a workspace-local temp file.
+        4. Verify SHA256 digest against snapshot metadata.
+        5. Install via install_and_sanitize_skill_from_zip (full sandbox pipeline).
+        6. Clean up temp file unconditionally.
+        7. Raise AgentMidTurnReloadException to hot-swap skill at turn boundary.
+        """
+        import hashlib as _hashlib
+
+        import httpx as _httpx
+
+        from zen_claw.agent.tools.web import _validate_url
+
         async with self._install_mutex:
             snapshot = self._snapshots.get(snapshot_id)
             if not snapshot:
@@ -138,18 +161,86 @@ class SkillsLoader:
                 del self._snapshots[snapshot_id]
                 return False, "snapshot expired"
 
-            # Preventive cleanup snapshot after use (prevent replay)
+            # One-time use: remove before any I/O to prevent replay
             metadata = self._snapshots.pop(snapshot_id)
             name = metadata["name"]
+            download_url = str(metadata.get("download_url") or "").strip()
+            expected_digest = str(metadata.get("digest") or "").strip().lower()
 
-            # Real impl would download and call self.install_skill_from_dir
-            # For now, let's assume we got a new version physical dir: name_v2
-            new_physical = f"{name}_v2"
+            # --- URL validation ---
+            if not download_url:
+                return False, "snapshot has no download_url"
 
-            # Force reload exception to facilitate hot-swapping at turn boundary
-            raise AgentMidTurnReloadException(
-                f"Skill '{name}' installed. Reloading context.", pins={name: new_physical}
-            )
+            url_ok, url_err = _validate_url(download_url)
+            if not url_ok:
+                return False, f"download_url rejected: {url_err}"
+
+            parsed_scheme = download_url.split("://", 1)[0].lower()
+            if parsed_scheme != "https":
+                return False, "download_url must use https"
+
+            # --- Download to workspace-local temp area ---
+            dl_dir = self.workspace / ".zen-claw" / "downloads"
+            dl_dir.mkdir(parents=True, exist_ok=True)
+            tmp_zip = dl_dir / f"_snapshot_{snapshot_id[:16]}.zip"
+
+            try:
+                async with _httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=30.0,
+                    proxy=None,
+                    trust_env=False,
+                ) as client:
+                    async with client.stream("GET", download_url) as response:
+                        if response.status_code >= 400:
+                            return (
+                                False,
+                                f"download failed: HTTP {response.status_code}",
+                            )
+                        downloaded = 0
+                        hasher = _hashlib.sha256()
+                        with open(tmp_zip, "wb") as fh:
+                            async for chunk in response.aiter_bytes(chunk_size=65536):
+                                downloaded += len(chunk)
+                                if downloaded > self._zip_max_total_uncompressed_bytes:
+                                    return (
+                                        False,
+                                        "download exceeds maximum allowed size",
+                                    )
+                                hasher.update(chunk)
+                                fh.write(chunk)
+
+                # --- Digest verification ---
+                if expected_digest:
+                    actual_digest = hasher.hexdigest().lower()
+                    if actual_digest != expected_digest:
+                        return (
+                            False,
+                            f"digest mismatch: expected {expected_digest}, got {actual_digest}",
+                        )
+
+                # --- Install via full sandbox pipeline ---
+                ok, err = self.install_and_sanitize_skill_from_zip(
+                    tmp_zip,
+                    name=name,
+                    overwrite=overwrite,
+                    require_manifest=True,
+                )
+                if not ok:
+                    return False, err
+
+            finally:
+                try:
+                    if tmp_zip.exists():
+                        tmp_zip.unlink()
+                except OSError:
+                    pass
+
+        # Hot-swap at turn boundary
+        raise AgentMidTurnReloadException(
+            f"Skill '{name}' installed from registry. Reloading context.",
+            pins={name: name},
+        )
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
@@ -722,31 +813,41 @@ class SkillsLoader:
                     return direct_bi
             return None
 
-        # If version_pin is provided, try to find matching version in manifest
-        # Otherwise, pick the latest semver version
-        candidates = []
+        # Build candidates list with parsed semver for proper sorting / pin matching
+        candidates: list[tuple[Version, str]] = []
         for p_dir in physical_dirs:
             path = self.workspace_skills / p_dir
             if not path.exists():
-                # Try built-in if workspace doesn't have it (shouldn't happen with our scan)
                 if self.builtin_skills:
                     path = self.builtin_skills / p_dir
-
             if not path.exists():
                 continue
 
             manifest_path = path / "manifest.json"
+            ver: Version
             if manifest_path.exists():
-                # ... check version ...
-                pass
-            candidates.append(p_dir)
+                try:
+                    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    ver = Version(raw.get("version", "0.0.0"))
+                except (json.JSONDecodeError, InvalidVersion, OSError):
+                    ver = Version("0.0.0")
+            else:
+                ver = Version("0.0.0")
+
+            if version_pin:
+                try:
+                    if ver == Version(version_pin):
+                        candidates.append((ver, p_dir))
+                except InvalidVersion:
+                    pass
+            else:
+                candidates.append((ver, p_dir))
 
         if not candidates:
             return None
 
-        # For now, just pick the last one (assuming sorted or highest)
-        # TODO: Implement semver sort and pin logic
-        best_dir = candidates[-1]
+        # Pick the directory with the highest semver
+        best_dir = max(candidates, key=lambda t: t[0])[1]
         ws_path = self.workspace_skills / best_dir
         if ws_path.exists():
             return ws_path
@@ -1007,7 +1108,13 @@ class SkillsLoader:
             file_count += 1
             if file_count > self._zip_max_files:
                 return False, f"zip archive contains too many files (max {self._zip_max_files})"
-            total_uncompressed += max(0, int(info.file_size))
+            file_size = max(0, int(info.file_size))
+            if file_size > self._zip_max_single_file_bytes:
+                return False, (
+                    f"zip entry '{info.filename}' is too large "
+                    f"({file_size} bytes, max {self._zip_max_single_file_bytes})"
+                )
+            total_uncompressed += file_size
             if total_uncompressed > self._zip_max_total_uncompressed_bytes:
                 return False, "zip archive is too large after extraction"
             validated_entries.append((info, dst))
