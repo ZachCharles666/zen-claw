@@ -72,8 +72,8 @@ async def test_registry_passes_structured_tool_result() -> None:
     assert result.error.kind == ToolErrorKind.PERMISSION
 
 
-def test_context_serializes_tool_error_result() -> None:
-    ctx = ContextBuilder(workspace=Path("."))
+def test_context_serializes_tool_error_result(tmp_path: Path) -> None:
+    ctx = ContextBuilder(workspace=tmp_path, memory_recall_mode="none")
     messages: list[dict[str, Any]] = []
     result = ToolResult.failure(ToolErrorKind.PARAMETER, "missing query")
     out = ctx.add_tool_result(messages, "tc-1", "demo", result)
