@@ -18,11 +18,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[dev]
-      - name: Run Script
+      - name: Nightly preflight
+        shell: pwsh
         run: |
-          scripts/selftest_local.ps1
-          scripts/perf_baseline.ps1
-          scripts/perf_report.ps1
+          pwsh scripts/preflight.ps1 -Mode full -SkipLocGate
+      - name: Run Script
+        shell: pwsh
+        run: |
+          pwsh scripts/selftest_local.ps1
+          pwsh scripts/perf_baseline.ps1
+          pwsh scripts/perf_report.ps1
       - name: Report
         run: |
           echo "Checked PERFORMANCE_REPORT.md"

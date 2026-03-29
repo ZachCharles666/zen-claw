@@ -10,6 +10,7 @@
 
 ### 2026-03
 
+- `GitHub Actions — CI Token-Reduction Redesign`
 - `Daily Assistant — Gate Phase 5 Gate 3 Entry And Telemetry Consolidation`
 - `Daily Assistant — Gate Phase 6-8 Safety Valve / Gate 2-3 Contract / Skill Intake Governance`
 - `Daily Assistant — Word Alignment And Phase 5 Crystallized Normalization`
@@ -95,6 +96,51 @@
 - `Dashboard — Operations Summary Surface`
 
 ## 2026-03-23
+
+### GitHub Actions — CI Token-Reduction Redesign
+
+- What changed:
+  - extracted workflow-owned test selection into `scripts/ci_select_tests.py` so `core`, `memory-recall`, and channel suites now resolve from repo code instead of inline Python embedded in `.github/workflows/ci.yml`
+  - added `scripts/preflight.ps1` as the local low-token acceptance entry with:
+    - `quick` mode aligned to PR gates
+    - `full` mode adding build sanity
+    - `nightly` mode chaining preflight + existing selftest/perf scripts
+    - targeted `-Suite`, `-ShardIndex`, and `-TotalShards` reproduction support
+  - redesigned `.github/workflows/ci.yml` into clearer layers:
+    - `lint-and-guards`
+    - sharded `core-tests`
+    - `memory-recall`
+    - `channel-matrix`
+    - `summary`
+  - aligned `.github/workflows/nightly-integration.yml` to call `scripts/preflight.ps1 -Mode full -SkipLocGate` before the existing selftest/perf steps
+  - expanded workflow regression coverage so future edits must keep repo-scripted suite selection and the new preflight alignment
+- Key files touched:
+  - `.github/workflows/ci.yml`
+  - `.github/workflows/nightly-integration.yml`
+  - `scripts/ci_select_tests.py`
+  - `scripts/preflight.ps1`
+  - `tests/test_ci_workflow_loc_gate.py`
+  - `tests/test_ci_workflow_structure.py`
+  - `tests/test_nightly_integration_workflow.py`
+  - `tasks/todo.md`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .` passed
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests/test_ci_workflow_loc_gate.py tests/test_ci_workflow_structure.py tests/test_nightly_integration_workflow.py` passed: `4 passed in 0.26s`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe scripts/ci_select_tests.py --suite core --total-shards 4 --shard-index 0 --format args` passed and returned the shard-0 test list
+  - `pwsh .\scripts\preflight.ps1 -Suite channel-slack -SkipLocGate` passed: `4 passed in 0.59s`
+  - `pwsh .\scripts\preflight.ps1 -Suite core -ShardIndex 0 -TotalShards 4 -SkipLocGate` passed: `362 passed, 12 skipped in 52.21s`
+  - `pwsh .\scripts\preflight.ps1` passed, including:
+    - `ruff check .`
+    - `pwsh scripts/loc_report.ps1`
+    - `1422 passed, 41 skipped in 142.20s` for the core suite
+    - `11 passed` for `memory-recall`
+    - `6 passed` / `4 passed` / `7 passed` / `10 passed` across channel suites
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q` passed: `1460 passed, 41 skipped in 159.64s (0:02:39)`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pip install -U build` required escalated network access and completed with `Successfully installed build-1.4.2`
+  - standard isolated `E:\nano-claw-public\.venv\Scripts\python.exe -m build` timed out while trying to reach package indexes for build-environment dependencies
+  - after installing local build backend support, fallback `E:\nano-claw-public\.venv\Scripts\python.exe -m build --no-isolation` passed: `Successfully built zen_claw_ai-0.1.3.post5.tar.gz and zen_claw_ai-0.1.3.post5-py3-none-any.whl`
+- Follow-up impact:
+  - CI failures now map much more directly to a repo script plus a local reproduction command, which should reduce repeated token burn from re-explaining suite boundaries and shard selection on every CI failure
 
 ### Daily Assistant — Gate Phase 5 Gate 3 Entry And Telemetry Consolidation
 
