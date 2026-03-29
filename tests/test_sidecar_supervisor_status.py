@@ -146,11 +146,10 @@ def test_sidecar_supervisor_browser_falls_back_to_node_server(tmp_path: Path, mo
     sup = SidecarSupervisor(cfg, state_dir=tmp_path / "state")
     spec = [s for s in sup._specs if s.name == "browser-sidecar"][0]
 
-    browser_dir = Path.cwd() / "browser" / "sidecar"
+    browser_dir = tmp_path / "browser" / "sidecar"
     browser_dir.mkdir(parents=True, exist_ok=True)
-    script = browser_dir / "server.js"
-    if not script.exists():
-        script.write_text("// test stub\n", encoding="utf-8")
+    (browser_dir / "server.js").write_text("// test stub\n", encoding="utf-8")
+    monkeypatch.setattr("zen_claw.runtime.sidecar_supervisor.Path.cwd", lambda: tmp_path)
 
     monkeypatch.delenv("zen_claw_BROWSER_SIDECAR_BIN", raising=False)
     monkeypatch.setattr("shutil.which", lambda name: "node" if name == "node" else None)
