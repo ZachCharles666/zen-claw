@@ -30,6 +30,7 @@ jobs:
           pip install "chardet<5.3"
           
       - name: Core Tests (Shard ${{ matrix.shard }})
+        timeout-minutes: 20
         shell: python
         env:
           PYTEST_ADDOPTS: ""
@@ -60,12 +61,17 @@ jobs:
           if not selected:
               raise SystemExit(f"No tests selected for shard {index}")
           print(f"Running shard {index + 1}/{total}: {' '.join(selected)}")
-          proc = subprocess.run(
-              [sys.executable, "-m", "pytest", "-p", "no:timeout", "-q", *selected],
-              check=False,
-          )
-          print(f"Pytest exit code: {proc.returncode}")
-          raise SystemExit(int(proc.returncode))
+          try:
+              proc = subprocess.run(
+                  [sys.executable, "-m", "pytest", "-p", "no:timeout", "-q", *selected],
+                  check=False,
+                  timeout=1140,
+              )
+              print(f"Pytest exit code: {proc.returncode}")
+              raise SystemExit(int(proc.returncode))
+          except subprocess.TimeoutExpired:
+              print("ERROR: pytest timed out after 19 minutes")
+              raise SystemExit(1)
 
   memory-recall:
     runs-on: windows-latest

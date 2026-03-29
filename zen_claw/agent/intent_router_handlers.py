@@ -221,6 +221,8 @@ class IntentRouterHandlersMixin:
         if zone_key:
             fuzzy_candidate = self._fuzzy_timezone_alias_lookup(zone_key)
             candidate = self._resolve_timezone_candidate(zone_key)
+            if candidate is None and fuzzy_candidate is not None:
+                candidate = self._TIMEZONE_ALIASES.get(fuzzy_candidate)
             zone = self._resolve_timezone(zone_key)
             if zone is None and candidate is not None:
                 fallback_now = self._fallback_now_in_timezone(self._utc_now(), candidate)
