@@ -38,6 +38,10 @@ function Get-PytestBaseTempRoot {
     return (Join-Path ([System.IO.Path]::GetTempPath()) "zen-claw-pytest")
 }
 
+function New-RunToken {
+    return ([guid]::NewGuid().ToString("N").Substring(0, 8))
+}
+
 function Get-PythonExe([string]$RepoRoot) {
     $venvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
     if (-not (Test-Path $venvPython -PathType Leaf)) {
@@ -95,9 +99,9 @@ function Invoke-PytestSuite(
     }
     $safeSuiteName = $TargetSuite -replace "[^A-Za-z0-9._-]", "-"
     $baseTempName = if ($TargetShardIndex -ge 0) {
-        "$safeSuiteName-shard-$TargetShardIndex"
+        "$safeSuiteName-shard-$TargetShardIndex-$(New-RunToken)"
     } else {
-        $safeSuiteName
+        "$safeSuiteName-$(New-RunToken)"
     }
     $baseTempRoot = Get-PytestBaseTempRoot
     $baseTempPath = Join-Path $baseTempRoot $baseTempName
@@ -170,6 +174,7 @@ try {
 
 if ([string]::IsNullOrWhiteSpace($Suite)) {
     Invoke-PytestSuite -RepoRoot $repoRoot -PythonExe $pythonExe -Title "PR Gate: core shard-equivalent suite" -CiLayer "core-tests" -TargetSuite "core"
+    Invoke-PytestSuite -RepoRoot $repoRoot -PythonExe $pythonExe -Title "PR Gate: core runtime-sensitive" -CiLayer "core-runtime-sensitive" -TargetSuite "core-runtime-sensitive"
     Invoke-PytestSuite -RepoRoot $repoRoot -PythonExe $pythonExe -Title "PR Gate: memory-recall" -CiLayer "memory-recall" -TargetSuite "memory-recall"
     Invoke-PytestSuite -RepoRoot $repoRoot -PythonExe $pythonExe -Title "PR Gate: channel-webchat-webhook" -CiLayer "channel-matrix / webchat-webhook" -TargetSuite "channel-webchat-webhook"
     Invoke-PytestSuite -RepoRoot $repoRoot -PythonExe $pythonExe -Title "PR Gate: channel-slack" -CiLayer "channel-matrix / slack" -TargetSuite "channel-slack"

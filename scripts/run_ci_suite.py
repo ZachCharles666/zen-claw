@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,11 @@ def resolve_basetemp_root(explicit_root: str | None) -> Path:
 
 def build_basetemp_path(suite: str, shard_index: int | None, basetemp_root: Path) -> Path:
     safe_suite = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in suite)
-    leaf = f"{safe_suite}-shard-{shard_index}" if shard_index is not None else safe_suite
+    run_token = uuid.uuid4().hex[:8]
+    if shard_index is not None:
+        leaf = f"{safe_suite}-shard-{shard_index}-{run_token}"
+    else:
+        leaf = f"{safe_suite}-{run_token}"
     return basetemp_root / leaf
 
 

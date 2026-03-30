@@ -97,6 +97,35 @@
 
 ## 2026-03-23
 
+### GitHub Actions — Isolate Core Runtime-Sensitive Tests From Shard 2
+
+- What changed:
+  - introduced a repo-owned `core-runtime-sensitive` suite in `scripts/ci_select_tests.py`
+  - moved these files out of sharded `core` and into their own blocking CI job:
+    - `tests/test_production_hardening_config.py`
+    - `tests/test_rag_notebook_mgmt.py`
+    - `tests/test_release_gate_defaults.py`
+    - `tests/test_semantic_tool_selector.py`
+    - `tests/test_sidecar_supervisor_status.py`
+    - `tests/test_skill_scope_runtime_gate.py`
+    - `tests/test_skills_lifecycle.py`
+  - updated `scripts/preflight.ps1` to run the new suite by default
+  - changed pytest basetemp allocation in `scripts/run_ci_suite.py` and `scripts/preflight.ps1` to use a per-run token, avoiding stale temp-path reuse and local SQLite lock collisions across repeated runs
+- Key files touched:
+  - `.github/workflows/ci.yml`
+  - `scripts/ci_select_tests.py`
+  - `scripts/run_ci_suite.py`
+  - `scripts/preflight.ps1`
+  - `tests/test_ci_workflow_structure.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check scripts\ci_select_tests.py scripts\run_ci_suite.py tests\test_ci_workflow_structure.py` passed: `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests\test_ci_workflow_loc_gate.py tests\test_ci_workflow_structure.py tests\test_nightly_integration_workflow.py` passed: `5 passed in 0.29s`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe scripts\run_ci_suite.py --suite core --total-shards 4 --shard-index 2 --timeout-seconds 1140` passed: `327 passed, 3 skipped in 39.66s` and `Pytest exit code: 0`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe scripts\run_ci_suite.py --suite core-runtime-sensitive --timeout-seconds 1140` passed: `84 passed, 1 skipped in 9.76s` and `Pytest exit code: 0`
+  - `pwsh .\scripts\preflight.ps1 -Suite core-runtime-sensitive -SkipLocGate` passed: `84 passed, 1 skipped in 10.19s`
+- Follow-up impact:
+  - the repeated shard-2 `KeyboardInterrupt` path now has a smaller blast radius because the high-variance segment is no longer mixed into the long alphabetical shard
+
 ### GitHub Actions — Core Shard 2 BaseSettings Environment Scan Fix
 
 - What changed:

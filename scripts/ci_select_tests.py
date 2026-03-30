@@ -9,6 +9,15 @@ TESTS_DIR: Final[Path] = Path("tests")
 
 SUITE_TESTS: Final[dict[str, list[str]]] = {
     "memory-recall": ["tests/test_memory_recall.py"],
+    "core-runtime-sensitive": [
+        "tests/test_production_hardening_config.py",
+        "tests/test_rag_notebook_mgmt.py",
+        "tests/test_release_gate_defaults.py",
+        "tests/test_semantic_tool_selector.py",
+        "tests/test_sidecar_supervisor_status.py",
+        "tests/test_skill_scope_runtime_gate.py",
+        "tests/test_skills_lifecycle.py",
+    ],
     "channel-webchat-webhook": [
         "tests/test_webchat_channel.py",
         "tests/test_webhook_trigger.py",
@@ -25,6 +34,7 @@ CORE_EXCLUDE: Final[set[str]] = {
     "tests/test_signal_channel.py",
     "tests/test_matrix_channel.py",
     "tests/test_memory_recall.py",
+    *SUITE_TESTS["core-runtime-sensitive"],
 }
 
 

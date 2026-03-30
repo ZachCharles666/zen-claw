@@ -84,6 +84,28 @@ jobs:
           PYTEST_ADDOPTS: ""
         run: python scripts/run_ci_suite.py --suite memory-recall
 
+  core-runtime-sensitive:
+    runs-on: windows-latest
+    needs: lint-and-guards
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+          pip install "chardet<5.3"
+
+      - name: Core Runtime-Sensitive Tests
+        env:
+          PYTEST_ADDOPTS: ""
+        run: python scripts/run_ci_suite.py --suite core-runtime-sensitive
+
   channel-matrix:
     runs-on: windows-latest
     needs: lint-and-guards
@@ -119,9 +141,10 @@ jobs:
     needs:
       - lint-and-guards
       - core-tests
+      - core-runtime-sensitive
       - memory-recall
       - channel-matrix
     steps:
       - name: CI summary
         run: |
-          echo "lint-and-guards, core-tests, memory-recall, and channel-matrix completed successfully."
+          echo "lint-and-guards, core-tests, core-runtime-sensitive, memory-recall, and channel-matrix completed successfully."
