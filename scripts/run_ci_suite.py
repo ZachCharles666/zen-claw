@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import argparse
 import os
-import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
+import pytest
 from ci_select_tests import resolve_suite_tests, shard_tests
 
 
@@ -56,10 +55,7 @@ def main() -> int:
             + " ".join(selected_tests)
         )
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
+    pytest_args = [
         "-p",
         "no:timeout",
         "--basetemp",
@@ -67,13 +63,14 @@ def main() -> int:
         "-q",
         *selected_tests,
     ]
-    try:
-        proc = subprocess.run(cmd, check=False, timeout=args.timeout_seconds)
-    except subprocess.TimeoutExpired:
-        print(f"ERROR: pytest timed out after {args.timeout_seconds} seconds")
-        return 1
-    print(f"Pytest exit code: {proc.returncode}")
-    return int(proc.returncode)
+    if args.timeout_seconds is not None:
+        print(
+            "NOTE: --timeout-seconds is accepted for workflow compatibility; "
+            "job-level timeout remains authoritative in the in-process runner."
+        )
+    exit_code = pytest.main(pytest_args)
+    print(f"Pytest exit code: {exit_code}")
+    return int(exit_code)
 
 
 if __name__ == "__main__":

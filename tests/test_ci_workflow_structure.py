@@ -33,7 +33,7 @@ def test_ci_suite_runner_exists() -> None:
     assert p.exists(), "ci suite runner should exist"
     text = p.read_text(encoding="utf-8")
     assert "resolve_suite_tests" in text
-    assert "subprocess.run" in text
+    assert "pytest.main" in text
     assert "--basetemp" in text
     assert "RUNNER_TEMP" in text
     assert "tempfile.gettempdir()" in text
