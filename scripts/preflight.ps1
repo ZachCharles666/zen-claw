@@ -83,13 +83,22 @@ function Invoke-PytestSuite(
     if ($TargetShardIndex -ge 0) {
         $selectorArgs += @("--total-shards", "$TargetTotalShards", "--shard-index", "$TargetShardIndex")
     }
+    $safeSuiteName = $TargetSuite -replace "[^A-Za-z0-9._-]", "-"
+    $baseTempName = if ($TargetShardIndex -ge 0) {
+        "$safeSuiteName-shard-$TargetShardIndex"
+    } else {
+        $safeSuiteName
+    }
+    $baseTempPath = Join-Path $RepoRoot ".pytest_tmp\$baseTempName"
+    $baseTempRoot = Split-Path -Parent $baseTempPath
     $selectorCmd = "$PythonExe scripts/ci_select_tests.py $($selectorArgs -join ' ') --format json"
-    $pytestCmd = "$PythonExe -m pytest -p no:timeout -q $($selectedTests -join ' ')"
+    $pytestCmd = "$PythonExe -m pytest -p no:timeout --basetemp `"$baseTempPath`" -q $($selectedTests -join ' ')"
     Step -Title $Title -CiLayer $CiLayer -ReproCommand "$selectorCmd`n           $pytestCmd"
     Push-Location $RepoRoot
     try {
         $env:PYTEST_ADDOPTS = ""
-        $pytestArgs = @("-m", "pytest", "-p", "no:timeout", "-q") + @($selectedTests)
+        New-Item -ItemType Directory -Force -Path $baseTempRoot | Out-Null
+        $pytestArgs = @("-m", "pytest", "-p", "no:timeout", "--basetemp", $baseTempPath, "-q") + @($selectedTests)
         Invoke-Checked -Command { & $PythonExe @pytestArgs } -ErrorMessage "$Title failed"
     } finally {
         Pop-Location

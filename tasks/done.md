@@ -141,6 +141,7 @@
   - after installing local build backend support, fallback `E:\nano-claw-public\.venv\Scripts\python.exe -m build --no-isolation` passed: `Successfully built zen_claw_ai-0.1.3.post5.tar.gz and zen_claw_ai-0.1.3.post5-py3-none-any.whl`
 - Follow-up impact:
   - CI failures now map much more directly to a repo script plus a local reproduction command, which should reduce repeated token burn from re-explaining suite boundaries and shard selection on every CI failure
+  - CI pytest runs now also use explicit `.pytest_tmp/*` basetemp paths, which avoids the Windows hosted-runner numbered-temp cleanup path that had started surfacing as post-success exit-code failures
 
 ### Daily Assistant — Gate Phase 5 Gate 3 Entry And Telemetry Consolidation
 

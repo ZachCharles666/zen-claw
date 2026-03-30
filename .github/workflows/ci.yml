@@ -63,8 +63,10 @@ jobs:
         shell: pwsh
         run: |
           $selection = python scripts/ci_select_tests.py --suite core --total-shards 4 --shard-index ${{ matrix.shard }} --format json | ConvertFrom-Json
+          $baseTemp = Join-Path $PWD ".pytest_tmp/core-shard-${{ matrix.shard }}"
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $baseTemp) | Out-Null
           Write-Host "Running core shard ${{ matrix.shard }}: $($selection.tests -join ' ')"
-          python -m pytest -p no:timeout -q @($selection.tests)
+          python -m pytest -p no:timeout --basetemp $baseTemp -q @($selection.tests)
 
   memory-recall:
     runs-on: windows-latest
@@ -89,7 +91,9 @@ jobs:
           PYTEST_ADDOPTS: ""
         run: |
           $selection = python scripts/ci_select_tests.py --suite memory-recall --format json | ConvertFrom-Json
-          python -m pytest -p no:timeout -q @($selection.tests)
+          $baseTemp = Join-Path $PWD ".pytest_tmp/memory-recall"
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $baseTemp) | Out-Null
+          python -m pytest -p no:timeout --basetemp $baseTemp -q @($selection.tests)
 
   channel-matrix:
     runs-on: windows-latest
@@ -122,7 +126,9 @@ jobs:
           PYTEST_ADDOPTS: ""
         run: |
           $selection = python scripts/ci_select_tests.py --suite ${{ matrix.suite.name }} --format json | ConvertFrom-Json
-          python -m pytest -p no:timeout -q @($selection.tests)
+          $baseTemp = Join-Path $PWD ".pytest_tmp/${{ matrix.suite.name }}"
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $baseTemp) | Out-Null
+          python -m pytest -p no:timeout --basetemp $baseTemp -q @($selection.tests)
 
   summary:
     runs-on: windows-latest
