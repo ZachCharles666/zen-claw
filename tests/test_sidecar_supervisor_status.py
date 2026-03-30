@@ -6,8 +6,12 @@ from zen_claw.config.schema import Config
 from zen_claw.runtime.sidecar_supervisor import SidecarSupervisor, collect_sidecar_status
 
 
+def _config() -> Config:
+    return Config.model_validate({})
+
+
 def test_collect_sidecar_status_empty_when_no_sidecar_modes(tmp_path: Path) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.tools.network.exec.mode = "local"
     cfg.tools.network.search.mode = "local"
     cfg.tools.network.fetch.mode = "local"
@@ -18,7 +22,7 @@ def test_collect_sidecar_status_empty_when_no_sidecar_modes(tmp_path: Path) -> N
 
 
 def test_collect_sidecar_status_includes_exec_pid_and_uptime(tmp_path: Path) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.tools.network.exec.mode = "sidecar"
 
     state_file = tmp_path / "sec-execd.json"
@@ -44,7 +48,7 @@ def test_collect_sidecar_status_includes_exec_pid_and_uptime(tmp_path: Path) -> 
 def test_collect_sidecar_status_skips_health_probe_for_live_pid(
     tmp_path: Path, monkeypatch
 ) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.tools.network.exec.mode = "sidecar"
 
     state_file = tmp_path / "sec-execd.json"
@@ -70,7 +74,7 @@ def test_collect_sidecar_status_skips_health_probe_for_live_pid(
 
 
 def test_collect_sidecar_status_includes_browser_sidecar(tmp_path: Path) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.tools.network.browser.mode = "sidecar"
 
     state_file = tmp_path / "browser-sidecar.json"
@@ -95,7 +99,7 @@ def test_collect_sidecar_status_includes_browser_sidecar(tmp_path: Path) -> None
 def test_collect_sidecar_status_preserves_backoff_or_circuit_state(
     tmp_path: Path, monkeypatch
 ) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.tools.network.exec.mode = "sidecar"
 
     state_file = tmp_path / "sec-execd.json"
@@ -113,7 +117,7 @@ def test_collect_sidecar_status_preserves_backoff_or_circuit_state(
 
 
 def test_sidecar_supervisor_prefers_binary_env_var(tmp_path: Path, monkeypatch) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.agents.defaults.workspace = str(tmp_path / "ws")
     cfg.tools.network.exec.mode = "sidecar"
     sup = SidecarSupervisor(cfg, state_dir=tmp_path / "state")
@@ -127,7 +131,7 @@ def test_sidecar_supervisor_prefers_binary_env_var(tmp_path: Path, monkeypatch) 
 
 
 def test_sidecar_supervisor_falls_back_to_go_run(tmp_path: Path, monkeypatch) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.agents.defaults.workspace = str(tmp_path / "ws")
     cfg.tools.network.exec.mode = "sidecar"
     sup = SidecarSupervisor(cfg, state_dir=tmp_path / "state")
@@ -140,7 +144,7 @@ def test_sidecar_supervisor_falls_back_to_go_run(tmp_path: Path, monkeypatch) ->
 
 
 def test_sidecar_supervisor_browser_falls_back_to_node_server(tmp_path: Path, monkeypatch) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.agents.defaults.workspace = str(tmp_path / "ws")
     cfg.tools.network.browser.mode = "sidecar"
     sup = SidecarSupervisor(cfg, state_dir=tmp_path / "state")
@@ -158,7 +162,7 @@ def test_sidecar_supervisor_browser_falls_back_to_node_server(tmp_path: Path, mo
 
 
 def test_sidecar_supervisor_passes_browser_state_dir_env(tmp_path: Path, monkeypatch) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.agents.defaults.workspace = str(tmp_path / "ws")
     cfg.tools.network.browser.mode = "sidecar"
     monkeypatch.setenv("BROWSER_SIDECAR_STATE_DIR", str(tmp_path / "browser-state"))
@@ -168,7 +172,7 @@ def test_sidecar_supervisor_passes_browser_state_dir_env(tmp_path: Path, monkeyp
 
 
 def test_sidecar_supervisor_records_exponential_backoff(tmp_path: Path, monkeypatch) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.agents.defaults.workspace = str(tmp_path / "ws")
     cfg.tools.network.exec.mode = "sidecar"
     sup = SidecarSupervisor(cfg, state_dir=tmp_path / "state")
@@ -189,7 +193,7 @@ def test_sidecar_supervisor_records_exponential_backoff(tmp_path: Path, monkeypa
 def test_sidecar_supervisor_opens_circuit_after_failure_threshold(
     tmp_path: Path, monkeypatch
 ) -> None:
-    cfg = Config()
+    cfg = _config()
     cfg.agents.defaults.workspace = str(tmp_path / "ws")
     cfg.tools.network.exec.mode = "sidecar"
     cfg.tools.sidecar_supervisor_fail_window_sec = 60

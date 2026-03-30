@@ -97,6 +97,22 @@
 
 ## 2026-03-23
 
+### GitHub Actions — Core Shard 2 BaseSettings Environment Scan Fix
+
+- What changed:
+  - updated `tests/test_sidecar_supervisor_status.py` so the unit tests build config objects via `Config.model_validate({})` instead of `Config()`
+  - this keeps the tests on the schema/defaults path without invoking `BaseSettings` environment scanning against the large GitHub Actions process environment
+  - the change is intentionally localized to the failing test file because the observed hosted-runner failure was confined to `core-tests / shard-2`
+- Key files touched:
+  - `tests/test_sidecar_supervisor_status.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check tests\test_sidecar_supervisor_status.py` passed: `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests\test_sidecar_supervisor_status.py` passed: `11 passed in 0.58s`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests\test_ci_workflow_loc_gate.py tests\test_ci_workflow_structure.py tests\test_nightly_integration_workflow.py` passed: `5 passed in 0.37s`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe scripts\run_ci_suite.py --suite core --total-shards 4 --shard-index 2 --timeout-seconds 1140` passed: `405 passed, 4 skipped in 45.07s` and `Pytest exit code: 0`
+- Follow-up impact:
+  - shard-2 no longer depends on hosted-runner environment traversal inside `pydantic_settings`, which removes the specific failure mode that was surfacing as `KeyboardInterrupt` during CI
+
 ### GitHub Actions — CI Token-Reduction Redesign
 
 - What changed:
