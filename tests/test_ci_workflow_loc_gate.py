@@ -9,5 +9,5 @@ def test_ci_workflow_includes_loc_gate() -> None:
     assert "python -m ruff check ." in text
     assert "scripts/loc_report.ps1" in text
     assert "workspace\\LOC_BASELINE.json" in text
-    assert "scripts/ci_select_tests.py" in text
+    assert "scripts/run_ci_suite.py" in text
     assert "shell: python" not in text

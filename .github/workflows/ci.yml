@@ -60,13 +60,7 @@ jobs:
         timeout-minutes: 20
         env:
           PYTEST_ADDOPTS: ""
-        shell: pwsh
-        run: |
-          $selection = python scripts/ci_select_tests.py --suite core --total-shards 4 --shard-index ${{ matrix.shard }} --format json | ConvertFrom-Json
-          $baseTemp = Join-Path $PWD ".pytest_tmp/core-shard-${{ matrix.shard }}"
-          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $baseTemp) | Out-Null
-          Write-Host "Running core shard ${{ matrix.shard }}: $($selection.tests -join ' ')"
-          python -m pytest -p no:timeout --basetemp $baseTemp -q @($selection.tests)
+        run: python scripts/run_ci_suite.py --suite core --total-shards 4 --shard-index ${{ matrix.shard }} --timeout-seconds 1140
 
   memory-recall:
     runs-on: windows-latest
@@ -86,14 +80,9 @@ jobs:
           pip install "chardet<5.3"
 
       - name: Memory Recall Tests
-        shell: pwsh
         env:
           PYTEST_ADDOPTS: ""
-        run: |
-          $selection = python scripts/ci_select_tests.py --suite memory-recall --format json | ConvertFrom-Json
-          $baseTemp = Join-Path $PWD ".pytest_tmp/memory-recall"
-          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $baseTemp) | Out-Null
-          python -m pytest -p no:timeout --basetemp $baseTemp -q @($selection.tests)
+        run: python scripts/run_ci_suite.py --suite memory-recall
 
   channel-matrix:
     runs-on: windows-latest
@@ -121,14 +110,9 @@ jobs:
           pip install "chardet<5.3"
 
       - name: Channel Tests (${{ matrix.suite.name }})
-        shell: pwsh
         env:
           PYTEST_ADDOPTS: ""
-        run: |
-          $selection = python scripts/ci_select_tests.py --suite ${{ matrix.suite.name }} --format json | ConvertFrom-Json
-          $baseTemp = Join-Path $PWD ".pytest_tmp/${{ matrix.suite.name }}"
-          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $baseTemp) | Out-Null
-          python -m pytest -p no:timeout --basetemp $baseTemp -q @($selection.tests)
+        run: python scripts/run_ci_suite.py --suite ${{ matrix.suite.name }}
 
   summary:
     runs-on: windows-latest

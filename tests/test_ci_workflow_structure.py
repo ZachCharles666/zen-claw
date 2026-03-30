@@ -10,13 +10,10 @@ def test_ci_workflow_uses_repo_scripted_suites() -> None:
     assert "memory-recall:" in text
     assert "channel-matrix:" in text
     assert "summary:" in text
-    assert "scripts/ci_select_tests.py --suite core" in text
-    assert "scripts/ci_select_tests.py --suite memory-recall" in text
-    assert "scripts/ci_select_tests.py --suite ${{ matrix.suite.name }}" in text
-    assert "--basetemp" in text
-    assert ".pytest_tmp/core-shard-${{ matrix.shard }}" in text
-    assert ".pytest_tmp/memory-recall" in text
-    assert "ConvertFrom-Json" in text
+    assert "scripts/run_ci_suite.py --suite core --total-shards 4 --shard-index ${{ matrix.shard }}" in text
+    assert "scripts/run_ci_suite.py --suite memory-recall" in text
+    assert "scripts/run_ci_suite.py --suite ${{ matrix.suite.name }}" in text
+    assert "ConvertFrom-Json" not in text
     assert "Path(\"tests\").glob(\"test_*.py\")" not in text
 
 
@@ -29,3 +26,12 @@ def test_preflight_script_exists() -> None:
     assert "--basetemp" in text
     assert ".pytest_tmp" in text
     assert "loc_report.ps1" in text
+
+
+def test_ci_suite_runner_exists() -> None:
+    p = Path("scripts/run_ci_suite.py")
+    assert p.exists(), "ci suite runner should exist"
+    text = p.read_text(encoding="utf-8")
+    assert "resolve_suite_tests" in text
+    assert "subprocess.run" in text
+    assert "--basetemp" in text
