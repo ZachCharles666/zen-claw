@@ -28,6 +28,16 @@ function Get-RepoRoot {
     return (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 }
 
+function Get-PytestBaseTempRoot {
+    if ($env:RUNNER_TEMP) {
+        return (Join-Path $env:RUNNER_TEMP "zen-claw-pytest")
+    }
+    if ($env:TEMP) {
+        return (Join-Path $env:TEMP "zen-claw-pytest")
+    }
+    return (Join-Path ([System.IO.Path]::GetTempPath()) "zen-claw-pytest")
+}
+
 function Get-PythonExe([string]$RepoRoot) {
     $venvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
     if (-not (Test-Path $venvPython -PathType Leaf)) {
@@ -89,7 +99,8 @@ function Invoke-PytestSuite(
     } else {
         $safeSuiteName
     }
-    $baseTempPath = Join-Path $RepoRoot ".pytest_tmp\$baseTempName"
+    $baseTempRoot = Get-PytestBaseTempRoot
+    $baseTempPath = Join-Path $baseTempRoot $baseTempName
     $baseTempRoot = Split-Path -Parent $baseTempPath
     $selectorCmd = "$PythonExe scripts/ci_select_tests.py $($selectorArgs -join ' ') --format json"
     $pytestCmd = "$PythonExe -m pytest -p no:timeout --basetemp `"$baseTempPath`" -q $($selectedTests -join ' ')"

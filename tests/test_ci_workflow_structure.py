@@ -24,7 +24,7 @@ def test_preflight_script_exists() -> None:
     assert "[ValidateSet(\"quick\", \"full\", \"nightly\")]" in text
     assert "scripts\\ci_select_tests.py" in text
     assert "--basetemp" in text
-    assert ".pytest_tmp" in text
+    assert "Get-PytestBaseTempRoot" in text
     assert "loc_report.ps1" in text
 
 
@@ -35,3 +35,5 @@ def test_ci_suite_runner_exists() -> None:
     assert "resolve_suite_tests" in text
     assert "subprocess.run" in text
     assert "--basetemp" in text
+    assert "RUNNER_TEMP" in text
+    assert "tempfile.gettempdir()" in text

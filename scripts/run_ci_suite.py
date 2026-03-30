@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from ci_select_tests import resolve_suite_tests, shard_tests
@@ -14,14 +16,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--total-shards", type=int, default=None)
     parser.add_argument("--shard-index", type=int, default=None)
     parser.add_argument("--timeout-seconds", type=int, default=None)
-    parser.add_argument("--basetemp-root", default=".pytest_tmp")
+    parser.add_argument("--basetemp-root", default=None)
     return parser
 
 
-def build_basetemp_path(suite: str, shard_index: int | None, basetemp_root: str) -> Path:
+def resolve_basetemp_root(explicit_root: str | None) -> Path:
+    if explicit_root:
+        return Path(explicit_root)
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if runner_temp:
+        return Path(runner_temp) / "zen-claw-pytest"
+    return Path(tempfile.gettempdir()) / "zen-claw-pytest"
+
+
+def build_basetemp_path(suite: str, shard_index: int | None, basetemp_root: Path) -> Path:
     safe_suite = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in suite)
     leaf = f"{safe_suite}-shard-{shard_index}" if shard_index is not None else safe_suite
-    return Path(basetemp_root) / leaf
+    return basetemp_root / leaf
 
 
 def main() -> int:
@@ -33,7 +44,8 @@ def main() -> int:
         shard_index=args.shard_index,
     )
 
-    basetemp = build_basetemp_path(args.suite, args.shard_index, args.basetemp_root)
+    basetemp_root = resolve_basetemp_root(args.basetemp_root)
+    basetemp = build_basetemp_path(args.suite, args.shard_index, basetemp_root)
     basetemp.parent.mkdir(parents=True, exist_ok=True)
 
     if args.shard_index is None or args.total_shards is None:
