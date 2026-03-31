@@ -41,3 +41,4 @@ def test_ci_suite_runner_exists() -> None:
     assert "RUNNER_TEMP" in text
     assert "tempfile.gettempdir()" in text
     assert "uuid.uuid4" in text
+    assert "os._exit" in text

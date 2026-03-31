@@ -126,6 +126,22 @@
 - Follow-up impact:
   - the repeated shard-2 `KeyboardInterrupt` path now has a smaller blast radius because the high-variance segment is no longer mixed into the long alphabetical shard
 
+### GitHub Actions — Force Stable Runner Exit After Pytest Completion
+
+- What changed:
+  - updated `scripts/run_ci_suite.py` to flush stdio and terminate with `os._exit(exit_code)` after `pytest.main(...)` returns
+  - this avoids Python interpreter shutdown noise turning a successful `Pytest exit code: 0` run into a step-level `exit 1`
+- Key files touched:
+  - `scripts/run_ci_suite.py`
+  - `tests/test_ci_workflow_structure.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check scripts\run_ci_suite.py tests\test_ci_workflow_structure.py` passed: `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests\test_ci_workflow_loc_gate.py tests\test_ci_workflow_structure.py tests\test_nightly_integration_workflow.py` passed: `5 passed in 0.71s`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe scripts\run_ci_suite.py --suite core-runtime-sensitive --timeout-seconds 1140` passed: `84 passed, 1 skipped in 25.32s` and `Pytest exit code: 0`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe scripts\run_ci_suite.py --suite core --total-shards 4 --shard-index 2 --timeout-seconds 1140` passed: `327 passed, 3 skipped in 48.28s` and `Pytest exit code: 0`
+- Follow-up impact:
+  - CI success now depends on the explicit pytest result instead of whatever happens during late interpreter teardown on the hosted Windows runner
+
 ### GitHub Actions — Core Shard 2 BaseSettings Environment Scan Fix
 
 - What changed:
