@@ -58,6 +58,7 @@ jobs:
           
       - name: Core Tests (Shard ${{ matrix.shard }})
         timeout-minutes: 20
+        shell: cmd
         env:
           PYTEST_ADDOPTS: ""
         run: python scripts/run_ci_suite.py --suite core --total-shards 4 --shard-index ${{ matrix.shard }} --timeout-seconds 1140
@@ -80,6 +81,7 @@ jobs:
           pip install "chardet<5.3"
 
       - name: Memory Recall Tests
+        shell: cmd
         env:
           PYTEST_ADDOPTS: ""
         run: python scripts/run_ci_suite.py --suite memory-recall
@@ -102,6 +104,7 @@ jobs:
           pip install "chardet<5.3"
 
       - name: Core Runtime-Sensitive Tests
+        shell: cmd
         env:
           PYTEST_ADDOPTS: ""
         run: python scripts/run_ci_suite.py --suite core-runtime-sensitive
@@ -132,6 +135,7 @@ jobs:
           pip install "chardet<5.3"
 
       - name: Channel Tests (${{ matrix.suite.name }})
+        shell: cmd
         env:
           PYTEST_ADDOPTS: ""
         run: python scripts/run_ci_suite.py --suite ${{ matrix.suite.name }}

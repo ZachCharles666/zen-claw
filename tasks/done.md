@@ -142,6 +142,22 @@
 - Follow-up impact:
   - CI success now depends on the explicit pytest result instead of whatever happens during late interpreter teardown on the hosted Windows runner
 
+### GitHub Actions — Run CI Suite Runner Under Cmd On Windows
+
+- What changed:
+  - updated `.github/workflows/ci.yml` so every `scripts/run_ci_suite.py` step runs with `shell: cmd` instead of the default Windows PowerShell shell
+  - this isolates the Python runner from the hosted-runner `pwsh` wrapper path, which was still turning successful suite runs into step-level `exit 1`
+- Key files touched:
+  - `.github/workflows/ci.yml`
+  - `tests/test_ci_workflow_structure.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check tests\test_ci_workflow_structure.py` passed: `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests\test_ci_workflow_loc_gate.py tests\test_ci_workflow_structure.py tests\test_nightly_integration_workflow.py` passed: `5 passed in 0.60s`
+  - `cmd /c "E:\nano-claw-public\.venv\Scripts\python.exe scripts\run_ci_suite.py --suite core-runtime-sensitive & echo CMD_EXIT=%ERRORLEVEL%"` passed with `84 passed, 1 skipped` and `CMD_EXIT=0`
+  - `cmd /c "E:\nano-claw-public\.venv\Scripts\python.exe scripts\run_ci_suite.py --suite core --total-shards 4 --shard-index 2 --timeout-seconds 1140 & echo CMD_EXIT=%ERRORLEVEL%"` passed with `327 passed, 3 skipped` and `CMD_EXIT=0`
+- Follow-up impact:
+  - CI test-step exit handling is now anchored to the simpler `cmd` native process path instead of the more failure-prone default `pwsh` wrapper on hosted Windows runners
+
 ### GitHub Actions — Core Shard 2 BaseSettings Environment Scan Fix
 
 - What changed:

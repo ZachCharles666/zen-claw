@@ -15,6 +15,7 @@ def test_ci_workflow_uses_repo_scripted_suites() -> None:
     assert "scripts/run_ci_suite.py --suite core-runtime-sensitive" in text
     assert "scripts/run_ci_suite.py --suite memory-recall" in text
     assert "scripts/run_ci_suite.py --suite ${{ matrix.suite.name }}" in text
+    assert text.count("shell: cmd") >= 4
     assert "ConvertFrom-Json" not in text
     assert "Path(\"tests\").glob(\"test_*.py\")" not in text
 
