@@ -53,10 +53,11 @@ class _FakeDiscordChannel:
 
 
 class _FakeWhatsAppChannel:
-    def __init__(self, config, bus, media_root=None):
+    def __init__(self, config, bus, media_root=None, groq_api_key=""):
         self.config = config
         self.bus = bus
         self.media_root = media_root
+        self.groq_api_key = groq_api_key
         self._running = False
 
     async def start(self):
@@ -129,6 +130,7 @@ def test_channel_manager_injects_workspace_media_root(monkeypatch, tmp_path: Pat
     assert fs.media_root == expected_media_root
     assert tg.groq_api_key == "groq-test-key"
     assert dc.groq_api_key == "groq-test-key"
+    assert wa.groq_api_key == "groq-test-key"
     assert callable(tg.access_checker)
     assert callable(dc.access_checker)
     assert callable(wa.access_checker)

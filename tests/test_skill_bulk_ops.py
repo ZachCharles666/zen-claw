@@ -175,6 +175,9 @@ class TestBulkActionAPI:
         assert data["succeeded"] == 2
         assert data["failed"] == 0
         assert data["action"] == "enable"
+        assert data["reload_required"] is False
+        assert data["apply_state"]["target"] == "bulk:enable"
+        assert data["apply_state"]["execution_mode"] == "enable"
 
     def test_bulk_disable_action(self, tmp_path: Path, monkeypatch) -> None:
         """bulk-action disable 1 skill → skill becomes disabled."""
@@ -188,6 +191,7 @@ class TestBulkActionAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["succeeded"] == 1
+        assert data["apply_state"]["execution_mode"] == "disable"
 
     def test_bulk_preflight_action(self, tmp_path: Path, monkeypatch) -> None:
         """bulk-action preflight → results contain ok field."""
@@ -202,6 +206,8 @@ class TestBulkActionAPI:
         data = resp.json()
         assert len(data["results"]) == 1
         assert "ok" in data["results"][0]
+        assert data["apply_state"]["target"] == "bulk:preflight"
+        assert data["apply_state"]["execution_mode"] == "preflight"
 
     def test_bulk_action_dry_run_enable(self, tmp_path: Path, monkeypatch) -> None:
         """dry_run=True → returns ok but skill state unchanged."""
@@ -218,6 +224,7 @@ class TestBulkActionAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["dry_run"] is True
+        assert data["apply_state"]["execution_mode"] == "preview"
         # Skill state should not have changed (dry_run)
         assert loader.is_skill_enabled("skill_a") == was_enabled
 

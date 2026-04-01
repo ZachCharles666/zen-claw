@@ -3428,8 +3428,16 @@ def _get_bridge_dir() -> Path:
 
     # Install and build
     try:
+        lockfile = user_bridge / "package-lock.json"
+        if not lockfile.exists():
+            console.print("[red]Bridge lockfile missing. Refusing unlocked npm install.[/red]")
+            console.print(
+                "Reinstall from a release or source tree that includes bridge/package-lock.json."
+            )
+            raise typer.Exit(1)
+
         console.print("  Installing dependencies...")
-        subprocess.run(["npm", "install"], cwd=user_bridge, check=True, capture_output=True)
+        subprocess.run(["npm", "ci"], cwd=user_bridge, check=True, capture_output=True)
 
         console.print("  Building...")
         subprocess.run(["npm", "run", "build"], cwd=user_bridge, check=True, capture_output=True)

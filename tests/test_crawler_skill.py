@@ -31,6 +31,10 @@ async def test_crawler_fetch_text_http(monkeypatch, tmp_path: Path) -> None:
     assert payload["mode"] == "http"
     assert payload["url"] == "https://example.com/news"
     assert "Alpha" in payload["content"]
+    assert payload["fetch_strategy"] == "http"
+    assert payload["attempt_count"] == 1
+    assert payload["retry_count"] == 0
+    assert payload["visited_urls"] == ["https://example.com/news"]
 
 
 @pytest.mark.asyncio
@@ -94,6 +98,67 @@ async def test_crawler_fetch_text_browser(monkeypatch, tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_crawler_fetch_text_http_pagination(monkeypatch, tmp_path: Path) -> None:
+    async def _fake_ingest(self, source: str):
+        return [Document(content=f"body:{source}", source=source, metadata={})]
+
+    html_rows = {
+        "https://example.com/news": '<html><body><a class="next" href="/news?page=2">next</a></body></html>',
+        "https://example.com/news?page=2": "<html><body>No next</body></html>",
+    }
+
+    monkeypatch.setattr("zen_claw.skills.crawler.extractor.Ingestor.ingest", _fake_ingest)
+    monkeypatch.setattr(
+        "zen_claw.skills.crawler.extractor.CrawlerExtractor._fetch_http_html",
+        staticmethod(lambda url: html_rows[str(url)]),
+    )
+
+    extractor = CrawlerExtractor(tmp_path)
+    payload = await extractor.fetch_text(
+        CrawlerSource(
+            name="news",
+            url="https://example.com/news",
+            pagination_selector=".next",
+            max_pages=3,
+        )
+    )
+
+    assert payload["pages_fetched"] == 2
+    assert payload["paginated"] is True
+    assert payload["fetch_strategy"] == "http_paginated"
+    assert payload["visited_urls"] == [
+        "https://example.com/news",
+        "https://example.com/news?page=2",
+    ]
+    assert "body:https://example.com/news?page=2" in payload["content"]
+
+
+@pytest.mark.asyncio
+async def test_crawler_fetch_text_retries_once_and_reports_attempts(monkeypatch, tmp_path: Path) -> None:
+    state = {"calls": 0}
+
+    async def _flaky_ingest(self, source: str):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise RuntimeError("temporary fetch issue")
+        return [Document(content=f"Recovered:{source}", source=source, metadata={})]
+
+    monkeypatch.setattr("zen_claw.skills.crawler.extractor.Ingestor.ingest", _flaky_ingest)
+
+    extractor = CrawlerExtractor(tmp_path)
+    payload = await extractor.fetch_text(
+        CrawlerSource(name="retry-news", url="https://example.com/retry", max_chars=2000)
+    )
+
+    assert payload["fetch_strategy"] == "http"
+    assert payload["attempt_count"] == 2
+    assert payload["retry_count"] == 1
+    assert payload["attempt_errors"][0]["attempt"] == 1
+    assert "temporary fetch issue" in payload["attempt_errors"][0]["error"]
+    assert "Recovered:https://example.com/retry" in payload["content"]
+
+
+@pytest.mark.asyncio
 async def test_crawler_crawl_to_rag_uses_pipeline_ingest_documents(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -153,6 +218,9 @@ async def test_crawler_crawl_to_rag_uses_pipeline_ingest_documents(
     assert payload["crawl_mode"] == "browser"
     assert payload["chunks_added"] == 2
     assert payload["change_status"] == "new"
+    assert payload["fetch_strategy"] == "browser"
+    assert payload["attempt_count"] == 1
+    assert payload["retry_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -204,6 +272,8 @@ async def test_crawler_crawl_to_rag_skips_unchanged_content(monkeypatch, tmp_pat
     assert payload["change_status"] == "unchanged"
     assert payload["skipped"] is True
     assert payload["chunks_added"] == 0
+    assert payload["attempt_count"] == 1
+    assert payload["retry_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -262,6 +332,55 @@ async def test_crawler_crawl_to_rag_replaces_changed_content(monkeypatch, tmp_pa
 
     assert payload["change_status"] == "updated"
     assert payload["chunks_added"] == 5
+    assert payload["fetch_strategy"] == "http"
+
+
+@pytest.mark.asyncio
+async def test_crawler_crawl_to_rag_preserves_page_metadata(monkeypatch, tmp_path: Path) -> None:
+    async def _fake_fetch_text(self, source: CrawlerSource):
+        return {
+            "name": source.name,
+            "url": source.url,
+            "content": "Crawler content",
+            "mode": "http",
+            "selector": "",
+            "pages_fetched": 3,
+            "paginated": True,
+        }
+
+    class _FakePipeline:
+        def __init__(self, data_dir: Path, store_kind: str = "", tenant_id: str = "default", default_notebook: str = "default"):
+            pass
+
+        @property
+        def store_kind(self) -> str:
+            return "memory"
+
+        def list_documents(self, *, notebook_id: str = ""):
+            return {"documents": []}
+
+        async def ingest_documents(self, docs, *, notebook_id: str = "", source: str = "", metadata=None):
+            assert docs[0].metadata["crawl_pages_fetched"] == 3
+            assert docs[0].metadata["crawl_paginated"] is True
+            return {
+                "tenant_id": "tenant-a",
+                "notebook": notebook_id,
+                "documents": 1,
+                "chunks_added": 2,
+                "store_backend": "memory",
+            }
+
+    monkeypatch.setattr("zen_claw.skills.crawler.extractor.CrawlerExtractor.fetch_text", _fake_fetch_text)
+    monkeypatch.setattr("zen_claw.skills.crawler.extractor.RAGPipeline", _FakePipeline)
+
+    extractor = CrawlerExtractor(tmp_path, tenant_id="tenant-a", store_kind="memory")
+    payload = await extractor.crawl_to_rag(
+        CrawlerSource(name="news", url="https://example.com/news", notebook_id="crawler_kb")
+    )
+
+    assert payload["pages_fetched"] == 3
+    assert payload["paginated"] is True
+    assert payload["fetch_strategy"] == "http"
 
 
 def test_crawler_scheduler_loads_json_and_builds_kwargs(tmp_path: Path) -> None:

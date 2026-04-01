@@ -11,6 +11,8 @@ from zen_claw.agent.intent_router import IntentRouteResult, IntentToolContract
 from zen_claw.agent.intent_router_classifier import IntentRouterClassifier
 from zen_claw.agent.intent_router_contracts import IntentArbitrationResult
 from zen_claw.agent.loop import AgentLoop
+from zen_claw.agent.orchestration import build_execution_intent
+from zen_claw.bus.events import InboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.providers.base import LLMProvider, LLMResponse
 
@@ -254,3 +256,52 @@ def test_gate2_unclassified_falls_back_to_normal_llm_path(tmp_path: Path, monkey
     assert observed["route_result"].contract is not None
     assert observed["route_result"].contract.intent_name == "default_contract"
     assert "exec" in observed["route_result"].contract.denied_tools
+
+
+def test_dispatch_execution_intent_uses_path_type_for_gate3(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(_loop_module, "SessionManager", _InMemorySessionManager)
+    loop = _make_loop(tmp_path, _QueueProvider([]))
+    session = loop.sessions.get_or_create("cli:direct")
+    route_result = _delegate_route_result()
+    route_result.arbitration_result = "unclassified"
+    route_result.contract = IntentToolContract(
+        intent_name="default_contract",
+        preferred_tools=["read_file"],
+        allowed_tools={"read_file"},
+        denied_tools={"exec"},
+    )
+    execution_intent = build_execution_intent(route_result)
+    msg = InboundMessage(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user",
+        content="未读邮件",
+    )
+
+    loop._enter_gate3_agent_loop = AsyncMock(return_value=("gate3 answer", {"prompt_tokens": 1}))  # type: ignore[method-assign]
+    loop._run_execute_reflect_loop = AsyncMock()  # type: ignore[method-assign]
+    loop._append_intent_router_event = lambda **kwargs: None  # type: ignore[method-assign]
+    loop._append_execution_event = lambda **kwargs: None  # type: ignore[method-assign]
+
+    final_content, usage, failure_classification, updated_route = asyncio.run(
+        loop._dispatch_execution_intent(
+            msg=msg,
+            session=session,
+            trace_id="trace-gate3-dispatch",
+            route_result=route_result,
+            execution_intent=execution_intent,
+            messages=[{"role": "user", "content": "未读邮件"}],
+            run_model="fake-model",
+            run_model_reason="default",
+            explicit_approved_tools=set(),
+            constrained_tools=None,
+            allow_model_fallback=False,
+        )
+    )
+
+    assert final_content == "gate3 answer"
+    assert usage == {"prompt_tokens": 1}
+    assert failure_classification is None
+    assert updated_route.diagnostic.endswith("gate3_entry")
+    loop._enter_gate3_agent_loop.assert_awaited_once()
+    loop._run_execute_reflect_loop.assert_not_awaited()

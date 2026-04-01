@@ -259,6 +259,12 @@ Dashboard 和 API 并不是孤立实现，而是围绕现有运行时对象提�
 
 尤其要注意：
 
+- 当前项目的 Alpha 主线以 Python runtime / control plane / RAG / crawler / skills 为主，不应被可选 sidecar 的成熟度直接拉低。
+- 当前仓库没有根级 `package.json`，`axios` 也不是直接 npm 依赖；Node 风险的重点在 `bridge/` 与 `browser/sidecar/` 的 lockfile、精确版本与受控安装流程。
+- `bridge/` 现在应视为需要 lockfile 驱动的受控组件；`browser/sidecar/` 则是带锁文件的可选 Playwright sidecar。
+- `zen_claw/dashboard/static/chat.html` 仍使用固定版本 CDN 资源，这属于当前保留的外部前端供应链边界。
+- `bridge/README.md` 现在承担 WhatsApp bridge 的最小安装、构建、启动与 smoke 验收说明。
+
 - 一部分能力依赖 optional extras
 - 一部分能力依赖外部凭证、渠道配置或运行 sidecar
 - 对外文档应优先描述稳定入口，不要把阶段性实验能力写成无条件可用能力

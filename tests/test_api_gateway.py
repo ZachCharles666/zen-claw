@@ -800,6 +800,9 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert installed["name"] == "beta"
     assert installed["source_kind"] == "dir"
     assert installed["governance"]["source_url"] == "https://example.com/beta.zip"
+    assert installed["reload_required"] is False
+    assert installed["apply_state"]["surface"] == "skill"
+    assert installed["apply_state"]["execution_mode"] == "install"
     assert (cfg.workspace_path / "skills" / "beta" / "SKILL.md").exists()
 
     action_rows = (tmp_path / "dashboard" / "skills_actions.log.jsonl").read_text(
@@ -811,6 +814,9 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     resp_disable = client.post("/api/v1/skills/alpha/disable", headers={"X-API-Key": valid_key})
     assert resp_disable.status_code == 200
     assert resp_disable.json()["enabled"] is False
+    assert resp_disable.json()["reload_required"] is False
+    assert resp_disable.json()["apply_state"]["surface"] == "skill"
+    assert resp_disable.json()["apply_state"]["status"] == "applied"
     action_rows = (tmp_path / "dashboard" / "skills_actions.log.jsonl").read_text(
         encoding="utf-8"
     ).splitlines()
@@ -820,6 +826,7 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     resp_enable = client.post("/api/v1/skills/alpha/enable", headers={"X-API-Key": valid_key})
     assert resp_enable.status_code == 200
     assert resp_enable.json()["enabled"] is True
+    assert resp_enable.json()["apply_state"]["execution_mode"] == "in_process"
     action_rows = (tmp_path / "dashboard" / "skills_actions.log.jsonl").read_text(
         encoding="utf-8"
     ).splitlines()
@@ -866,6 +873,8 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert preflight["integrity_ok"] is True
     assert preflight["tests_present"] is True
     assert preflight["detail"] == "manifest/integrity checks passed"
+    assert preflight["reload_required"] is False
+    assert preflight["apply_state"]["execution_mode"] == "preflight"
 
     check_rows = (tmp_path / "dashboard" / "skills_checks.log.jsonl").read_text(
         encoding="utf-8"
@@ -885,6 +894,8 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert batch["issue_count"] == 0
     assert batch["missing_names"] == ["missing"]
     assert {row["name"] for row in batch["rows"]} == {"alpha", "beta"}
+    assert batch["reload_required"] is False
+    assert batch["apply_state"]["target"] == "batch:preflight"
 
     resp_list = client.get("/api/v1/skills", headers={"X-API-Key": valid_key})
     assert resp_list.status_code == 200
@@ -939,6 +950,8 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert exported["out_path"].endswith("alpha.zip")
     assert exported["exported_physical_dir"] == "alpha"
     assert exported["exported_version"] == "1.0.0"
+    assert exported["reload_required"] is False
+    assert exported["apply_state"]["execution_mode"] == "export"
     assert Path(exported["out_path"]).exists()
 
     export_rows = (tmp_path / "dashboard" / "skills_exports.log.jsonl").read_text(
@@ -979,6 +992,7 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert policy_body["package_policy"]["preferred_version"] == "1.0.0"
     assert policy_body["package_policy"]["retention_hours"] == 72
     assert policy_body["package_policy"]["restore_ready"] is True
+    assert policy_body["apply_state"]["execution_mode"] == "package_policy"
 
     resp_detail = client.get("/api/v1/skills/alpha", headers={"X-API-Key": valid_key})
     assert resp_detail.status_code == 200
@@ -1045,6 +1059,7 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert restored["restore_plan"]["source"] == "latest_export"
     assert restored["restore_plan"]["ready"] is True
     assert restored["package_policy"]["preferred_physical_dir"] == "alpha"
+    assert restored["apply_state"]["execution_mode"] == "restore"
     assert (cfg.workspace_path / "skills" / "alpha" / "SKILL.md").exists()
 
     resp_detail = client.get("/api/v1/skills/alpha", headers={"X-API-Key": valid_key})
@@ -1065,6 +1080,7 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     assert restored["ok"] is True
     assert restored["name"] == "alpha"
     assert restored["source"].endswith("alpha.zip")
+    assert restored["apply_state"]["execution_mode"] == "restore_export"
     assert (cfg.workspace_path / "skills" / "alpha" / "SKILL.md").exists()
 
     resp_detail = client.get("/api/v1/skills/alpha", headers={"X-API-Key": valid_key})
@@ -1085,6 +1101,7 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     )
     assert resp_promote.status_code == 200
     assert resp_promote.json()["declarative_intent"] == "alpha_lookup"
+    assert resp_promote.json()["apply_state"]["execution_mode"] == "promote"
 
     resp_detail = client.get("/api/v1/skills/alpha", headers={"X-API-Key": valid_key})
     assert resp_detail.status_code == 200
@@ -1097,6 +1114,7 @@ def test_skills_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypatc
     resp_uninstall = client.post("/api/v1/skills/beta/uninstall", headers={"X-API-Key": valid_key})
     assert resp_uninstall.status_code == 200
     assert resp_uninstall.json()["name"] == "beta"
+    assert resp_uninstall.json()["apply_state"]["execution_mode"] == "uninstall"
     assert (cfg.workspace_path / "skills" / "beta").exists() is False
 
     action_rows = (tmp_path / "dashboard" / "skills_actions.log.jsonl").read_text(
@@ -1154,6 +1172,8 @@ def test_skills_gc_preview_and_run_api(client, valid_key, tmp_path, monkeypatch)
     body = resp_run.json()
     assert body["deleted_count"] == 1
     assert body["preview"]["candidate_count"] == 1
+    assert body["apply_state"]["target"] == "__gc__"
+    assert body["apply_state"]["execution_mode"] == "gc_cleanup"
     assert stale_dir.exists() is False
 
     action_rows = (tmp_path / "dashboard" / "skills_actions.log.jsonl").read_text(
@@ -1161,6 +1181,43 @@ def test_skills_gc_preview_and_run_api(client, valid_key, tmp_path, monkeypatch)
     ).splitlines()
     assert len(action_rows) == 1
     assert '"action": "gc_cleanup"' in action_rows[0]
+
+
+def test_content_gen_direct_run_api_exposes_stable_execution_contract(
+    client, valid_key, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: tmp_path)
+    monkeypatch.setattr("zen_claw.config.loader.load_config", lambda: Config())
+
+    resp = client.post(
+        "/api/v1/skills/content-gen/run",
+        headers={"X-API-Key": valid_key},
+        json={
+            "industry": "finance",
+            "channel": "generic",
+            "product_name": "安心会员",
+            "audience": "新用户",
+            "style": "稳健克制",
+            "key_points": ["不承诺收益", "突出服务流程"],
+            "count": 1,
+            "use_rag": False,
+            "tenant_id": "tenant-alpha",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["contract_version"] == "alpha.v1"
+    assert body["tenant_id"] == "tenant-alpha"
+    assert body["product_name"] == "安心会员"
+    assert "product_name" in body["request_contract"]["required"]
+    assert "count" in body["request_contract"]["optional"]
+    assert body["execution"]["skill"] == "content_gen"
+    assert body["execution"]["api_mode"] == "direct_run"
+    assert body["execution"]["tenant_id"] == "tenant-alpha"
+    assert body["execution"]["channel"] == "generic"
+    assert body["execution"]["rag_requested"] is False
+    assert body["versions"][0]["source"] == "template"
 
 
 def test_skill_restore_plan_enforces_preferred_export_version(client, valid_key, tmp_path, monkeypatch):
@@ -1296,7 +1353,15 @@ def test_channels_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypa
     assert resp_list.status_code == 200
     rows = {row["name"]: row for row in resp_list.json()["channels"]}
     runtime_rows = {row["channel_name"]: row for row in resp_list.json()["runtime_controls"]}
+    assert resp_list.json()["alpha_ready"] == resp_list.json()["total"]
+    assert resp_list.json()["alpha_gaps"] == 0
     assert rows["slack"]["enabled"] is True
+    assert rows["slack"]["verify_mode"] == "socket_mode_or_webhook_signature"
+    assert rows["slack"]["media_supported"] is True
+    assert rows["slack"]["runtime_visibility_supported"] is True
+    assert rows["slack"]["runtime_control_mode"] == "audit_only"
+    assert rows["slack"]["alpha_contract_ready"] is True
+    assert rows["slack"]["alpha_contract_missing"] == []
     assert runtime_rows["webchat"]["supported"] is True
     assert runtime_rows["webchat"]["apply_supported"] is True
     assert runtime_rows["slack"]["supported"] is False
@@ -1305,6 +1370,8 @@ def test_channels_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypa
     assert resp_disable.status_code == 200
     assert resp_disable.json()["enabled"] is False
     assert resp_disable.json()["reload_required"] is True
+    assert resp_disable.json()["apply_state"]["surface"] == "channel"
+    assert resp_disable.json()["apply_state"]["status"] == "pending"
     assert cfg.channels.slack.enabled is False
 
     action_rows = (tmp_path / "dashboard" / "channel_actions.log.jsonl").read_text(
@@ -1316,6 +1383,7 @@ def test_channels_inventory_and_toggle_api(client, valid_key, tmp_path, monkeypa
     resp_enable = client.post("/api/v1/channels/slack/enable", headers={"X-API-Key": valid_key})
     assert resp_enable.status_code == 200
     assert resp_enable.json()["enabled"] is True
+    assert resp_enable.json()["apply_state"]["execution_mode"] == "config_reload"
     assert cfg.channels.slack.enabled is True
 
     resp_list = client.get("/api/v1/channels", headers={"X-API-Key": valid_key})
@@ -1525,9 +1593,14 @@ def test_crawler_sources_and_run_api(client, valid_key, tmp_path, monkeypatch):
         return {
             "crawl_name": source.name,
             "crawl_mode": "browser",
+            "fetch_strategy": "browser",
+            "attempt_count": 2,
+            "retry_count": 1,
             "change_status": "updated",
             "documents": 1,
             "chunks_added": 4,
+            "pages_fetched": 1,
+            "paginated": False,
             "notebook": source.notebook_id,
         }
 
@@ -1553,6 +1626,8 @@ def test_crawler_sources_and_run_api(client, valid_key, tmp_path, monkeypatch):
     )
     assert save_resp.status_code == 200
     assert save_resp.json()["source"]["name"] == "blog"
+    assert save_resp.json()["apply_state"]["surface"] == "crawler"
+    assert save_resp.json()["apply_state"]["status"] == "applied"
     source_rows = (tmp_path / "dashboard" / "crawler_sources.log.jsonl").read_text(
         encoding="utf-8"
     ).splitlines()
@@ -1566,11 +1641,79 @@ def test_crawler_sources_and_run_api(client, valid_key, tmp_path, monkeypatch):
     )
     assert run_resp.status_code == 200
     assert run_resp.json()["change_status"] == "updated"
+    assert run_resp.json()["apply_state"]["execution_mode"] == "in_process"
+    assert run_resp.json()["attempt_count"] == 2
+    assert run_resp.json()["retry_count"] == 1
+    status_resp = client.get("/api/v1/crawler/sources/news/status", headers={"X-API-Key": valid_key})
+    assert status_resp.status_code == 200
+    assert status_resp.json()["last_run_status"] == "ok"
+    assert status_resp.json()["failed_runs"] == 0
+    assert status_resp.json()["last_fetch_strategy"] == "browser"
+    assert status_resp.json()["last_attempt_count"] == 2
+    assert status_resp.json()["last_retry_count"] == 1
+    assert status_resp.json()["last_pages_fetched"] == 1
+    assert status_resp.json()["last_paginated"] is False
     run_rows = (tmp_path / "dashboard" / "crawler_runs.log.jsonl").read_text(
         encoding="utf-8"
     ).splitlines()
     assert len(run_rows) == 1
     assert '"event": "crawler.run"' in run_rows[0]
+    assert '"attempt_count": 2' in run_rows[0]
+    assert '"retry_count": 1' in run_rows[0]
+
+    schedule_resp = client.post(
+        "/api/v1/crawler/schedules",
+        headers={"X-API-Key": valid_key},
+        json={"source_name": "news", "cron": "*/15 * * * *", "enabled": True},
+    )
+    assert schedule_resp.status_code == 200
+    assert schedule_resp.json()["apply_state"]["surface"] == "crawler"
+
+    schedule_detail = client.get(
+        "/api/v1/crawler/schedules/news",
+        headers={"X-API-Key": valid_key},
+    )
+    assert schedule_detail.status_code == 200
+    assert schedule_detail.json()["schedule"]["source_name"] == "news"
+    assert schedule_detail.json()["last_run_status"] == "ok"
+    assert schedule_detail.json()["last_fetch_strategy"] == "browser"
+    assert schedule_detail.json()["last_attempt_count"] == 2
+
+
+def test_crawler_source_status_surfaces_failed_runs(client, valid_key, tmp_path, monkeypatch):
+    from zen_claw.skills.crawler.extractor import CrawlerSource
+    from zen_claw.skills.crawler.scheduler import upsert_source
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: tmp_path)
+    upsert_source(
+        tmp_path / "crawler" / "sources.json",
+        CrawlerSource(name="broken", url="https://example.com/broken", notebook_id="crawler_kb"),
+    )
+
+    async def _failing_crawl(self, source):
+        raise RuntimeError(f"fetch failed for {source.name}")
+
+    monkeypatch.setattr(
+        "zen_claw.skills.crawler.extractor.CrawlerExtractor.crawl_to_rag",
+        _failing_crawl,
+    )
+
+    run_resp = client.post(
+        "/api/v1/crawler/run",
+        headers={"X-API-Key": valid_key},
+        json={"source_name": "broken"},
+    )
+    assert run_resp.status_code == 400
+
+    status_resp = client.get(
+        "/api/v1/crawler/sources/broken/status",
+        headers={"X-API-Key": valid_key},
+    )
+    assert status_resp.status_code == 200
+    assert status_resp.json()["last_run_status"] == "error"
+    assert status_resp.json()["failed_runs"] == 1
+    assert "fetch failed for broken" in status_resp.json()["last_error"]
+    assert status_resp.json()["last_attempt_count"] == 1
 
 
 def test_rag_api_endpoints(client, valid_key, monkeypatch):
@@ -2113,21 +2256,73 @@ def test_ops_summary_api_json_and_csv(client, valid_key, monkeypatch, tmp_path: 
         + "\n",
         encoding="utf-8",
     )
+    (dashboard_dir / "agent_execution.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 120,
+                "trace_id": "exec-1",
+                "intent_name": "email_check",
+                "routing_decision": {
+                    "action": "delegate",
+                    "route_status": "needs_constrained_replan",
+                    "routing_stage": "gate2_delegate",
+                    "entered_gate3": False,
+                },
+                "execution_intent": {
+                    "path_type": "skill_path",
+                    "execution_mode": "skill_guided",
+                    "decision_source": "gate2",
+                },
+                "execution_result": {
+                    "status": "failed",
+                    "failure_classification": "tool_timeout",
+                    "trace_summary": {
+                        "selected_model": "primary-model",
+                        "model_reason": "intent_override",
+                        "reflections_used": 1,
+                        "reflection_triggered": True,
+                        "tool_failures": 1,
+                        "fallback_used": True,
+                        "fallback_reason": "fallback_model:primary-model",
+                        "reload_triggered": True,
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     resp = client.get("/api/v1/ops/summary", headers={"X-API-Key": valid_key})
     assert resp.status_code == 200
     body = resp.json()
     assert body["ops"]["model_routes"] == 1
+    assert body["ops"]["agent_execution_total"] == 1
+    assert body["ops"]["agent_routing_delegated"] == 1
+    assert body["ops"]["agent_execution_failed"] == 1
+    assert body["ops"]["agent_execution_reflected"] == 1
+    assert body["ops"]["agent_execution_fallback"] == 1
+    assert body["ops"]["agent_execution_reload"] == 1
     assert body["rows"][0]["metric"] == "status"
     assert any(row["surface"] == "model_routing" for row in body["rows"])
+    assert any(row["surface"] == "agent_execution" for row in body["rows"])
+    assert any(
+        row["surface"] == "agent_execution" and row["metric"] == "reflected_runs" and row["value"] == 1
+        for row in body["rows"]
+    )
     assert "notes" in body
     assert "attention_sections" in body
     assert any(section["key"] == "runtime_unsupported" for section in body["attention_sections"])
+    assert any(section["key"] == "agent_execution_failed" for section in body["attention_sections"])
+    assert any(section["key"] == "agent_routing_delegate" for section in body["attention_sections"])
     assert not any(
         section["key"].startswith("pending_apply_") and section["key"] != "pending_apply"
         for section in body["attention_sections"]
     )
-    assert body["recent_activity"][0]["surface"] == "model_routing"
+    assert body["recent_activity"][0]["surface"] == "agent_execution"
+    assert body["recent_activity"][0]["action"] == "execution_failed"
+    assert "reflections=1" in body["recent_activity"][0]["detail"]
+    assert "fallback=fallback_model:primary-model" in body["recent_activity"][0]["detail"]
     assert body["pending_apply_total"] == 0
 
     csv_resp = client.get("/api/v1/ops/summary?format=csv", headers={"X-API-Key": valid_key})
@@ -2137,19 +2332,21 @@ def test_ops_summary_api_json_and_csv(client, valid_key, monkeypatch, tmp_path: 
     csv_text = csv_resp.text
     assert "surface,metric,value" in csv_text
     assert "model_routing,recent_routes,1" in csv_text
+    assert "agent_execution,failed,1" in csv_text
+    assert "agent_execution,reflected_runs,1" in csv_text
     assert "attention_key,attention_title,attention_count,surface,at_ms,target,action,actor,detail,trace_id,pending_apply" in csv_text
     assert "recent_surface,at_ms,target,action,actor,detail,trace_id,pending_apply" in csv_text
 
     filtered_resp = client.get(
-        "/api/v1/ops/summary?surface=model_routing&target=cheap-model&limit=1",
+        "/api/v1/ops/summary?surface=agent_execution&target=email_check&limit=1",
         headers={"X-API-Key": valid_key},
     )
     assert filtered_resp.status_code == 200
     filtered_body = filtered_resp.json()
-    assert filtered_body["filters"]["surface"] == "model_routing"
-    assert filtered_body["filters"]["target"] == "cheap-model"
+    assert filtered_body["filters"]["surface"] == "agent_execution"
+    assert filtered_body["filters"]["target"] == "email_check"
     assert filtered_body["returned"] == 1
-    assert filtered_body["recent_activity"][0]["target"] == "cheap-model"
+    assert filtered_body["recent_activity"][0]["target"] == "email_check"
 
 
 def test_ops_apply_pending_acknowledges_agent_and_channel(client, valid_key, tmp_path, monkeypatch):

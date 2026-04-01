@@ -140,6 +140,10 @@ These top-level areas are the main places to read code:
 
 - README only covers stable entry points and repository-level orientation. It does not try to replace subsystem-specific docs.
 - Some features depend on optional extras, external credentials, or channel/provider-specific runtime setup.
+- The Python mainline is the repository's Alpha-grade baseline. Lower-maturity areas are mostly optional Node sidecars such as `bridge/` and `browser/sidecar/`, plus documentation consistency work.
+- `axios` is not a direct npm dependency in the current repository. The active Node supply-chain risk is reproducibility and lockfile governance, not a direct `axios` pinning issue.
+- Node-side installs are expected to use committed lockfiles and controlled version updates. Unlocked `npm install` paths are not part of the release-grade baseline.
+- `zen_claw/dashboard/static/chat.html` still consumes pinned CDN assets; treat those external scripts as a bounded residual supply-chain dependency unless they are vendored locally.
 - The repository includes roadmap and audit documents; README should be read as “current implemented baseline”, not as a promise that every historical plan item is complete.
 - Verification commands and repo structure should always defer to the generated docs in `docs/`.
 
@@ -149,6 +153,7 @@ These top-level areas are the main places to read code:
 - Repository map: [`docs/repo_map.md`](docs/repo_map.md)
 - Verification source of truth: [`docs/verify_profile.md`](docs/verify_profile.md)
 - Deployment guide: [`docs/DEPLOY.md`](docs/DEPLOY.md)
+- WhatsApp bridge runbook: [`bridge/README.md`](bridge/README.md)
 - Feature usage reference: [`docs/feature-summary_and_usage.md`](docs/feature-summary_and_usage.md)
 - Product/roadmap context: [`docs/zen-claw功能补足开发计划.md`](docs/zen-claw功能补足开发计划.md)
 

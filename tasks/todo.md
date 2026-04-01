@@ -2,6 +2,66 @@
 
 ## Current Priorities
 
+- [x] Node supply-chain governance baseline:
+  - generate and commit `bridge/package-lock.json`
+  - pin direct Node dependency versions in `bridge/` and `browser/sidecar/`
+  - require lockfile-based `npm ci` for bridge setup instead of unlocked `npm install`
+  - add regression coverage and docs for `axios` non-usage plus Node governance boundaries
+- [x] Optional Node sidecar runbook closure:
+  - add a minimal WhatsApp bridge install/build/start/smoke SOP under `bridge/README.md`
+  - document the remaining CDN asset boundary for dashboard WebChat
+- [x] WhatsApp Alpha closure round:
+  - import bridge-provided local voice media into workspace media for WhatsApp
+  - transcribe WhatsApp voice messages when local audio plus `GROQ_API_KEY` are available
+  - add regression coverage and a new user-facing Alpha UAT document under `docs/`
+- [x] WhatsApp bridge Alpha finish pass:
+  - standardize bridge runtime status signals for smoke diagnostics
+  - add a dedicated real-device smoke checklist and execution template under `docs/`
+  - extend Python-side regression coverage for bridge status handling
+- [x] Alpha final assessment closure:
+  - publish a final Alpha assessment doc under `docs/`
+  - distinguish remaining acceptance evidence from actual feature gaps
+- [x] Control-plane execution visibility closure:
+  - feed `agent_execution` events into `/api/v1/ops/summary` recent activity and summary metrics
+  - expose delegated-vs-failed execution signals in the dashboard `Operations Summary`
+  - extend the `Agents` card with recent execution path/status visibility on top of `runtime_state`
+- [x] Execution trace visibility closure:
+  - expose reflection / fallback / reload / approval-wait execution diagnostics in `agent.execution_summary`
+  - surface the same diagnostics in `/api/v1/ops/summary` metrics and recent activity detail
+  - extend the dashboard `Agents` card to show execution trace summaries without changing route semantics
+- [x] Loop handoff tightening:
+  - route immediate-return paths through `ExecutionIntent` instead of ad-hoc `route_result` branching
+  - dispatch gate3 vs normal execution from `ExecutionIntent.path_type`
+  - keep Gate 1/2/3 behavior unchanged while reducing routing-to-execution coupling in `AgentLoop`
+- [x] Failure taxonomy stabilization:
+  - normalize `execution_result.failure_classification` into stable operator-facing categories
+  - preserve raw failure detail in `trace_summary` when the normalized category is broader
+  - keep dashboard/API consumers compatible while removing direct dependence on ad-hoc failure strings
+- [x] Intent Router / Orchestration boundary closure:
+  - introduce explicit routing and execution-layer boundary contracts without changing Gate 1/2/3 semantics
+  - persist separate agent execution events alongside existing intent router trace events
+  - expose `agent.config_state` / `agent.runtime_state` / `agent.operator_state` in dashboard snapshot while preserving existing fields
+- [x] Alpha alignment closure round 5:
+  - harden `crawler` fetch diagnostics with retry/attempt metadata and strategy visibility
+  - expose crawler operator-facing run diagnostics in audit, source status, and schedule status
+  - cover crawler retry/diagnostic semantics with regression tests
+- [x] Alpha alignment closure round 4:
+  - expose shared channel Alpha contract readiness and missing-capability status in registry/API/dashboard
+  - extend channel regression coverage from raw metadata to operator-facing readiness assertions
+- [x] Alpha alignment closure round 3:
+  - unify remaining `skill` control-plane mutation responses around shared execution/apply semantics
+  - expose a stable direct-run API execution contract for `content_gen`
+  - cover the new `skill` mutation semantics and `content_gen` API contract with regression tests
+- [x] Alpha alignment closure round 1:
+  - unify control-plane mutation apply/result semantics across `agent` / `skill` / `channel`
+  - harden shared channel contract metadata + cross-channel contract tests
+  - close crawler lifecycle gaps around schedule/source status and failed-run visibility
+  - harden `content_gen` contract and provider-degradation behavior to Alpha baseline
+- [x] Alpha alignment closure round 2:
+  - extend unified apply/result semantics across `crawler` mutations and batch skill actions
+  - add runtime-level shared channel contract tests on real registered channel classes
+  - tighten dashboard snapshot assertions around shared channel contract visibility
+
 - [x] Fix GitHub Actions `core-tests` PowerShell shard logging parser error in `.github/workflows/ci.yml`.
 - [x] Fix CI regressions in RAG retention, notebook repair, and fuzzy timezone recovery tests.
 - [x] Rework README into a developer-first, bilingual project entry document based on current implemented capabilities.

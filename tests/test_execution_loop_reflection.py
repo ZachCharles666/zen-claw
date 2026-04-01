@@ -178,6 +178,12 @@ def test_run_execute_reflect_loop_injects_reflection_prompt_on_error(
         m["role"] == "user" and "Previous tool attempts failed" in str(m.get("content"))
         for m in out
     )
+    assert loop._last_execution_trace_summary is not None
+    assert loop._last_execution_trace_summary["tool_calls"] == 1
+    assert loop._last_execution_trace_summary["tool_failures"] == 1
+    assert loop._last_execution_trace_summary["reflection_triggered"] is True
+    assert loop._last_execution_trace_summary["reflections_used"] == 1
+    assert loop._last_execution_trace_summary["last_error_kind"] == "retryable"
 
 
 def test_run_execute_reflect_loop_skips_reflection_on_success(tmp_path: Path, monkeypatch) -> None:
@@ -492,6 +498,10 @@ def test_run_execute_reflect_loop_retries_once_with_fallback_model(
 
     assert final == "fallback final"
     assert provider.models == ["primary-model", "fallback-model"]
+    assert loop._last_execution_trace_summary is not None
+    assert loop._last_execution_trace_summary["fallback_used"] is True
+    assert loop._last_execution_trace_summary["fallback_reason"] == "fallback_model:primary-model"
+    assert loop._last_execution_trace_summary["models_used"] == ["fallback-model"]
 
 
 def test_run_execute_reflect_loop_skips_fallback_when_disabled(
@@ -515,6 +525,8 @@ def test_run_execute_reflect_loop_skips_fallback_when_disabled(
 
     assert "temporary failure" in str(final)
     assert provider.models == ["primary-model"]
+    assert loop._last_execution_trace_summary is not None
+    assert loop._last_execution_trace_summary["fallback_used"] is False
 
 
 def test_record_tool_learning_dedupes_same_signature(tmp_path: Path, monkeypatch) -> None:

@@ -32,6 +32,13 @@ from zen_claw.agent.intent_router import (
 )
 from zen_claw.agent.intent_router_classifier import IntentRouterClassifier
 from zen_claw.agent.memory_extractor import MemoryExtractor
+from zen_claw.agent.orchestration import (
+    RouteCandidate,
+    build_arbitration_decision,
+    build_execution_intent,
+    build_routing_decision,
+    resolve_routing_stage,
+)
 from zen_claw.agent.subagent import SubagentManager
 from zen_claw.agent.tools.browser import (
     BrowserClickTool,
@@ -263,6 +270,7 @@ class AgentLoop:
         self._deferred_retry_tasks: set[asyncio.Task[Any]] = set()
         self._last_run_model_used: str | None = None
         self._last_run_model_reason: str | None = None
+        self._last_execution_trace_summary: dict[str, Any] | None = None
         self._register_default_tools()
 
     def _register_default_tools(self) -> None:
@@ -898,8 +906,9 @@ class AgentLoop:
             self.intent_router.set_control_context(None)
         gate2_instruction: str | None = None
         clarification_reply: str | None = None
+        selected_skill: str | None = None
         if route_result.safety_valve_outcome == "delegate":
-            route_result, gate2_instruction, clarification_reply = await self._run_gate2_classifier(
+            route_result, gate2_instruction, clarification_reply, selected_skill = await self._run_gate2_classifier(
                 msg=msg,
                 session=session,
                 route_result=route_result,
@@ -908,70 +917,24 @@ class AgentLoop:
 
         self._append_intent_router_event(trace_id=trace_id, msg=msg, route_result=route_result)
         self._update_intent_router_control_state(session.metadata, route_result)
-        if clarification_reply is not None:
-            session.add_message("user", msg.content)
-            session.add_message("assistant", clarification_reply)
-            self.sessions.save(session)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=clarification_reply,
-                metadata=TraceContext.child_metadata(trace_id),
+        execution_intent = build_execution_intent(
+            route_result,
+            clarification_question=clarification_reply,
+            selected_skill=selected_skill,
+        )
+        route_result, execution_intent, explicit_approved_tools, immediate_response = (
+            await self._resolve_immediate_execution_intent(
+                msg=msg,
+                session=session,
+                trace_id=trace_id,
+                route_result=route_result,
+                execution_intent=execution_intent,
+                clarification_reply=clarification_reply,
+                selected_skill=selected_skill,
             )
-        explicit_approved_tools: set[str] = set()
-        if route_result.route_status == "needs_explicit_approval":
-            explicit_approved_tools, approval_reply = await self._resolve_one_shot_explicit_approval(
-                msg,
-                session,
-                route_result,
-                trace_id,
-            )
-            if approval_reply is not None:
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=approval_reply,
-                    metadata=TraceContext.child_metadata(trace_id),
-                )
-            if explicit_approved_tools and route_result.contract is not None:
-                route_result = IntentRouteResult(
-                    handled=route_result.handled,
-                    intent_name=route_result.intent_name,
-                    content=route_result.content,
-                    contract=self._contract_with_one_shot_approval(
-                        route_result.contract,
-                        explicit_approved_tools,
-                    ),
-                    route_status="needs_constrained_replan",
-                    diagnostic=route_result.diagnostic,
-                    skip_planning=route_result.skip_planning,
-                    recovery_outcome=route_result.recovery_outcome,
-                    route_candidate=route_result.route_candidate,
-                    delegate_reason=route_result.delegate_reason,
-                    safety_valve_outcome=route_result.safety_valve_outcome,
-                    arbitration_result=route_result.arbitration_result,
-                    safety_valve_trace=route_result.safety_valve_trace,
-                )
-                self._append_intent_router_event(
-                    trace_id=trace_id,
-                    msg=msg,
-                    route_result=route_result,
-                )
-        if route_result.route_status in {"direct_success", "direct_failed"} and route_result.content is not None:
-            direct_content = route_result.content
-            if self._should_schedule_deferred_retry(msg, route_result):
-                self._schedule_deferred_retry(msg, route_result, trace_id)
-                direct_content += "\n\n我会在后台再试一次；若成功会把结果回推到当前会话。"
-            session.add_message("user", msg.content)
-            session.add_message("assistant", direct_content)
-            await self._extract_and_store_memory(msg.content, direct_content, trace_id)
-            self.sessions.save(session)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=direct_content,
-                metadata=TraceContext.child_metadata(trace_id),
-            )
+        )
+        if immediate_response is not None:
+            return immediate_response
 
         history = await self._build_history_with_compression(session, trace_id)
 
@@ -1037,45 +1000,19 @@ class AgentLoop:
         self._last_run_model_used = run_model
         self._last_run_model_reason = run_model_reason
         try:
-            if str(route_result.arbitration_result or "").strip().lower() == "unclassified":
-                route_result.diagnostic = (
-                    f"{route_result.diagnostic}:gate3_entry"
-                    if route_result.diagnostic
-                    else "gate3:entry"
-                )
-                final_content, usage = await self._enter_gate3_agent_loop(
-                    messages=messages,
-                    msg=msg,
-                    session=session,
-                    trace_id=trace_id,
-                    route_result=route_result,
-                    run_model=run_model,
-                    explicit_approved_tools=explicit_approved_tools,
-                    constrained_tools=constrained_tools,
-                    allow_model_fallback=allow_model_fallback,
-                )
-                self._append_intent_router_event(
-                    trace_id=trace_id,
-                    msg=msg,
-                    route_result=route_result,
-                )
-            else:
-                if not route_result.skip_planning:
-                    messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
-                usage: dict[str, int] = {}
-                final_content, _ = await self._run_execute_reflect_loop(
-                    messages,
-                    trace_id,
-                    session=session,
-                    model=run_model,
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    usage_collector=usage,
-                    tool_definitions=constrained_tools,
-                    approved_one_shot_tools=explicit_approved_tools,
-                    active_intent_contract=route_result.contract,
-                    allow_model_fallback=allow_model_fallback,
-                )
+            final_content, usage, _, route_result = await self._dispatch_execution_intent(
+                msg=msg,
+                session=session,
+                trace_id=trace_id,
+                route_result=route_result,
+                execution_intent=execution_intent,
+                messages=messages,
+                run_model=run_model,
+                run_model_reason=run_model_reason,
+                explicit_approved_tools=explicit_approved_tools,
+                constrained_tools=constrained_tools,
+                allow_model_fallback=allow_model_fallback,
+            )
         finally:
             self.tools.clear_policy_scope("intent_contract")
 
@@ -1135,6 +1072,227 @@ class AgentLoop:
             content=final_content,
             metadata=TraceContext.child_metadata(trace_id),
         )
+
+    async def _resolve_immediate_execution_intent(
+        self,
+        *,
+        msg: InboundMessage,
+        session: "Session",
+        trace_id: str,
+        route_result: IntentRouteResult,
+        execution_intent: Any,
+        clarification_reply: str | None,
+        selected_skill: str | None,
+    ) -> tuple[IntentRouteResult, Any, set[str], OutboundMessage | None]:
+        if execution_intent.path_type == "clarification" and clarification_reply is not None:
+            self._append_execution_event(
+                trace_id=trace_id,
+                msg=msg,
+                route_result=route_result,
+                execution_intent=execution_intent,
+                execution_result_status="clarified",
+                final_content=clarification_reply,
+                selected_model="",
+                model_reason="",
+            )
+            session.add_message("user", msg.content)
+            session.add_message("assistant", clarification_reply)
+            self.sessions.save(session)
+            return (
+                route_result,
+                execution_intent,
+                set(),
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=clarification_reply,
+                    metadata=TraceContext.child_metadata(trace_id),
+                ),
+            )
+
+        explicit_approved_tools: set[str] = set()
+        if execution_intent.path_type == "approval_wait":
+            explicit_approved_tools, approval_reply = await self._resolve_one_shot_explicit_approval(
+                msg,
+                session,
+                route_result,
+                trace_id,
+            )
+            if approval_reply is not None:
+                self._append_execution_event(
+                    trace_id=trace_id,
+                    msg=msg,
+                    route_result=route_result,
+                    execution_intent=execution_intent,
+                    execution_result_status="approval_required",
+                    final_content=approval_reply,
+                    failure_classification="approval_wait",
+                    selected_model="",
+                    model_reason="",
+                )
+                return (
+                    route_result,
+                    execution_intent,
+                    explicit_approved_tools,
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=approval_reply,
+                        metadata=TraceContext.child_metadata(trace_id),
+                    ),
+                )
+            if explicit_approved_tools and route_result.contract is not None:
+                route_result = IntentRouteResult(
+                    handled=route_result.handled,
+                    intent_name=route_result.intent_name,
+                    content=route_result.content,
+                    contract=self._contract_with_one_shot_approval(
+                        route_result.contract,
+                        explicit_approved_tools,
+                    ),
+                    route_status="needs_constrained_replan",
+                    diagnostic=route_result.diagnostic,
+                    skip_planning=route_result.skip_planning,
+                    recovery_outcome=route_result.recovery_outcome,
+                    route_candidate=route_result.route_candidate,
+                    delegate_reason=route_result.delegate_reason,
+                    safety_valve_outcome=route_result.safety_valve_outcome,
+                    arbitration_result=route_result.arbitration_result,
+                    safety_valve_trace=route_result.safety_valve_trace,
+                )
+                self._append_intent_router_event(
+                    trace_id=trace_id,
+                    msg=msg,
+                    route_result=route_result,
+                )
+                execution_intent = build_execution_intent(
+                    route_result,
+                    clarification_question=clarification_reply,
+                    selected_skill=selected_skill,
+                )
+
+        if execution_intent.path_type == "direct" and route_result.content is not None:
+            direct_content = route_result.content
+            if self._should_schedule_deferred_retry(msg, route_result):
+                self._schedule_deferred_retry(msg, route_result, trace_id)
+                direct_content += "\n\n我会在后台再试一次；若成功会把结果回推到当前会话。"
+            self._append_execution_event(
+                trace_id=trace_id,
+                msg=msg,
+                route_result=route_result,
+                execution_intent=execution_intent,
+                execution_result_status=(
+                    "succeeded" if route_result.route_status == "direct_success" else "failed"
+                ),
+                final_content=direct_content,
+                failure_classification=(
+                    None
+                    if route_result.route_status == "direct_success"
+                    else str(route_result.diagnostic or "").strip() or "direct_failed"
+                ),
+                selected_model="",
+                model_reason="",
+            )
+            session.add_message("user", msg.content)
+            session.add_message("assistant", direct_content)
+            await self._extract_and_store_memory(msg.content, direct_content, trace_id)
+            self.sessions.save(session)
+            return (
+                route_result,
+                execution_intent,
+                explicit_approved_tools,
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=direct_content,
+                    metadata=TraceContext.child_metadata(trace_id),
+                ),
+            )
+
+        return route_result, execution_intent, explicit_approved_tools, None
+
+    async def _dispatch_execution_intent(
+        self,
+        *,
+        msg: InboundMessage,
+        session: "Session",
+        trace_id: str,
+        route_result: IntentRouteResult,
+        execution_intent: Any,
+        messages: list[dict[str, Any]],
+        run_model: str,
+        run_model_reason: str,
+        explicit_approved_tools: set[str],
+        constrained_tools: list[dict[str, Any]] | None,
+        allow_model_fallback: bool,
+    ) -> tuple[str | None, dict[str, int], str | None, IntentRouteResult]:
+        if execution_intent.path_type == "gate3_plan":
+            route_result.diagnostic = (
+                f"{route_result.diagnostic}:gate3_entry"
+                if route_result.diagnostic
+                else "gate3:entry"
+            )
+            final_content, usage = await self._enter_gate3_agent_loop(
+                messages=messages,
+                msg=msg,
+                session=session,
+                trace_id=trace_id,
+                route_result=route_result,
+                run_model=run_model,
+                explicit_approved_tools=explicit_approved_tools,
+                constrained_tools=constrained_tools,
+                allow_model_fallback=allow_model_fallback,
+            )
+            self._append_intent_router_event(
+                trace_id=trace_id,
+                msg=msg,
+                route_result=route_result,
+            )
+            failure_classification = None if final_content else "empty_gate3_result"
+            self._append_execution_event(
+                trace_id=trace_id,
+                msg=msg,
+                route_result=route_result,
+                execution_intent=execution_intent,
+                execution_result_status="succeeded" if final_content else "failed",
+                final_content=final_content,
+                failure_classification=failure_classification,
+                selected_model=run_model,
+                model_reason=run_model_reason,
+                trace_summary=self._last_execution_trace_summary,
+            )
+            return final_content, usage, failure_classification, route_result
+
+        if not route_result.skip_planning:
+            messages = await self._run_plan_phase(messages, msg.content, trace_id, model=run_model)
+        usage: dict[str, int] = {}
+        final_content, _ = await self._run_execute_reflect_loop(
+            messages,
+            trace_id,
+            session=session,
+            model=run_model,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            usage_collector=usage,
+            tool_definitions=constrained_tools,
+            approved_one_shot_tools=explicit_approved_tools,
+            active_intent_contract=route_result.contract,
+            allow_model_fallback=allow_model_fallback,
+        )
+        failure_classification = None if final_content else "empty_execution_result"
+        self._append_execution_event(
+            trace_id=trace_id,
+            msg=msg,
+            route_result=route_result,
+            execution_intent=execution_intent,
+            execution_result_status="succeeded" if final_content else "failed",
+            final_content=final_content,
+            failure_classification=failure_classification,
+            selected_model=run_model,
+            model_reason=run_model_reason,
+            trace_summary=self._last_execution_trace_summary,
+        )
+        return final_content, usage, failure_classification, route_result
 
     def _handle_runtime_command(self, stripped: str, session: Any) -> str | None:
         """Handle runtime slash commands scoped to the current session."""
@@ -1438,6 +1596,112 @@ class AgentLoop:
         except Exception:
             return
 
+    def _append_execution_event(
+        self,
+        *,
+        trace_id: str,
+        msg: InboundMessage,
+        route_result: IntentRouteResult,
+        execution_intent: Any,
+        execution_result_status: str,
+        final_content: str | None,
+        selected_model: str,
+        model_reason: str,
+        failure_classification: str | None = None,
+        trace_summary: dict[str, Any] | None = None,
+        ) -> None:
+        try:
+            from zen_claw.config.loader import get_data_dir
+
+            dashboard_dir = get_data_dir() / "dashboard"
+            dashboard_dir.mkdir(parents=True, exist_ok=True)
+            route_candidate = RouteCandidate.from_payload(route_result.route_candidate)
+            routing_decision = build_routing_decision(route_result)
+            arbitration_decision = build_arbitration_decision(route_result)
+            normalized_failure = self._normalize_execution_failure_classification(
+                route_result=route_result,
+                execution_intent=execution_intent,
+                execution_result_status=execution_result_status,
+                failure_classification=failure_classification,
+                trace_summary=trace_summary,
+            )
+            preview = str(final_content or "").strip()
+            if len(preview) > 160:
+                preview = preview[:157] + "..."
+            merged_trace_summary = {
+                "selected_model": str(selected_model or ""),
+                "model_reason": str(model_reason or ""),
+                **dict(trace_summary or {}),
+            }
+            raw_failure = str(failure_classification or "").strip()
+            if raw_failure and raw_failure != normalized_failure:
+                merged_trace_summary["failure_detail"] = raw_failure
+            event = {
+                "at_ms": int(datetime.now(UTC).timestamp() * 1000),
+                "trace_id": trace_id,
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "intent_name": route_result.intent_name or "",
+                "route_candidate": route_candidate.as_dict() if route_candidate is not None else None,
+                "routing_decision": routing_decision.as_dict(),
+                "arbitration_decision": arbitration_decision.as_dict(),
+                "execution_intent": execution_intent.as_dict(),
+                "execution_result": {
+                    "status": str(execution_result_status or ""),
+                    "failure_classification": normalized_failure,
+                    "final_content_preview": preview,
+                    "trace_summary": merged_trace_summary,
+                },
+            }
+            with (dashboard_dir / "agent_execution.log.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except Exception:
+            return
+
+    @staticmethod
+    def _normalize_execution_failure_classification(
+        *,
+        route_result: IntentRouteResult,
+        execution_intent: Any,
+        execution_result_status: str,
+        failure_classification: str | None,
+        trace_summary: dict[str, Any] | None,
+    ) -> str:
+        status = str(execution_result_status or "").strip().lower()
+        raw = str(failure_classification or "").strip().lower()
+        trace = dict(trace_summary or {})
+        last_error_kind = str(trace.get("last_error_kind") or "").strip().lower()
+        last_error_code = str(trace.get("last_error_code") or "").strip().lower()
+
+        if not raw and status != "failed":
+            return raw
+        if raw == "approval_wait" or status == "approval_required" or last_error_code == "approval_required":
+            return "approval_wait"
+        if raw in {"empty_execution_result", "empty_gate3_result"}:
+            return "no_result"
+        if raw == "tool_timeout" or "timeout" in last_error_code:
+            return "tool_timeout"
+        if raw in {"intent_contract_denied", "contract_denied"} or last_error_code in {
+            "intent_contract_denied",
+            "contract_denied",
+        }:
+            return "permission_denied"
+        if raw == "direct_failed" or str(route_result.route_status or "").strip().lower() == "direct_failed":
+            return "direct_route_failure"
+        if raw == "retryable" or last_error_kind == "retryable":
+            return "tool_retryable"
+        if raw in {"tool_runtime", "runtime"} or last_error_kind == "runtime":
+            return "tool_runtime"
+        if raw in {"tool_permission", "permission"} or last_error_kind == "permission":
+            return "tool_permission"
+        if raw:
+            return raw
+        if status == "failed":
+            if execution_intent is not None and getattr(execution_intent, "path_type", "") == "approval_wait":
+                return "approval_wait"
+            return "execution_failed"
+        return ""
+
     @staticmethod
     def _update_intent_router_control_state(
         metadata: dict[str, Any],
@@ -1498,21 +1762,7 @@ class AgentLoop:
 
     @staticmethod
     def _resolve_intent_router_stage(route_result: IntentRouteResult) -> tuple[str, bool]:
-        arbitration = str(route_result.arbitration_result or "").strip().lower()
-        diagnostic = str(route_result.diagnostic or "")
-        if arbitration == "request_clarification":
-            return "gate2_clarify", False
-        if arbitration == "unclassified" and "gate3_entry" in diagnostic:
-            return "gate3_plan", True
-        if route_result.safety_valve_outcome == "delegate" or arbitration in {
-            "confirm_candidate",
-            "select_skill",
-            "unclassified",
-        }:
-            return "gate2_delegate", False
-        if route_result.route_status in {"direct_success", "direct_failed"}:
-            return "gate1_execute", False
-        return "", False
+        return resolve_routing_stage(route_result)
 
     async def _run_gate2_classifier(
         self,
@@ -1521,7 +1771,7 @@ class AgentLoop:
         session: "Session",
         route_result: IntentRouteResult,
         trace_id: str,
-    ) -> tuple[IntentRouteResult, str | None, str | None]:
+    ) -> tuple[IntentRouteResult, str | None, str | None, str | None]:
         history = session.get_history(max_messages=6)
         session_override_model = str(session.metadata.get("override_model") or "").strip()
         classifier_model = session_override_model or self.model
@@ -1537,7 +1787,7 @@ class AgentLoop:
         route_result.arbitration_result = arbitration.kind
 
         if arbitration.kind == "confirm_candidate":
-            return route_result, None, None
+            return route_result, None, None, None
 
         if arbitration.kind == "select_skill":
             skill_name = str(arbitration.skill_name or "").strip()
@@ -1545,13 +1795,13 @@ class AgentLoop:
                 f"Gate 2 selected skill `{skill_name}`. Prefer that skill if it is relevant and available. "
                 "Do not ignore the delegated routing hint."
             )
-            return route_result, instruction, None
+            return route_result, instruction, None, skill_name
 
         if arbitration.kind == "request_clarification":
             question = str(arbitration.clarification_question or "").strip()
             if not question:
                 question = "我需要一点澄清：你具体是想让我做哪一种？"
-            return route_result, None, question
+            return route_result, None, question, None
 
         route_result.contract = None
         route_result.skip_planning = False
@@ -1561,7 +1811,7 @@ class AgentLoop:
             else "gate2:unclassified"
         )
         route_result.contract = self._GATE3_DEFAULT_CONTRACT
-        return route_result, None, None
+        return route_result, None, None, None
 
     async def _enter_gate3_agent_loop(
         self,
@@ -2265,9 +2515,28 @@ class AgentLoop:
         final_content: str | None = None
         pending_param_failures: dict[str, tuple[dict[str, Any], str]] = {}
         active_model = model or self._resolve_run_model(messages)
+        trace_summary: dict[str, Any] = {
+            "iterations": 0,
+            "tool_batches": 0,
+            "tool_calls": 0,
+            "tool_successes": 0,
+            "tool_failures": 0,
+            "reflections_used": 0,
+            "reflection_triggered": False,
+            "approval_waited": False,
+            "reload_triggered": False,
+            "fallback_used": False,
+            "fallback_reason": "",
+            "models_used": [],
+            "executed_tools": [],
+            "last_error_kind": "",
+            "last_error_code": "",
+        }
+        self._last_execution_trace_summary = None
 
         while iteration < self.max_iterations:
             iteration += 1
+            trace_summary["iterations"] = iteration
             try:
                 response, used_model, fallback_state = await self._chat_with_optional_fallback(
                     messages=messages,
@@ -2285,6 +2554,12 @@ class AgentLoop:
                 active_model = used_model
                 self._last_run_model_used = active_model
                 self._last_run_model_reason = fallback_state
+                models_used = trace_summary.setdefault("models_used", [])
+                if active_model and active_model not in models_used:
+                    models_used.append(active_model)
+                if str(fallback_state or "").startswith("fallback_"):
+                    trace_summary["fallback_used"] = True
+                    trace_summary["fallback_reason"] = str(fallback_state)
                 self._accumulate_usage(usage_collector, response.usage)
 
                 if not response.has_tool_calls:
@@ -2309,11 +2584,16 @@ class AgentLoop:
                 tool_results: list[ToolResult] = []
                 reload_triggered = False
                 approval_blocked_cli = False
+                trace_summary["tool_batches"] = int(trace_summary.get("tool_batches", 0)) + 1
                 for tool_call in response.tool_calls:
+                    trace_summary["tool_calls"] = int(trace_summary.get("tool_calls", 0)) + 1
                     raw_args = dict(tool_call.arguments)
                     call_args = self._maybe_rewrite_tool_args(
                         tool_call.name, dict(raw_args), messages
                     )
+                    executed_tools = trace_summary.setdefault("executed_tools", [])
+                    if len(executed_tools) < 8:
+                        executed_tools.append(str(tool_call.name or ""))
                     contract_violation = self._evaluate_intent_contract_tool_use(
                         active_intent_contract,
                         tool_call.name,
@@ -2325,6 +2605,9 @@ class AgentLoop:
                             contract_violation,
                             code="intent_contract_denied",
                         )
+                        trace_summary["tool_failures"] = int(trace_summary.get("tool_failures", 0)) + 1
+                        trace_summary["last_error_kind"] = ToolErrorKind.PERMISSION.value
+                        trace_summary["last_error_code"] = "intent_contract_denied"
                         tool_results.append(result)
                         messages = self.context.add_tool_result(
                             messages, tool_call.id, tool_call.name, result
@@ -2356,6 +2639,10 @@ class AgentLoop:
                                 approval_msg,
                                 code="approval_required",
                             )
+                            trace_summary["tool_failures"] = int(trace_summary.get("tool_failures", 0)) + 1
+                            trace_summary["approval_waited"] = True
+                            trace_summary["last_error_kind"] = ToolErrorKind.PERMISSION.value
+                            trace_summary["last_error_code"] = "approval_required"
                             # In direct CLI mode there is no outbound dispatcher consuming bus messages.
                             # Surface approval instructions immediately to the user.
                             if channel == "cli":
@@ -2380,6 +2667,7 @@ class AgentLoop:
                             f"SUCCESS: {e.message}. System context reloaded."
                         )
                         reload_triggered = True
+                        trace_summary["reload_triggered"] = True
                     # Continue to append result message before breaking to preserve traceability.
 
                     # Record learning and update messages
@@ -2394,6 +2682,17 @@ class AgentLoop:
                             tool_call.name, failed_args, dict(call_args), error_message, trace_id
                         )
 
+                    if result.ok:
+                        trace_summary["tool_successes"] = (
+                            int(trace_summary.get("tool_successes", 0)) + 1
+                        )
+                    else:
+                        trace_summary["tool_failures"] = (
+                            int(trace_summary.get("tool_failures", 0)) + 1
+                        )
+                        if result.error is not None:
+                            trace_summary["last_error_kind"] = str(result.error.kind.value)
+                            trace_summary["last_error_code"] = str(result.error.code or "")
                     tool_results.append(result)
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
@@ -2415,9 +2714,13 @@ class AgentLoop:
             hints = self.execution.collect_error_hints(tool_results)
             if hints and self.execution.can_reflect(reflections_used):
                 reflections_used += 1
+                trace_summary["reflections_used"] = reflections_used
+                trace_summary["reflection_triggered"] = True
                 reflection_prompt = self.execution.build_reflection_prompt(hints)
                 messages.append({"role": "user", "content": reflection_prompt})
                 continue
+            trace_summary["reflections_used"] = reflections_used
+        self._last_execution_trace_summary = dict(trace_summary)
         return final_content, messages
 
     @staticmethod

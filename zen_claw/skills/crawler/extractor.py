@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
+from urllib.request import Request, urlopen
 
 from zen_claw.agent.tools.browser import BrowserExtractTool, BrowserOpenTool
 from zen_claw.knowledge.ingestor import Document, Ingestor
@@ -45,6 +47,7 @@ class CrawlerExtractor:
         self._tenant_id = str(tenant_id or "default").strip() or "default"
         self._store_kind = str(store_kind or "").strip()
         self._ingestor = Ingestor()
+        self._max_fetch_attempts = 2
 
     @staticmethod
     def _apply_selector(html: str, selector: str, selector_type: str = "css") -> str:
@@ -99,8 +102,51 @@ class CrawlerExtractor:
             raise ValueError("crawler source url is required")
         if source.selector and not source.use_browser:
             raise ValueError("selector requires browser extraction mode")
-        if source.use_browser:
+        fetch_strategy = (
+            "browser"
+            if source.use_browser
+            else "http_paginated"
+            if source.pagination_selector or int(source.max_pages or 1) > 1
+            else "http"
+        )
+        attempt_errors: list[dict[str, Any]] = []
+        for attempt in range(1, self._max_fetch_attempts + 1):
+            try:
+                payload = await self._fetch_text_once(source, fetch_strategy=fetch_strategy)
+                payload["fetch_strategy"] = fetch_strategy
+                payload["attempt_count"] = attempt
+                payload["retry_count"] = max(0, attempt - 1)
+                payload["selector_type"] = str(source.selector_type or "css").strip().lower()
+                payload["pagination_selector"] = str(source.pagination_selector or "").strip()
+                payload["max_pages"] = max(1, int(source.max_pages or 1))
+                if attempt_errors:
+                    payload["attempt_errors"] = list(attempt_errors)
+                return payload
+            except Exception as exc:
+                attempt_errors.append(
+                    {
+                        "attempt": attempt,
+                        "error": str(exc),
+                        "fetch_strategy": fetch_strategy,
+                    }
+                )
+                if attempt >= self._max_fetch_attempts:
+                    raise RuntimeError(
+                        f"crawler fetch failed after {attempt} attempts: {exc}"
+                    ) from exc
+        raise RuntimeError("crawler fetch failed without a terminal error")
+
+    async def _fetch_text_once(
+        self,
+        source: CrawlerSource,
+        *,
+        fetch_strategy: str,
+    ) -> dict[str, Any]:
+        clean_url = str(source.url or "").strip()
+        if fetch_strategy == "browser":
             return await self._fetch_text_via_browser(source)
+        if fetch_strategy == "http_paginated":
+            return await self._fetch_text_via_http_pages(source)
         docs = await self._ingestor.ingest(clean_url)
         text = "\n\n".join(doc.content.strip() for doc in docs if str(doc.content).strip()).strip()
         if not text:
@@ -113,6 +159,7 @@ class CrawlerExtractor:
             "selector": "",
             "pages_fetched": 1,
             "paginated": False,
+            "visited_urls": [clean_url],
         }
 
     async def crawl_to_rag(self, source: CrawlerSource) -> dict[str, Any]:
@@ -128,6 +175,12 @@ class CrawlerExtractor:
             "crawl_url": extracted["url"],
             "crawl_content_sha256": content_hash,
             "crawl_fetched_at": datetime.now(UTC).isoformat(),
+            "crawl_pages_fetched": int(extracted.get("pages_fetched") or 1),
+            "crawl_paginated": bool(extracted.get("paginated")),
+            "crawl_fetch_strategy": str(extracted.get("fetch_strategy") or extracted["mode"]),
+            "crawl_attempt_count": int(extracted.get("attempt_count") or 1),
+            "crawl_retry_count": int(extracted.get("retry_count") or 0),
+            "crawl_selector_type": str(extracted.get("selector_type") or source.selector_type or "css"),
         }
         if extracted.get("selector"):
             metadata["crawl_selector"] = extracted["selector"]
@@ -163,6 +216,11 @@ class CrawlerExtractor:
                     "store_backend": pipeline.store_kind,
                     "crawl_name": str(source.name or "").strip(),
                     "crawl_mode": extracted["mode"],
+                    "fetch_strategy": str(extracted.get("fetch_strategy") or extracted["mode"]),
+                    "attempt_count": int(extracted.get("attempt_count") or 1),
+                    "retry_count": int(extracted.get("retry_count") or 0),
+                    "pages_fetched": int(extracted.get("pages_fetched") or 1),
+                    "paginated": bool(extracted.get("paginated")),
                     "crawl_selector": str(extracted.get("selector") or ""),
                     "change_status": "unchanged",
                     "skipped": True,
@@ -178,7 +236,13 @@ class CrawlerExtractor:
         )
         payload["crawl_name"] = str(source.name or "").strip()
         payload["crawl_mode"] = extracted["mode"]
+        payload["fetch_strategy"] = str(extracted.get("fetch_strategy") or extracted["mode"])
+        payload["attempt_count"] = int(extracted.get("attempt_count") or 1)
+        payload["retry_count"] = int(extracted.get("retry_count") or 0)
         payload["crawl_selector"] = str(extracted.get("selector") or "")
+        payload["pages_fetched"] = int(extracted.get("pages_fetched") or 1)
+        payload["paginated"] = bool(extracted.get("paginated"))
+        payload["visited_urls"] = list(extracted.get("visited_urls") or [str(extracted["url"])])
         payload["change_status"] = "updated" if existing is not None else "new"
         payload["skipped"] = False
         return payload
@@ -257,4 +321,92 @@ class CrawlerExtractor:
             "selector": str(source.selector or "").strip(),
             "pages_fetched": 1,
             "paginated": False,
+            "visited_urls": [str(open_payload.get("final_url") or source.url)],
         }
+
+    async def _fetch_text_via_http_pages(self, source: CrawlerSource) -> dict[str, Any]:
+        current_url = str(source.url or "").strip()
+        if not current_url:
+            raise ValueError("crawler source url is required")
+        collected: list[str] = []
+        visited: set[str] = set()
+        visited_urls: list[str] = []
+        pages_fetched = 0
+        max_pages = max(1, int(source.max_pages or 1))
+        while current_url and pages_fetched < max_pages:
+            normalized_url = str(current_url).strip()
+            if not normalized_url or normalized_url in visited:
+                break
+            visited.add(normalized_url)
+            visited_urls.append(normalized_url)
+            docs = await self._ingestor.ingest(normalized_url)
+            text = "\n\n".join(doc.content.strip() for doc in docs if str(doc.content).strip()).strip()
+            if text:
+                collected.append(text)
+            pages_fetched += 1
+            if not source.pagination_selector or pages_fetched >= max_pages:
+                break
+            html = self._fetch_http_html(normalized_url)
+            current_url = self._extract_next_page_url(
+                html,
+                current_url=normalized_url,
+                pagination_selector=source.pagination_selector,
+            )
+        merged = "\n\n".join(part for part in collected if part).strip()
+        if not merged:
+            raise ValueError(f"crawler source returned no extractable text: {source.url}")
+        return {
+            "name": source.name,
+            "url": str(source.url),
+            "content": merged[: max(100, int(source.max_chars or 20_000))],
+            "mode": "http",
+            "selector": "",
+            "pages_fetched": pages_fetched or 1,
+            "paginated": pages_fetched > 1,
+            "visited_urls": visited_urls,
+        }
+
+    @staticmethod
+    def _fetch_http_html(url: str) -> str:
+        req = Request(
+            str(url),
+            headers={
+                "User-Agent": "zen-claw-crawler/alpha",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+        with urlopen(req, timeout=20) as resp:  # noqa: S310
+            return resp.read().decode("utf-8", errors="ignore")
+
+    @staticmethod
+    def _extract_next_page_url(
+        html: str,
+        *,
+        current_url: str,
+        pagination_selector: str,
+    ) -> str:
+        import re
+
+        selector = str(pagination_selector or "").strip()
+        if not selector:
+            return ""
+        try:
+            from bs4 import BeautifulSoup  # type: ignore
+
+            soup = BeautifulSoup(html, "html.parser")
+            node = soup.select_one(selector)
+            if node is None:
+                return ""
+            href = str(node.get("href") or "").strip()
+            return urljoin(current_url, href) if href else ""
+        except Exception:
+            class_name = selector[1:] if selector.startswith(".") else ""
+            if class_name:
+                pattern = re.compile(
+                    rf'<a[^>]*class="[^"]*\b{re.escape(class_name)}\b[^"]*"[^>]*href="([^"]+)"',
+                    re.IGNORECASE,
+                )
+                match = pattern.search(html)
+                if match:
+                    return urljoin(current_url, match.group(1))
+            return ""

@@ -155,12 +155,16 @@ def test_build_dashboard_snapshot_includes_cron_sidecar_rate_limit(
     assert rows["telegram"]["users"] == 2
     assert rows["telegram"]["transport"] == "polling_http"
     assert rows["telegram"]["inbound_mode"] == "polling"
+    assert rows["telegram"]["alpha_contract_ready"] is True
+    assert rows["telegram"]["alpha_contract_missing"] == []
     assert rows["slack"]["passive_capable"] is True
     runtime_rows = {row["channel_name"]: row for row in snapshot["channels"]["runtime_controls"]}
     assert runtime_rows["webchat"]["state"] in {"running", "stopped"}
     assert runtime_rows["webchat"]["apply_supported"] is True
     assert runtime_rows["slack"]["supported"] is False
     assert snapshot["channels"]["actions_total"] == 0
+    assert snapshot["channels"]["alpha_ready"] == snapshot["channels"]["total"]
+    assert snapshot["channels"]["alpha_gaps"] == 0
     assert "api_base" not in snapshot["providers"][0]
 
 
@@ -627,6 +631,86 @@ def test_build_dashboard_snapshot_includes_agent_actions(
     )
     assert snapshot["ops"]["recent_activity"][0]["surface"] == "agent"
     assert any(section["key"] == "pending_apply" for section in snapshot["ops"]["attention_sections"])
+
+
+def test_build_dashboard_snapshot_includes_agent_state_layers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "dashboard").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "dashboard" / "agent_execution.log.jsonl").write_text(
+        json.dumps(
+            {
+                "at_ms": 123,
+                "trace_id": "trace-exec-1",
+                "channel": "cli",
+                "chat_id": "direct",
+                "intent_name": "time",
+                "routing_decision": {
+                    "action": "execute",
+                    "route_status": "direct_success",
+                    "routing_stage": "gate1_execute",
+                    "entered_gate3": False,
+                },
+                "arbitration_decision": {"kind": ""},
+                "execution_intent": {
+                    "path_type": "direct",
+                    "execution_mode": "runtime_direct",
+                    "decision_source": "intent_router",
+                    "operation_kind": "read_only",
+                    "concurrency_class": "parallel_safe",
+                    "approval_required": False,
+                },
+                "execution_result": {
+                    "status": "succeeded",
+                    "failure_classification": "",
+                    "final_content_preview": "纽约当前时间：09:00",
+                    "trace_summary": {
+                        "selected_model": "",
+                        "model_reason": "",
+                        "reflections_used": 1,
+                        "reflection_triggered": True,
+                        "tool_failures": 1,
+                        "fallback_used": True,
+                        "fallback_reason": "fallback_model:primary-model",
+                        "reload_triggered": False,
+                    },
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+
+    assert snapshot["agent"]["config_state"]["model"] == snapshot["agent"]["model"]
+    assert snapshot["agent"]["runtime_state"]["intent_router_summary"] == snapshot["agent"]["intent_router_summary"]
+    assert snapshot["agent"]["runtime_state"]["execution_summary"]["total"] == 1
+    assert snapshot["agent"]["runtime_state"]["execution_summary"]["reflected_runs"] == 1
+    assert snapshot["agent"]["runtime_state"]["execution_summary"]["fallback_runs"] == 1
+    assert snapshot["agent"]["runtime_state"]["execution_summary"]["tool_failures"] == 1
+    assert snapshot["agent"]["runtime_state"]["execution_events"][0]["execution_intent"]["path_type"] == "direct"
+    assert snapshot["agent"]["operator_state"]["profiles_total"] == snapshot["agent"]["profiles_total"]
+    assert snapshot["ops"]["agent_execution_total"] == 1
+    assert snapshot["ops"]["agent_execution_reflected"] == 1
+    assert snapshot["ops"]["agent_execution_fallback"] == 1
+    assert snapshot["ops"]["recent_activity"][0]["surface"] == "agent_execution"
+    assert "reflections=1" in snapshot["ops"]["recent_activity"][0]["detail"]
 
 
 def test_build_dashboard_snapshot_clears_pending_agent_reload_after_apply(
@@ -1124,6 +1208,10 @@ def test_build_dashboard_snapshot_uses_shared_channel_registry(monkeypatch, tmp_
     assert rows["slack"]["admins"] == 1
     assert rows["webchat"]["users"] == 1
     assert rows["slack"]["webhook_backed"] is True
+    assert rows["slack"]["verify_mode"] == "socket_mode_or_webhook_signature"
+    assert rows["slack"]["media_supported"] is True
+    assert rows["slack"]["runtime_control_mode"] == "audit_only"
+    assert rows["slack"]["alpha_contract_ready"] is True
     assert rows["webchat"]["transport"] == "local_web"
 
 

@@ -47,6 +47,7 @@ class ContentGenerator:
         channel = channel.strip() or "generic"
         product_name = product_name.strip()
         audience = audience.strip()
+        industry = str(industry or "").strip()
         if not product_name:
             raise ValueError("product_name is required")
         if not audience:
@@ -76,7 +77,10 @@ class ContentGenerator:
         )
         template = self._load_template(channel)
         versions = []
+        provider_enabled = self._provider is not None
         for idx in range(count):
+            provider_status = "disabled"
+            provider_error = ""
             if self._provider is None:
                 content = self._render_fallback(
                     template=template,
@@ -101,23 +105,39 @@ class ContentGenerator:
                     references=references,
                     variant_index=idx,
                 )
-                response = await self._provider.chat(
-                    [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You write grounded marketing drafts and avoid unsupported claims. "
-                                "Return strict JSON with keys: headline, body, cta, review_notes, "
-                                "grounding_used, and optional channel-specific keys."
-                            ),
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=min(1.0, 0.7 + (idx * 0.1)),
-                )
-                llm_structured = self._parse_provider_payload(response.content)
-                content = self._provider_content_fallback(response.content, llm_structured)
-                source = "llm"
+                try:
+                    response = await self._provider.chat(
+                        [
+                            {
+                                "role": "system",
+                                "content": (
+                                    "You write grounded marketing drafts and avoid unsupported claims. "
+                                    "Return strict JSON with keys: headline, body, cta, review_notes, "
+                                    "grounding_used, and optional channel-specific keys."
+                                ),
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=min(1.0, 0.7 + (idx * 0.1)),
+                    )
+                    llm_structured = self._parse_provider_payload(response.content)
+                    content = self._provider_content_fallback(response.content, llm_structured)
+                    provider_status = "ok" if llm_structured else "plaintext"
+                    source = "llm" if llm_structured else "llm_plaintext"
+                except Exception as exc:
+                    provider_status = "fallback_template"
+                    provider_error = str(exc)
+                    llm_structured = {}
+                    content = self._render_fallback(
+                        template=template,
+                        product_name=product_name,
+                        audience=audience,
+                        style=style,
+                        key_points=key_points,
+                        references=references,
+                        variant_index=idx,
+                    )
+                    source = "template_fallback"
             structured = self._shape_channel_output(
                 channel=channel,
                 product_name=product_name,
@@ -138,15 +158,45 @@ class ContentGenerator:
                     "content": content,
                     "structured": structured,
                     "source": source,
+                    "execution": {
+                        "provider_enabled": provider_enabled,
+                        "provider_status": provider_status,
+                        "provider_error": provider_error,
+                        "reference_count": len(references),
+                    },
                     "compliance": compliance_result,
                 }
             )
 
         return {
+            "contract_version": "alpha.v1",
             "channel": channel,
             "product_name": product_name,
+            "request_contract": {
+                "required": ["industry", "channel", "product_name", "audience"],
+                "optional": [
+                    "style",
+                    "key_points",
+                    "count",
+                    "use_rag",
+                    "notebook_id",
+                    "rag_filters",
+                    "rag_source_contains",
+                    "rag_tenant_id",
+                    "rag_store_backend",
+                ],
+            },
             "strategy": strategy,
             "output_schema": self._channel_schema(channel),
+            "execution": {
+                "provider_enabled": provider_enabled,
+                "rag_requested": bool(use_rag),
+                "rag_used": bool(references),
+                "reference_count": len(references),
+                "fallback_used": any(
+                    str(item.get("source") or "").startswith("template") for item in versions
+                ),
+            },
             "references": references,
             "versions": versions,
         }

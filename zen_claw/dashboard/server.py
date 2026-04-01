@@ -109,6 +109,152 @@ def _build_model_routing_summary(
     return summary
 
 
+def _build_agent_execution_summary(rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    events = [row for row in (rows or []) if isinstance(row, dict)]
+    direct_paths = 0
+    gate3_paths = 0
+    clarifications = 0
+    approval_waits = 0
+    failed = 0
+    reflected_runs = 0
+    fallback_runs = 0
+    reload_runs = 0
+    total_reflections = 0
+    tool_failures = 0
+    for row in events:
+        intent = row.get("execution_intent") if isinstance(row.get("execution_intent"), dict) else {}
+        result = row.get("execution_result") if isinstance(row.get("execution_result"), dict) else {}
+        trace_summary = (
+            result.get("trace_summary") if isinstance(result.get("trace_summary"), dict) else {}
+        )
+        path_type = str(intent.get("path_type") or "").strip().lower()
+        status = str(result.get("status") or "").strip().lower()
+        if path_type == "direct":
+            direct_paths += 1
+        if path_type == "gate3_plan":
+            gate3_paths += 1
+        if path_type == "clarification":
+            clarifications += 1
+        if path_type == "approval_wait" or status == "approval_required":
+            approval_waits += 1
+        if status == "failed":
+            failed += 1
+        if bool(trace_summary.get("reflection_triggered")):
+            reflected_runs += 1
+        if bool(trace_summary.get("fallback_used")):
+            fallback_runs += 1
+        if bool(trace_summary.get("reload_triggered")):
+            reload_runs += 1
+        total_reflections += max(0, int(trace_summary.get("reflections_used") or 0))
+        tool_failures += max(0, int(trace_summary.get("tool_failures") or 0))
+    latest = events[0] if events else {}
+    latest_result = latest.get("execution_result") if isinstance(latest.get("execution_result"), dict) else {}
+    latest_intent = latest.get("execution_intent") if isinstance(latest.get("execution_intent"), dict) else {}
+    latest_trace = (
+        latest_result.get("trace_summary")
+        if isinstance(latest_result.get("trace_summary"), dict)
+        else {}
+    )
+    return {
+        "total": len(events),
+        "direct_paths": direct_paths,
+        "gate3_paths": gate3_paths,
+        "clarifications": clarifications,
+        "approval_waits": approval_waits,
+        "reflected_runs": reflected_runs,
+        "fallback_runs": fallback_runs,
+        "reload_runs": reload_runs,
+        "total_reflections": total_reflections,
+        "tool_failures": tool_failures,
+        "delegated": len(
+            [
+                row
+                for row in events
+                if str(
+                    (
+                        row.get("routing_decision")
+                        if isinstance(row.get("routing_decision"), dict)
+                        else {}
+                    ).get("action")
+                    or ""
+                ).strip().lower()
+                == "delegate"
+            ]
+        ),
+        "failed": failed,
+        "latest_status": str(latest_result.get("status") or "") if latest_result else "",
+        "latest_path_type": str(latest_intent.get("path_type") or ""),
+        "latest_failure_classification": str(latest_result.get("failure_classification") or ""),
+        "latest_fallback_reason": str(latest_trace.get("fallback_reason") or ""),
+    }
+
+
+def _build_agent_execution_activity_rows(
+    rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        routing = row.get("routing_decision") if isinstance(row.get("routing_decision"), dict) else {}
+        intent = row.get("execution_intent") if isinstance(row.get("execution_intent"), dict) else {}
+        result = row.get("execution_result") if isinstance(row.get("execution_result"), dict) else {}
+        trace_summary = (
+            result.get("trace_summary") if isinstance(result.get("trace_summary"), dict) else {}
+        )
+        status = str(result.get("status") or "").strip().lower()
+        routing_action = str(routing.get("action") or "").strip().lower()
+        if status == "failed":
+            action = "execution_failed"
+        elif status == "approval_required":
+            action = "approval_wait"
+        elif status == "clarified":
+            action = "clarification_requested"
+        elif routing_action == "delegate":
+            action = "routing_delegate"
+        else:
+            action = "execution_succeeded"
+        path_type = str(intent.get("path_type") or "").strip()
+        execution_mode = str(intent.get("execution_mode") or "").strip()
+        decision_source = str(intent.get("decision_source") or "").strip()
+        failure_classification = str(result.get("failure_classification") or "").strip()
+        detail_parts = [
+            f"path={path_type or '-'}",
+            f"mode={execution_mode or '-'}",
+            f"source={decision_source or '-'}",
+            f"status={status or '-'}",
+        ]
+        if failure_classification:
+            detail_parts.append(f"failure={failure_classification}")
+        reflections_used = max(0, int(trace_summary.get("reflections_used") or 0))
+        tool_failures = max(0, int(trace_summary.get("tool_failures") or 0))
+        if reflections_used:
+            detail_parts.append(f"reflections={reflections_used}")
+        if tool_failures:
+            detail_parts.append(f"tool_failures={tool_failures}")
+        if bool(trace_summary.get("fallback_used")):
+            detail_parts.append(
+                f"fallback={str(trace_summary.get('fallback_reason') or 'used').strip() or 'used'}"
+            )
+        if bool(trace_summary.get("reload_triggered")):
+            detail_parts.append("reload_triggered=true")
+        if bool(trace_summary.get("approval_waited")):
+            detail_parts.append("approval_waited=true")
+        out.append(
+            _to_control_plane_row(
+                surface="agent_execution",
+                target=str(row.get("intent_name") or intent.get("contract_intent") or ""),
+                action=action,
+                actor="",
+                detail="; ".join(detail_parts),
+                trace_id=str(row.get("trace_id") or ""),
+                at_ms=int(row.get("at_ms") or 0),
+                pending_apply=False,
+            )
+        )
+    return out
+
+
 _BUCKET_UNIT_MS: dict[str, int] = {
     "hour": 3_600_000,
     "day": 86_400_000,
@@ -716,6 +862,17 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "inbound_mode": row["inbound_mode"],
             "webhook_backed": row["webhook_backed"],
             "passive_capable": row["passive_capable"],
+            "verify_mode": row["verify_mode"],
+            "verify_supported": row["verify_supported"],
+            "media_mode": row["media_mode"],
+            "media_supported": row["media_supported"],
+            "error_mode": row["error_mode"],
+            "runtime_visibility_supported": row["runtime_visibility_supported"],
+            "runtime_control_mode": row["runtime_control_mode"],
+            "alpha_contract_capabilities": list(row.get("alpha_contract_capabilities") or []),
+            "alpha_contract_support": dict(row.get("alpha_contract_support") or {}),
+            "alpha_contract_missing": list(row.get("alpha_contract_missing") or []),
+            "alpha_contract_ready": bool(row.get("alpha_contract_ready")),
             "configuration": row["configuration"],
         }
         for row in (build_channel_rbac_row(config, spec) for spec in iter_channel_specs())
@@ -824,6 +981,12 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         key=lambda x: int(x.get("at_ms") or 0),
         reverse=True,
     )[:20]
+    execution_events = _read_jsonl(data_dir / "dashboard" / "agent_execution.log.jsonl", limit=50)
+    agent_execution_events = sorted(
+        [row for row in execution_events if isinstance(row, dict)],
+        key=lambda x: int(x.get("at_ms") or 0),
+        reverse=True,
+    )[:20]
     router_summary = {
         "total": len(intent_router_events),
         "direct_success": len(
@@ -840,6 +1003,7 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             ]
         ),
     }
+    execution_summary = _build_agent_execution_summary(agent_execution_events)
     try:
         sessions_dir = Path.home() / ".zen-claw" / "sessions"
         for sp in sorted(
@@ -997,6 +1161,13 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         "agent_profile_total": len(agent_profile_rows),
         "agent_recent_actions": len(agent_action_rows),
         "agent_pending_reload": len(pending_agent_actions),
+        "agent_execution_total": int(execution_summary.get("total") or 0),
+        "agent_routing_delegated": int(execution_summary.get("delegated") or 0),
+        "agent_execution_failed": int(execution_summary.get("failed") or 0),
+        "agent_execution_approval_waits": int(execution_summary.get("approval_waits") or 0),
+        "agent_execution_reflected": int(execution_summary.get("reflected_runs") or 0),
+        "agent_execution_fallback": int(execution_summary.get("fallback_runs") or 0),
+        "agent_execution_reload": int(execution_summary.get("reload_runs") or 0),
         "skill_failed_checks": len([row for row in skill_check_rows if not bool(row.get("ok"))]),
         "skill_recent_exports": len(skill_export_rows),
         "channel_pending_reload": len(pending_channel_actions),
@@ -1014,6 +1185,30 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
     if ops_summary["agent_pending_reload"]:
         ops_summary["notes"].append(
             f"agents pending apply: {ops_summary['agent_pending_reload']}"
+        )
+    if ops_summary["agent_execution_failed"]:
+        ops_summary["notes"].append(
+            f"agent execution failures: {ops_summary['agent_execution_failed']}"
+        )
+    if ops_summary["agent_routing_delegated"]:
+        ops_summary["notes"].append(
+            f"agent routing delegated: {ops_summary['agent_routing_delegated']}"
+        )
+    if ops_summary["agent_execution_approval_waits"]:
+        ops_summary["notes"].append(
+            f"agent approval waits: {ops_summary['agent_execution_approval_waits']}"
+        )
+    if ops_summary["agent_execution_reflected"]:
+        ops_summary["notes"].append(
+            f"agent reflected runs: {ops_summary['agent_execution_reflected']}"
+        )
+    if ops_summary["agent_execution_fallback"]:
+        ops_summary["notes"].append(
+            f"agent fallback runs: {ops_summary['agent_execution_fallback']}"
+        )
+    if ops_summary["agent_execution_reload"]:
+        ops_summary["notes"].append(
+            f"agent reload-triggered runs: {ops_summary['agent_execution_reload']}"
         )
     if not ops_summary["model_routes"]:
         ops_summary["notes"].append("no recent model routing events")
@@ -1094,6 +1289,7 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             )
             for row in channel_action_rows[:10]
         ]
+        + _build_agent_execution_activity_rows(agent_execution_events[:10])
         + [
             _to_control_plane_row(
                 surface="skill",
@@ -1189,12 +1385,86 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         for row in channel_rows
         if str(row.get("name") or "").strip().lower() not in supported_runtime_targets
     ]
+    failed_execution_rows = [
+        row for row in _build_agent_execution_activity_rows(agent_execution_events) if row["action"] == "execution_failed"
+    ]
+    delegated_execution_rows = [
+        _to_control_plane_row(
+            surface="agent_execution",
+            target=str(row.get("intent_name") or ""),
+            action="routing_delegate",
+            actor="",
+            detail=(
+                "path="
+                + str(
+                    (
+                        (
+                            row.get("execution_intent")
+                            if isinstance(row.get("execution_intent"), dict)
+                            else {}
+                        ).get("path_type")
+                        or ""
+                    ).strip()
+                    or "-"
+                )
+                + "; mode="
+                + str(
+                    (
+                        (
+                            row.get("execution_intent")
+                            if isinstance(row.get("execution_intent"), dict)
+                            else {}
+                        ).get("execution_mode")
+                        or ""
+                    ).strip()
+                    or "-"
+                )
+                + "; source="
+                + str(
+                    (
+                        (
+                            row.get("execution_intent")
+                            if isinstance(row.get("execution_intent"), dict)
+                            else {}
+                        ).get("decision_source")
+                        or ""
+                    ).strip()
+                    or "-"
+                )
+            ),
+            trace_id=str(row.get("trace_id") or ""),
+            at_ms=int(row.get("at_ms") or 0),
+            pending_apply=False,
+        )
+        for row in agent_execution_events
+        if str(
+            (
+                row.get("routing_decision")
+                if isinstance(row.get("routing_decision"), dict)
+                else {}
+            ).get("action")
+            or ""
+        ).strip().lower()
+        == "delegate"
+    ]
     attention_sections = [
         {
             "key": "failed_checks",
             "title": "Failed Checks",
             "count": len(failed_skill_rows),
             "rows": failed_skill_rows[:5],
+        },
+        {
+            "key": "agent_execution_failed",
+            "title": "Agent Execution Failed",
+            "count": len(failed_execution_rows),
+            "rows": failed_execution_rows[:5],
+        },
+        {
+            "key": "agent_routing_delegate",
+            "title": "Agent Routing Delegated",
+            "count": len(delegated_execution_rows),
+            "rows": delegated_execution_rows[:5],
         },
         {
             "key": "pending_apply",
@@ -1238,37 +1508,50 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
     ops_summary["pending_apply_rows"] = annotated_pending_apply[:8]
     ops_summary["pending_apply_total"] = len(annotated_pending_apply)
 
+    agent_config_state = {
+        "model": config.agents.defaults.model,
+        "vision_model": config.agents.defaults.vision_model or "",
+        "memory_recall_mode": config.agents.defaults.memory_recall_mode,
+        "planning_enabled": bool(config.agents.defaults.enable_planning),
+        "max_reflections": int(config.agents.defaults.max_reflections),
+        "compression_trigger_ratio": float(config.agents.defaults.compression_trigger_ratio),
+        "compression_hysteresis_ratio": float(config.agents.defaults.compression_hysteresis_ratio),
+        "compression_cooldown_turns": int(config.agents.defaults.compression_cooldown_turns),
+    }
+    agent_runtime_state = {
+        "compression_events": compression_events,
+        "model_routing_events": model_routing_events,
+        "model_routing_summary": model_routing_summary,
+        "intent_router_events": intent_router_events,
+        "intent_router_summary": router_summary,
+        "execution_events": agent_execution_events,
+        "execution_summary": execution_summary,
+        "workflow_webhook_events": workflow_webhook_events,
+        "workflow_webhook_summary": workflow_webhook_summary,
+        "recent_observability_events": recent_observability_events,
+    }
+    agent_operator_state = {
+        "profiles": agent_profile_rows[:12],
+        "profiles_total": len(agent_profile_rows),
+        "registered_profiles": len([row for row in agent_profile_rows if row["registered"]]),
+        "recent_actions": agent_action_rows[:5],
+        "actions_total": len(agent_action_rows),
+        "pending_reload": len(pending_agent_actions) > 0,
+        "pending_reload_count": len(pending_agent_actions),
+        "pending_reload_actions": pending_agent_actions[:5],
+        "last_apply": agent_apply_rows[0] if agent_apply_rows else None,
+    }
+
     return {
         "generated_at_ms": now_ms,
         "ops": ops_summary,
         "agent": {
-            "model": config.agents.defaults.model,
-            "vision_model": config.agents.defaults.vision_model or "",
-            "memory_recall_mode": config.agents.defaults.memory_recall_mode,
-            "planning_enabled": bool(config.agents.defaults.enable_planning),
-            "max_reflections": int(config.agents.defaults.max_reflections),
-            "compression_trigger_ratio": float(config.agents.defaults.compression_trigger_ratio),
-            "compression_hysteresis_ratio": float(
-                config.agents.defaults.compression_hysteresis_ratio
-            ),
-            "compression_cooldown_turns": int(config.agents.defaults.compression_cooldown_turns),
-            "compression_events": compression_events,
-            "model_routing_events": model_routing_events,
-            "model_routing_summary": model_routing_summary,
-            "intent_router_events": intent_router_events,
-            "intent_router_summary": router_summary,
-            "workflow_webhook_events": workflow_webhook_events,
-            "workflow_webhook_summary": workflow_webhook_summary,
-            "recent_observability_events": recent_observability_events,
-            "profiles": agent_profile_rows[:12],
-            "profiles_total": len(agent_profile_rows),
-            "registered_profiles": len([row for row in agent_profile_rows if row["registered"]]),
-            "recent_actions": agent_action_rows[:5],
-            "actions_total": len(agent_action_rows),
-            "pending_reload": len(pending_agent_actions) > 0,
-            "pending_reload_count": len(pending_agent_actions),
-            "pending_reload_actions": pending_agent_actions[:5],
-            "last_apply": agent_apply_rows[0] if agent_apply_rows else None,
+            **agent_config_state,
+            **agent_runtime_state,
+            **agent_operator_state,
+            "config_state": agent_config_state,
+            "runtime_state": agent_runtime_state,
+            "operator_state": agent_operator_state,
         },
         "security": {
             "production_hardening": bool(config.tools.policy.production_hardening),
@@ -1346,6 +1629,8 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "rows": channel_rows,
             "total": len(channel_rows),
             "enabled": len([row for row in channel_rows if row["enabled"]]),
+            "alpha_ready": len([row for row in channel_rows if row.get("alpha_contract_ready")]),
+            "alpha_gaps": len([row for row in channel_rows if not row.get("alpha_contract_ready")]),
             "webhook_backed": len([row for row in channel_rows if row["webhook_backed"]]),
             "passive_capable": len([row for row in channel_rows if row["passive_capable"]]),
             "runtime_controls": _build_channel_runtime_control_rows(config),
@@ -1414,6 +1699,41 @@ def _build_ops_summary_report(snapshot: dict[str, Any]) -> dict[str, Any]:
             "surface": "agent",
             "metric": "pending_reload",
             "value": int(ops.get("agent_pending_reload") or 0),
+        },
+        {
+            "surface": "agent_execution",
+            "metric": "recent_total",
+            "value": int(ops.get("agent_execution_total") or 0),
+        },
+        {
+            "surface": "agent_execution",
+            "metric": "delegated",
+            "value": int(ops.get("agent_routing_delegated") or 0),
+        },
+        {
+            "surface": "agent_execution",
+            "metric": "failed",
+            "value": int(ops.get("agent_execution_failed") or 0),
+        },
+        {
+            "surface": "agent_execution",
+            "metric": "approval_waits",
+            "value": int(ops.get("agent_execution_approval_waits") or 0),
+        },
+        {
+            "surface": "agent_execution",
+            "metric": "reflected_runs",
+            "value": int(ops.get("agent_execution_reflected") or 0),
+        },
+        {
+            "surface": "agent_execution",
+            "metric": "fallback_runs",
+            "value": int(ops.get("agent_execution_fallback") or 0),
+        },
+        {
+            "surface": "agent_execution",
+            "metric": "reload_runs",
+            "value": int(ops.get("agent_execution_reload") or 0),
         },
         {
             "surface": "skills",
@@ -1666,6 +1986,12 @@ def _build_control_plane_report(
                 pending_apply=False,
             )
         )
+    for row in _build_agent_execution_activity_rows(
+        _read_jsonl(data_dir / "dashboard" / "agent_execution.log.jsonl", limit=200)
+    ):
+        if not isinstance(row, dict):
+            continue
+        rows.append(row)
 
     rows = sorted(rows, key=lambda x: int(x.get("at_ms") or 0), reverse=True)
     filtered = [
@@ -3079,6 +3405,13 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             "results": results,
             "succeeded": succeeded,
             "failed": failed,
+            "reload_required": False,
+            "apply_state": _build_apply_state(
+                surface="skill",
+                target=f"bulk:{action}",
+                reload_required=False,
+                execution_mode="preview" if dry_run else action,
+            ),
         })
 
     @api_router.get(
@@ -3155,7 +3488,18 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
         loader = SkillsLoader(cfg.workspace_path)
         payload = _run_skill_preflight(loader=loader, name=name)
         _append_skill_check_audit(data_dir=get_data_dir(), payload=payload, actor="api_key")
-        return JSONResponse(payload)
+        return JSONResponse(
+            {
+                **payload,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="skill",
+                    target=str(name),
+                    reload_required=False,
+                    execution_mode="preflight",
+                ),
+            }
+        )
 
     @api_router.post(
         "/skills/preflight-batch",
@@ -3176,7 +3520,18 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
         )
         for row in list(payload.get("rows") or []):
             _append_skill_check_audit(data_dir=get_data_dir(), payload=row, actor="api_key")
-        return JSONResponse(payload)
+        return JSONResponse(
+            {
+                **payload,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="skill",
+                    target="batch:preflight",
+                    reload_required=False,
+                    execution_mode="preflight",
+                ),
+            }
+        )
 
     @api_router.post(
         "/skills/install",
@@ -3241,6 +3596,13 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 "governance": metadata_updates,
                 "message": msg,
                 "event": event,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="skill",
+                    target=install_name,
+                    reload_required=False,
+                    execution_mode="install",
+                ),
             }
         )
 
@@ -3389,7 +3751,19 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             exported_version=str(selected_row.get("version") or ""),
             export_hash=export_hash,
         )
-        return JSONResponse({**payload, "export_hash": export_hash})
+        return JSONResponse(
+            {
+                **payload,
+                "export_hash": export_hash,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="skill",
+                    target=str(name),
+                    reload_required=False,
+                    execution_mode="export",
+                ),
+            }
+        )
 
     @api_router.post(
         "/skills/{name}/restore",
@@ -3439,6 +3813,13 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 "source": str(export_path),
                 "message": msg,
                 "event": event,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="skill",
+                    target=str(name),
+                    reload_required=False,
+                    execution_mode="restore_export",
+                ),
             }
         )
 
@@ -3472,6 +3853,13 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 "retention_hours": int(req.retention_hours),
                 "preview": preview,
                 "event": event,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="skill",
+                    target="__gc__",
+                    reload_required=False,
+                    execution_mode="gc_cleanup",
+                ),
             }
         )
 
@@ -3499,7 +3887,22 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             actor="api_key",
             detail=msg,
         )
-        return JSONResponse({"ok": True, "name": name, "enabled": False, "message": msg, "event": event})
+        return JSONResponse(
+            {
+                "ok": True,
+                "name": name,
+                "enabled": False,
+                "message": msg,
+                "event": event,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="skill",
+                    target=str(name),
+                    reload_required=False,
+                    execution_mode="uninstall",
+                ),
+            }
+        )
 
     @api_router.get(
         "/agents",
@@ -4058,8 +4461,19 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                     "use_browser": bool(source.use_browser),
                     "max_chars": int(source.max_chars),
                     "metadata": dict(source.metadata or {}),
+                    "enabled": bool(source.enabled),
+                    "selector_type": str(source.selector_type or "css"),
+                    "pagination_selector": str(source.pagination_selector or ""),
+                    "max_pages": int(source.max_pages or 1),
                 },
                 "event": event,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=source.name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
             }
         )
 
@@ -4089,7 +4503,19 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             "actor": "api_key",
         }
         _append_jsonl(data_dir / "dashboard" / "crawler_sources.log.jsonl", event)
-        return JSONResponse({"ok": True, "deleted": source_name})
+        return JSONResponse(
+            {
+                "ok": True,
+                "deleted": source_name,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=source_name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
+            }
+        )
 
     @api_router.post(
         "/crawler/sources/{source_name}/disable",
@@ -4117,7 +4543,20 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             "actor": "api_key",
         }
         _append_jsonl(data_dir / "dashboard" / "crawler_sources.log.jsonl", event)
-        return JSONResponse({"ok": True, "source_name": source_name, "enabled": False})
+        return JSONResponse(
+            {
+                "ok": True,
+                "source_name": source_name,
+                "enabled": False,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=source_name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
+            }
+        )
 
     @api_router.post(
         "/crawler/sources/{source_name}/enable",
@@ -4145,7 +4584,20 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             "actor": "api_key",
         }
         _append_jsonl(data_dir / "dashboard" / "crawler_sources.log.jsonl", event)
-        return JSONResponse({"ok": True, "source_name": source_name, "enabled": True})
+        return JSONResponse(
+            {
+                "ok": True,
+                "source_name": source_name,
+                "enabled": True,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=source_name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
+            }
+        )
 
     @api_router.get(
         "/crawler/sources/{source_name}/status",
@@ -4180,7 +4632,17 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 "last_run_at_ms": int(last.get("at_ms") or 0) or None,
                 "last_run_status": str(last.get("status") or "") or None,
                 "last_run_change_status": str(last.get("change_status") or "") or None,
+                "last_run_mode": str(last.get("crawl_mode") or "") or None,
+                "last_fetch_strategy": str(last.get("fetch_strategy") or "") or None,
+                "last_attempt_count": int(last.get("attempt_count") or 0) or None,
+                "last_retry_count": int(last.get("retry_count") or 0) or None,
+                "last_pages_fetched": int(last.get("pages_fetched") or 0) or None,
+                "last_paginated": bool(last.get("paginated")) if recent else None,
+                "last_error": str(last.get("error") or "") or None,
                 "last_run_documents": int(last.get("documents") or 0),
+                "failed_runs": len(
+                    [row for row in all_runs if str(row.get("status") or "").strip().lower() == "error"]
+                ),
                 "run_count": len(all_runs),
                 "recent_runs": recent,
             }
@@ -4225,7 +4687,20 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             status="ok",
             error="",
         )
-        return JSONResponse({**payload, "event": event, "catalog_path": str(catalog_path)})
+        return JSONResponse(
+            {
+                **payload,
+                "event": event,
+                "catalog_path": str(catalog_path),
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=source.name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
+            }
+        )
 
     @api_router.get(
         "/crawler/schedules",
@@ -4250,7 +4725,41 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 for s in schedules
                 if str(s.get("source_name") or "").lower() == source_name.lower()
             ]
-        return JSONResponse({"schedules": schedules, "total": len(schedules)})
+        run_rows = _read_recent_crawler_runs(data_dir=data_dir, limit=200)
+        enriched: list[dict[str, Any]] = []
+        for row in schedules:
+            source_key = str(row.get("source_name") or "").strip().lower()
+            all_runs = [
+                item
+                for item in run_rows
+                if str(item.get("source_name") or "").strip().lower() == source_key
+            ]
+            recent_runs = all_runs[:10]
+            last = recent_runs[0] if recent_runs else {}
+            enriched.append(
+                {
+                    **dict(row),
+                    "last_run_at_ms": int(last.get("at_ms") or 0) or None,
+                    "last_run_status": str(last.get("status") or "") or None,
+                    "last_run_change_status": str(last.get("change_status") or "") or None,
+                    "last_run_mode": str(last.get("crawl_mode") or "") or None,
+                    "last_fetch_strategy": str(last.get("fetch_strategy") or "") or None,
+                    "last_attempt_count": int(last.get("attempt_count") or 0) or None,
+                    "last_retry_count": int(last.get("retry_count") or 0) or None,
+                    "last_pages_fetched": int(last.get("pages_fetched") or 0) or None,
+                    "last_paginated": bool(last.get("paginated")) if recent_runs else None,
+                    "last_error": str(last.get("error") or "") or None,
+                    "run_count": len(all_runs),
+                    "failed_runs": len(
+                        [
+                            item
+                            for item in all_runs
+                            if str(item.get("status") or "").strip().lower() == "error"
+                        ]
+                    ),
+                }
+            )
+        return JSONResponse({"schedules": enriched, "total": len(enriched)})
 
     @api_router.post(
         "/crawler/schedules",
@@ -4303,7 +4812,68 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
         }
         _append_jsonl(data_dir / "dashboard" / "crawler_sources.log.jsonl", event)
         return JSONResponse(
-            {"ok": True, "source_name": req.source_name, "cron": req.cron, "enabled": bool(req.enabled)}
+            {
+                "ok": True,
+                "source_name": req.source_name,
+                "cron": req.cron,
+                "enabled": bool(req.enabled),
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=req.source_name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
+            }
+        )
+
+    @api_router.get(
+        "/crawler/schedules/{source_name}",
+        summary="Crawler Schedule 状态",
+        description="返回指定 source 的调度配置以及最近运行摘要；不存在则 404。",
+        tags=["crawler"],
+    )
+    async def api_crawler_schedule_status(source_name: str):
+        from zen_claw.config.loader import get_data_dir
+        from zen_claw.skills.crawler.scheduler import load_schedules_json, resolve_schedules_path
+
+        data_dir = get_data_dir()
+        rows = load_schedules_json(resolve_schedules_path(data_dir))
+        target = next(
+            (
+                row
+                for row in rows
+                if str(row.get("source_name") or "").strip().lower() == source_name.strip().lower()
+            ),
+            None,
+        )
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"schedule not found: {source_name}")
+        run_rows = [
+            row
+            for row in _read_recent_crawler_runs(data_dir=data_dir, limit=200)
+            if str(row.get("source_name") or "").strip().lower() == source_name.strip().lower()
+        ]
+        last = run_rows[0] if run_rows else {}
+        return JSONResponse(
+            {
+                "schedule": dict(target),
+                "last_run_at_ms": int(last.get("at_ms") or 0) or None,
+                "last_run_status": str(last.get("status") or "") or None,
+                "last_run_change_status": str(last.get("change_status") or "") or None,
+                "last_run_mode": str(last.get("crawl_mode") or "") or None,
+                "last_fetch_strategy": str(last.get("fetch_strategy") or "") or None,
+                "last_attempt_count": int(last.get("attempt_count") or 0) or None,
+                "last_retry_count": int(last.get("retry_count") or 0) or None,
+                "last_pages_fetched": int(last.get("pages_fetched") or 0) or None,
+                "last_paginated": bool(last.get("paginated")) if run_rows else None,
+                "last_error": str(last.get("error") or "") or None,
+                "failed_runs": len(
+                    [row for row in run_rows if str(row.get("status") or "").strip().lower() == "error"]
+                ),
+                "run_count": len(run_rows),
+                "recent_runs": run_rows[:10],
+            }
         )
 
     @api_router.delete(
@@ -4331,7 +4901,19 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             "actor": "api_key",
         }
         _append_jsonl(data_dir / "dashboard" / "crawler_sources.log.jsonl", event)
-        return JSONResponse({"ok": True, "deleted": source_name})
+        return JSONResponse(
+            {
+                "ok": True,
+                "deleted": source_name,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=source_name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
+            }
+        )
 
     @api_router.post(
         "/crawler/schedules/{source_name}/pause",
@@ -4358,7 +4940,20 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             "actor": "api_key",
         }
         _append_jsonl(data_dir / "dashboard" / "crawler_sources.log.jsonl", event)
-        return JSONResponse({"ok": True, "source_name": source_name, "enabled": False})
+        return JSONResponse(
+            {
+                "ok": True,
+                "source_name": source_name,
+                "enabled": False,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=source_name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
+            }
+        )
 
     @api_router.post(
         "/crawler/schedules/{source_name}/resume",
@@ -4385,7 +4980,20 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             "actor": "api_key",
         }
         _append_jsonl(data_dir / "dashboard" / "crawler_sources.log.jsonl", event)
-        return JSONResponse({"ok": True, "source_name": source_name, "enabled": True})
+        return JSONResponse(
+            {
+                "ok": True,
+                "source_name": source_name,
+                "enabled": True,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="crawler",
+                    target=source_name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
+            }
+        )
 
     @api_router.get(
         "/model-routing/summary",
@@ -4749,6 +5357,8 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 "channels": rows,
                 "total": len(rows),
                 "enabled": len([row for row in rows if row["enabled"]]),
+                "alpha_ready": len([row for row in rows if row.get("alpha_contract_ready")]),
+                "alpha_gaps": len([row for row in rows if not row.get("alpha_contract_ready")]),
                 "runtime_controls": _build_channel_runtime_control_rows(cfg),
                 "recent_actions": recent_actions[:5],
                 "actions_total": len(recent_actions),
@@ -4987,7 +5597,21 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             enabled=True,
             actor="api_key",
         )
-        return JSONResponse({"ok": True, "name": name, "enabled": True})
+        apply_state = _build_apply_state(
+            surface="skill",
+            target=name,
+            reload_required=False,
+            execution_mode="in_process",
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "name": name,
+                "enabled": True,
+                "reload_required": False,
+                "apply_state": apply_state,
+            }
+        )
 
     @api_router.post(
         "/skills/{name}/disable",
@@ -5010,7 +5634,21 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
             enabled=False,
             actor="api_key",
         )
-        return JSONResponse({"ok": True, "name": name, "enabled": False})
+        apply_state = _build_apply_state(
+            surface="skill",
+            target=name,
+            reload_required=False,
+            execution_mode="in_process",
+        )
+        return JSONResponse(
+            {
+                "ok": True,
+                "name": name,
+                "enabled": False,
+                "reload_required": False,
+                "apply_state": apply_state,
+            }
+        )
 
     @api_router.post(
         "/skills/enable-batch",
@@ -5114,7 +5752,24 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 notebook_id=str(req.notebook_id or "").strip(),
                 rag_tenant_id=tenant_id,
             )
-            return JSONResponse({"ok": True, **result})
+            execution = dict(result.get("execution") or {})
+            execution.update(
+                {
+                    "skill": "content_gen",
+                    "api_mode": "direct_run",
+                    "tenant_id": tenant_id,
+                    "channel": str(req.channel or "generic").strip(),
+                    "rag_requested": bool(req.use_rag),
+                }
+            )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    **result,
+                    "tenant_id": tenant_id,
+                    "execution": execution,
+                }
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:  # noqa: BLE001
@@ -6763,6 +7418,13 @@ def _update_skill_package_policy(
             "name": skill_name,
             "package_policy": policy,
             "event": event,
+            "reload_required": False,
+            "apply_state": _build_apply_state(
+                surface="skill",
+                target=skill_name,
+                reload_required=False,
+                execution_mode="package_policy",
+            ),
         }
     )
 
@@ -6873,6 +7535,13 @@ def _restore_skill_with_policy(*, name: str) -> JSONResponse:
                 "errors": integrity_errors,
             },
             "event": event,
+            "reload_required": False,
+            "apply_state": _build_apply_state(
+                surface="skill",
+                target=skill_name,
+                reload_required=False,
+                execution_mode="restore",
+            ),
         }
     )
 
@@ -6968,6 +7637,13 @@ def _promote_skill(*, name: str, declarative_intent: str, note: str | None = Non
             "declarative_intent": target_intent,
             "message": msg,
             "event": event,
+            "reload_required": False,
+            "apply_state": _build_apply_state(
+                surface="skill",
+                target=skill_name,
+                reload_required=False,
+                execution_mode="promote",
+            ),
         }
     )
 
@@ -7278,6 +7954,13 @@ def _set_skill_enabled_batch(
                 "name": skill_name,
                 "enabled": bool(enabled),
                 "ok": ok,
+                "reload_required": False,
+                "apply_state": _build_apply_state(
+                    surface="skill",
+                    target=skill_name,
+                    reload_required=False,
+                    execution_mode="in_process",
+                ),
             }
         )
     return {
@@ -7286,6 +7969,13 @@ def _set_skill_enabled_batch(
         "missing_names": missing_names,
         "enabled": bool(enabled),
         "changed_count": len([row for row in rows if bool(row.get("ok"))]),
+        "reload_required": False,
+        "apply_state": _build_apply_state(
+            surface="skill",
+            target="batch",
+            reload_required=False,
+            execution_mode="in_process",
+        ),
     }
 
 
@@ -7541,9 +8231,18 @@ def _append_crawler_run_audit(
         "source_url": str(getattr(source, "url", "") or ""),
         "notebook_id": str(getattr(source, "notebook_id", "") or ""),
         "crawl_mode": str(payload.get("crawl_mode") or ("browser" if getattr(source, "use_browser", False) else "http")),
+        "fetch_strategy": str(
+            payload.get("fetch_strategy")
+            or payload.get("crawl_mode")
+            or ("browser" if getattr(source, "use_browser", False) else "http")
+        ),
+        "attempt_count": int(payload.get("attempt_count", 1) or 1),
+        "retry_count": int(payload.get("retry_count", 0) or 0),
         "change_status": str(payload.get("change_status") or ""),
         "documents": int(payload.get("documents", 0) or 0),
         "chunks_added": int(payload.get("chunks_added", 0) or 0),
+        "pages_fetched": int(payload.get("pages_fetched", 1) or 1),
+        "paginated": bool(payload.get("paginated", False)),
         "error": str(error or ""),
         "actor": str(actor or "api_key"),
     }
@@ -7564,6 +8263,24 @@ def _read_recent_crawler_runs(*, data_dir: Path, limit: int = 50) -> list[dict[s
     )
     rows.sort(key=lambda x: int(x.get("at_ms") or 0), reverse=True)
     return rows[:limit]
+
+
+def _build_apply_state(
+    *,
+    surface: str,
+    target: str,
+    reload_required: bool,
+    execution_mode: str | None = None,
+) -> dict[str, Any]:
+    mode = str(execution_mode or ("config_reload" if reload_required else "in_process")).strip()
+    status = "pending" if reload_required else "applied"
+    return {
+        "surface": str(surface or "").strip(),
+        "target": str(target or "").strip(),
+        "required": bool(reload_required),
+        "status": status,
+        "execution_mode": mode,
+    }
 
 
 def _update_agent_planning(*, agent_id: str, enabled: bool) -> JSONResponse:
@@ -7597,6 +8314,7 @@ def _update_agent_planning(*, agent_id: str, enabled: bool) -> JSONResponse:
             "agent_id": aid,
             "planning_enabled": bool(enabled),
             "reload_required": True,
+            "apply_state": _build_apply_state(surface="agent", target=aid, reload_required=True),
         }
     )
 
@@ -7646,6 +8364,7 @@ def _update_agent_model(*, agent_id: str, model: str) -> JSONResponse:
             "model": new_model,
             "before_model": before_model,
             "reload_required": True,
+            "apply_state": _build_apply_state(surface="agent", target=aid, reload_required=True),
         }
     )
 
@@ -7867,6 +8586,7 @@ def _update_agent_model_policy(
             "before_policy": before_policy,
             "policy": after_policy,
             "reload_required": True,
+            "apply_state": _build_apply_state(surface="agent", target=aid, reload_required=True),
         }
     )
 
@@ -7915,6 +8635,7 @@ def _update_agent_routing_keywords(*, agent_id: str, routing_keywords: list[str]
             "routing_keywords": list(profile.routing_keywords or []),
             "before_routing_keywords": before_keywords,
             "reload_required": True,
+            "apply_state": _build_apply_state(surface="agent", target=aid, reload_required=True),
         }
     )
 
@@ -7974,6 +8695,7 @@ def _save_agent_profile(*, agent_id: str, profile_payload: dict[str, Any]) -> JS
             "before_profile": before_dump,
             "changed_fields": changed_fields,
             "reload_required": True,
+            "apply_state": _build_apply_state(surface="agent", target=aid, reload_required=True),
         }
     )
 
@@ -8022,6 +8744,7 @@ def _delete_agent_profile(*, agent_id: str) -> JSONResponse:
             "before_profile": before_dump,
             "channel_references": channel_refs,
             "reload_required": True,
+            "apply_state": _build_apply_state(surface="agent", target=aid, reload_required=True),
         }
     )
 
@@ -8299,6 +9022,7 @@ def _update_channel_enabled(*, name: str, enabled: bool) -> JSONResponse:
             "name": str(name),
             "enabled": bool(enabled),
             "reload_required": True,
+            "apply_state": _build_apply_state(surface="channel", target=str(name), reload_required=True),
         }
     )
 
@@ -10145,6 +10869,16 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
       if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
       return Math.floor(sec / 86400) + 'd ago';
     }}
+    function describeExecutionTrace(summary) {{
+      const data = summary || {{}};
+      const parts = [];
+      if (data.reflections_used) parts.push(`reflections=${{data.reflections_used}}`);
+      if (data.tool_failures) parts.push(`tool_failures=${{data.tool_failures}}`);
+      if (data.fallback_used) parts.push(`fallback=${{data.fallback_reason || 'used'}}`);
+      if (data.reload_triggered) parts.push('reload=true');
+      if (data.approval_waited) parts.push('approval_waited=true');
+      return parts.join('; ') || '-';
+    }}
     function renderNodeDetails(data) {{
       const now = Date.now();
       const rows = (data.node.nodes || []).slice(0, 20).map(n => `
@@ -10229,6 +10963,7 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
           <td><code>${{row.target || '-'}}</code></td>
           <td>${{row.action || '-'}}</td>
           <td>${{row.pending_apply ? 'yes' : 'no'}}</td>
+          <td>${{row.detail || '-'}}</td>
         </tr>`).join('');
       const pendingRows = (ops.pending_apply_rows || []).slice(0, 5).map(row => `
         <tr>
@@ -10252,7 +10987,7 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
       const total = ops.total || 0;
       p(
         "ops",
-        `status: <b>${{status}}</b><br/>attention items: <b>${{ops.attention_items || 0}}</b><br/>agent profiles: <b>${{ops.agent_profile_total || 0}}</b><br/>agent recent actions: <b>${{ops.agent_recent_actions || 0}}</b><br/>skill failed checks: <b>${{ops.skill_failed_checks || 0}}</b><br/>skill recent exports: <b>${{ops.skill_recent_exports || 0}}</b><br/>channel pending apply: <b>${{ops.channel_pending_reload || 0}}</b><br/>model routes: <b>${{ops.model_routes || 0}}</b><br/>pending apply total: <b>${{ops.pending_apply_total || 0}}</b><br/>returned / total: <b>${{returned}}</b> / <b>${{total}}</b><br/><ul>${{notes || '<li class="muted">No operator notes</li>'}}</ul>${{attentionSections || '<div class="muted">No grouped attention sections</div>'}}<div style="margin:10px 0 8px 0;"><b>Control Panel</b><br/><span class="muted">surface</span> <input id="opsSurfaceFilter" type="text" value="${{surfaceFilter}}" placeholder="agent/channel/skill/model_routing" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:210px;" /> <span class="muted">actor</span> <input id="opsActorFilter" type="text" value="${{actorFilter}}" placeholder="api_key" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">target</span> <input id="opsTargetFilter" type="text" value="${{targetFilter}}" placeholder="finance_writer" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <label style="display:inline-flex; gap:4px; align-items:center;"><input id="opsPendingOnly" type="checkbox" ${{pendingOnly ? 'checked' : ''}} /> pending only</label> <span class="muted">limit</span> <input id="opsLimit" type="text" value="${{limit}}" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:60px;" /> <span class="muted">offset</span> <input id="opsOffset" type="text" value="${{offset}}" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:60px;" /> <button onclick="loadOpsSummary()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Load ops</button></div><div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><button onclick="exportOpsSummary('json')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Export ops JSON</button><button onclick="exportOpsSummary('csv')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Export ops CSV</button><button onclick="previewPendingOps('all', '')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Preview apply</button><button onclick="applyPendingOps('all', '')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Mark Pending Applied</button><button onclick="executeReload(false)" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Execute Reload</button><button onclick="executeReload(true)" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Dry-run Preview</button><span id="opsSummaryStatus" class="muted"></span></div><div id="opsApplyPlanPanel" style="margin-top:6px;"></div><br/><b>Recent Activity</b><table><thead><tr><th>When</th><th>Surface</th><th>Target</th><th>Action</th><th>Pending</th></tr></thead><tbody>${{recentRows || '<tr><td colspan="5" class="muted">No recent control-plane activity</td></tr>'}}</tbody></table><br/><b>Pending Apply</b><table><thead><tr><th>When</th><th>Surface</th><th>Target</th><th>Action</th><th>Actor</th><th>Apply</th></tr></thead><tbody>${{pendingRows || '<tr><td colspan="6" class="muted">No pending apply actions</td></tr>'}}</tbody></table>`
+        `status: <b>${{status}}</b><br/>attention items: <b>${{ops.attention_items || 0}}</b><br/>agent profiles: <b>${{ops.agent_profile_total || 0}}</b><br/>agent recent actions: <b>${{ops.agent_recent_actions || 0}}</b><br/>agent execution total / delegated / failed: <b>${{ops.agent_execution_total || 0}}</b> / <b>${{ops.agent_routing_delegated || 0}}</b> / <b>${{ops.agent_execution_failed || 0}}</b><br/>approval waits / reflected / fallback / reload: <b>${{ops.agent_execution_approval_waits || 0}}</b> / <b>${{ops.agent_execution_reflected || 0}}</b> / <b>${{ops.agent_execution_fallback || 0}}</b> / <b>${{ops.agent_execution_reload || 0}}</b><br/>skill failed checks: <b>${{ops.skill_failed_checks || 0}}</b><br/>skill recent exports: <b>${{ops.skill_recent_exports || 0}}</b><br/>channel pending apply: <b>${{ops.channel_pending_reload || 0}}</b><br/>model routes: <b>${{ops.model_routes || 0}}</b><br/>pending apply total: <b>${{ops.pending_apply_total || 0}}</b><br/>returned / total: <b>${{returned}}</b> / <b>${{total}}</b><br/><ul>${{notes || '<li class="muted">No operator notes</li>'}}</ul>${{attentionSections || '<div class="muted">No grouped attention sections</div>'}}<div style="margin:10px 0 8px 0;"><b>Control Panel</b><br/><span class="muted">surface</span> <input id="opsSurfaceFilter" type="text" value="${{surfaceFilter}}" placeholder="agent/channel/skill/model_routing/agent_execution" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:240px;" /> <span class="muted">actor</span> <input id="opsActorFilter" type="text" value="${{actorFilter}}" placeholder="api_key" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">target</span> <input id="opsTargetFilter" type="text" value="${{targetFilter}}" placeholder="finance_writer" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <label style="display:inline-flex; gap:4px; align-items:center;"><input id="opsPendingOnly" type="checkbox" ${{pendingOnly ? 'checked' : ''}} /> pending only</label> <span class="muted">limit</span> <input id="opsLimit" type="text" value="${{limit}}" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:60px;" /> <span class="muted">offset</span> <input id="opsOffset" type="text" value="${{offset}}" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:60px;" /> <button onclick="loadOpsSummary()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Load ops</button></div><div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;"><button onclick="exportOpsSummary('json')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Export ops JSON</button><button onclick="exportOpsSummary('csv')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Export ops CSV</button><button onclick="previewPendingOps('all', '')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Preview apply</button><button onclick="applyPendingOps('all', '')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Mark Pending Applied</button><button onclick="executeReload(false)" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Execute Reload</button><button onclick="executeReload(true)" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Dry-run Preview</button><span id="opsSummaryStatus" class="muted"></span></div><div id="opsApplyPlanPanel" style="margin-top:6px;"></div><br/><b>Recent Activity</b><table><thead><tr><th>When</th><th>Surface</th><th>Target</th><th>Action</th><th>Pending</th><th>Detail</th></tr></thead><tbody>${{recentRows || '<tr><td colspan="6" class="muted">No recent control-plane activity</td></tr>'}}</tbody></table><br/><b>Pending Apply</b><table><thead><tr><th>When</th><th>Surface</th><th>Target</th><th>Action</th><th>Actor</th><th>Apply</th></tr></thead><tbody>${{pendingRows || '<tr><td colspan="6" class="muted">No pending apply actions</td></tr>'}}</tbody></table>`
       );
     }}
     function renderWorkflowWebhooks(data) {{
@@ -10414,6 +11149,12 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
     }}
     function renderAgentProfiles(data) {{
       const agent = data.agent || {{}};
+      const runtime = agent.runtime_state || {{}};
+      const executionSummary = runtime.execution_summary || agent.execution_summary || {{}};
+      const executionEvents = runtime.execution_events || agent.execution_events || [];
+      const latestExecution = executionEvents[0] || null;
+      const latestExecutionResult = latestExecution ? (latestExecution.execution_result || {{}}) : {{}};
+      const latestExecutionTrace = latestExecutionResult.trace_summary || {{}};
       const rows = (agent.profiles || []).slice(0, 6).map(row => `
         <tr>
           <td>${{row.display_name || row.agent_id || '-'}}</td>
@@ -10437,9 +11178,19 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
           <td><code>${{row.agent_id || '-'}}</code></td>
           <td>${{row.detail || row.action || '-'}}</td>
         </tr>`).join('');
+      const executionRows = executionEvents.slice(0, 5).map(row => `
+        <tr>
+          <td>${{fmtAgo(row.at_ms, Date.now())}}</td>
+          <td>${{row.intent_name || ((row.execution_intent || {{}}).contract_intent) || '-'}}</td>
+          <td>${{((row.routing_decision || {{}}).action) || '-'}}</td>
+          <td>${{((row.execution_intent || {{}}).path_type) || '-'}}</td>
+          <td>${{((row.execution_result || {{}}).status) || '-'}}</td>
+          <td>${{((row.execution_result || {{}}).failure_classification) || '-'}}</td>
+          <td>${{describeExecutionTrace(((row.execution_result || {{}}).trace_summary) || {{}})}}</td>
+        </tr>`).join('');
       p(
         "agents",
-        `profiles: <b>${{agent.profiles_total || 0}}</b><br/>registered: <b>${{agent.registered_profiles || 0}}</b><br/>recent actions: <b>${{agent.actions_total || 0}}</b><br/>pending reload: <b>${{agent.pending_reload_count || 0}}</b> ${{agent.pending_reload ? '<span class="warn">(apply pending)</span>' : '<span class="ok">(clear)</span>'}}<br/>last apply: <b>${{agent.last_apply ? fmtAgo(agent.last_apply.at_ms, Date.now()) : '-'}}</b><br/><button onclick="acknowledgeAgentReload()" style="margin-top:6px; padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Mark Applied</button> <button onclick="createAgentProfile()" style="margin-top:6px; padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Create profile</button><br/><br/><div style="margin:10px 0 8px 0;"><b>Route Preview</b><br/><span class="muted">channel</span> <input id="agentRoutePreviewChannel" type="text" placeholder="webchat" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">chat_id</span> <input id="agentRoutePreviewChatId" type="text" placeholder="chat-1" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">user_id</span> <input id="agentRoutePreviewUserId" type="text" placeholder="user-1" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">explicit agent</span> <input id="agentRoutePreviewExplicitAgentId" type="text" placeholder="optional" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">content</span> <input id="agentRoutePreviewContent" type="text" placeholder="need a bank campaign draft" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:260px;" /> <button onclick="previewAgentRoute()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Preview route</button> <button onclick="bindAgentRoute()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Bind route</button> <button onclick="clearAgentRoute()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Clear route</button> <span id="agentRoutePreviewStatus" class="muted"></span><div id="agentRoutePreviewResult" style="margin-top:6px;"></div></div><div style="margin:10px 0 8px 0;"><b>Agent History</b><br/><span class="muted">agent</span> <input id="agentHistoryAgentFilter" type="text" placeholder="finance_writer" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <span class="muted">action</span> <input id="agentHistoryActionFilter" type="text" placeholder="model_update" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <span class="muted">actor</span> <input id="agentHistoryActorFilter" type="text" placeholder="api_key" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">limit</span> <input id="agentHistoryLimit" type="text" value="10" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:60px;" /> <span class="muted">offset</span> <input id="agentHistoryOffset" type="text" value="0" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:60px;" /> <button onclick="loadAgentActionHistory()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Load history</button> <button onclick="exportAgentActionHistoryCsv()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Export agent CSV</button> <span id="agentHistoryStatus" class="muted"></span><div id="agentHistoryPanel" style="margin-top:6px;"></div></div><table><thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Planning</th><th>Routing</th><th>Skills | Allow/Deny</th><th>Action</th></tr></thead><tbody>${{rows || '<tr><td colspan="7" class="muted">No agent profiles</td></tr>'}}</tbody></table><br/><table><thead><tr><th>When</th><th>Agent</th><th>Pending Change</th></tr></thead><tbody>${{pendingRows || '<tr><td colspan="3" class="muted">No pending agent actions</td></tr>'}}</tbody></table><br/><table><thead><tr><th>When</th><th>Agent</th><th>Change</th><th>Actor</th></tr></thead><tbody>${{actionRows || '<tr><td colspan="4" class="muted">No agent actions</td></tr>'}}</tbody></table><br/><div style="margin:10px 0 8px 0;"><b>Active Sticky Routes</b> <button onclick="loadAgentRoutes()" style="padding:3px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff; font-size:12px;">Refresh</button> <span id="agentRoutesStatus" class="muted"></span><div id="agentRoutesPanel" style="margin-top:6px;"><span class="muted">Click Refresh to load active routes.</span></div><div style="margin-top:6px;"><span class="muted">Clear by agent:</span> <input id="agentRoutesClearAgentId" type="text" placeholder="agent_id" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <button onclick="clearAgentRoutesByAgent(true)" style="padding:3px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff; font-size:12px;">Preview</button> <button onclick="clearAgentRoutesByAgent(false)" style="padding:3px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff; font-size:12px;">Clear</button></div></div><div style="margin:10px 0 8px 0;"><b>Model Policy</b> <span class="muted">agent_id:</span> <input id="agentModelPolicyId" type="text" placeholder="default" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <button onclick="loadAgentModelPolicy((document.getElementById('agentModelPolicyId')||{{}}).value||'default')" style="padding:3px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff; font-size:12px;">View Policy</button> <span id="agentModelPolicyStatus" class="muted"></span><div id="agentModelPolicyPanel" style="margin-top:6px;"><span class="muted">Enter agent_id and click View Policy.</span></div></div>`
+        `profiles: <b>${{agent.profiles_total || 0}}</b><br/>registered: <b>${{agent.registered_profiles || 0}}</b><br/>recent actions: <b>${{agent.actions_total || 0}}</b><br/>pending reload: <b>${{agent.pending_reload_count || 0}}</b> ${{agent.pending_reload ? '<span class="warn">(apply pending)</span>' : '<span class="ok">(clear)</span>'}}<br/>execution total / delegated / failed / gate3: <b>${{executionSummary.total || 0}}</b> / <b>${{executionSummary.delegated || 0}}</b> / <b>${{executionSummary.failed || 0}}</b> / <b>${{executionSummary.gate3_paths || 0}}</b><br/>approval waits / reflected / fallback / reload: <b>${{executionSummary.approval_waits || 0}}</b> / <b>${{executionSummary.reflected_runs || 0}}</b> / <b>${{executionSummary.fallback_runs || 0}}</b> / <b>${{executionSummary.reload_runs || 0}}</b><br/>latest execution: <b>${{latestExecution ? (latestExecutionResult.status || '-') : '-'}}</b> via <b>${{latestExecution ? ((latestExecution.execution_intent || {{}}).path_type || '-') : '-'}}</b> ${{latestExecutionTrace.fallback_used ? `<span class="muted">(fallback=${{esc(latestExecutionTrace.fallback_reason || 'used')}})</span>` : ''}}<br/>latest trace: reflections=<b>${{latestExecutionTrace.reflections_used || 0}}</b> / tool_failures=<b>${{latestExecutionTrace.tool_failures || 0}}</b> / reload=<b>${{latestExecutionTrace.reload_triggered ? 'yes' : 'no'}}</b><br/>last apply: <b>${{agent.last_apply ? fmtAgo(agent.last_apply.at_ms, Date.now()) : '-'}}</b><br/><button onclick="acknowledgeAgentReload()" style="margin-top:6px; padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Mark Applied</button> <button onclick="createAgentProfile()" style="margin-top:6px; padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Create profile</button><br/><br/><div style="margin:10px 0 8px 0;"><b>Route Preview</b><br/><span class="muted">channel</span> <input id="agentRoutePreviewChannel" type="text" placeholder="webchat" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">chat_id</span> <input id="agentRoutePreviewChatId" type="text" placeholder="chat-1" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">user_id</span> <input id="agentRoutePreviewUserId" type="text" placeholder="user-1" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">explicit agent</span> <input id="agentRoutePreviewExplicitAgentId" type="text" placeholder="optional" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">content</span> <input id="agentRoutePreviewContent" type="text" placeholder="need a bank campaign draft" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:260px;" /> <button onclick="previewAgentRoute()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Preview route</button> <button onclick="bindAgentRoute()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Bind route</button> <button onclick="clearAgentRoute()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Clear route</button> <span id="agentRoutePreviewStatus" class="muted"></span><div id="agentRoutePreviewResult" style="margin-top:6px;"></div></div><div style="margin:10px 0 8px 0;"><b>Agent History</b><br/><span class="muted">agent</span> <input id="agentHistoryAgentFilter" type="text" placeholder="finance_writer" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <span class="muted">action</span> <input id="agentHistoryActionFilter" type="text" placeholder="model_update" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <span class="muted">actor</span> <input id="agentHistoryActorFilter" type="text" placeholder="api_key" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:120px;" /> <span class="muted">limit</span> <input id="agentHistoryLimit" type="text" value="10" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:60px;" /> <span class="muted">offset</span> <input id="agentHistoryOffset" type="text" value="0" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:60px;" /> <button onclick="loadAgentActionHistory()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Load history</button> <button onclick="exportAgentActionHistoryCsv()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Export agent CSV</button> <span id="agentHistoryStatus" class="muted"></span><div id="agentHistoryPanel" style="margin-top:6px;"></div></div><table><thead><tr><th>Name</th><th>ID</th><th>Model</th><th>Planning</th><th>Routing</th><th>Skills | Allow/Deny</th><th>Action</th></tr></thead><tbody>${{rows || '<tr><td colspan="7" class="muted">No agent profiles</td></tr>'}}</tbody></table><br/><table><thead><tr><th>When</th><th>Intent</th><th>Routing</th><th>Path</th><th>Status</th><th>Failure</th><th>Trace</th></tr></thead><tbody>${{executionRows || '<tr><td colspan="7" class="muted">No recent execution events</td></tr>'}}</tbody></table><br/><table><thead><tr><th>When</th><th>Agent</th><th>Pending Change</th></tr></thead><tbody>${{pendingRows || '<tr><td colspan="3" class="muted">No pending agent actions</td></tr>'}}</tbody></table><br/><table><thead><tr><th>When</th><th>Agent</th><th>Change</th><th>Actor</th></tr></thead><tbody>${{actionRows || '<tr><td colspan="4" class="muted">No agent actions</td></tr>'}}</tbody></table><br/><div style="margin:10px 0 8px 0;"><b>Active Sticky Routes</b> <button onclick="loadAgentRoutes()" style="padding:3px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff; font-size:12px;">Refresh</button> <span id="agentRoutesStatus" class="muted"></span><div id="agentRoutesPanel" style="margin-top:6px;"><span class="muted">Click Refresh to load active routes.</span></div><div style="margin-top:6px;"><span class="muted">Clear by agent:</span> <input id="agentRoutesClearAgentId" type="text" placeholder="agent_id" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <button onclick="clearAgentRoutesByAgent(true)" style="padding:3px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff; font-size:12px;">Preview</button> <button onclick="clearAgentRoutesByAgent(false)" style="padding:3px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff; font-size:12px;">Clear</button></div></div><div style="margin:10px 0 8px 0;"><b>Model Policy</b> <span class="muted">agent_id:</span> <input id="agentModelPolicyId" type="text" placeholder="default" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:140px;" /> <button onclick="loadAgentModelPolicy((document.getElementById('agentModelPolicyId')||{{}}).value||'default')" style="padding:3px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff; font-size:12px;">View Policy</button> <span id="agentModelPolicyStatus" class="muted"></span><div id="agentModelPolicyPanel" style="margin-top:6px;"><span class="muted">Enter agent_id and click View Policy.</span></div></div>`
       );
     }}
     async function loadAgentRoutes() {{

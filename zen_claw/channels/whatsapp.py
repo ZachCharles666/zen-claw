@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import os
+import shutil
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
@@ -10,6 +13,7 @@ from zen_claw.bus.events import OutboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.base import BaseChannel
 from zen_claw.config.schema import WhatsAppConfig
+from zen_claw.providers.transcription import GroqTranscriptionProvider, is_supported_audio_file
 from zen_claw.utils.formatting import strip_markdown
 
 
@@ -23,11 +27,21 @@ class WhatsAppChannel(BaseChannel):
 
     name = "whatsapp"
 
-    def __init__(self, config: WhatsAppConfig, bus: MessageBus, media_root=None):
+    def __init__(
+        self,
+        config: WhatsAppConfig,
+        bus: MessageBus,
+        media_root=None,
+        groq_api_key: str = "",
+    ):
         super().__init__(config, bus, media_root=media_root)
         self.config: WhatsAppConfig = config
         self._ws = None
         self._connected = False
+        self.groq_api_key = groq_api_key
+        self._transcriber = GroqTranscriptionProvider(
+            api_key=groq_api_key or os.environ.get("GROQ_API_KEY")
+        )
 
     async def start(self) -> None:
         """Start the WhatsApp channel by connecting to the bridge."""
@@ -109,14 +123,21 @@ class WhatsAppChannel(BaseChannel):
             sender_id = user_id.split("@")[0] if "@" in user_id else user_id
             logger.info(f"Sender {sender}")
 
-            # Handle voice transcription if it's a voice message
-            if content == "[Voice Message]":
-                logger.info(
-                    f"Voice message received from {sender_id}, but direct download from bridge is not yet supported."
-                )
-                content = "[Voice Message: Transcription not available for WhatsApp yet]"
-
+            local_media_refs = await self._import_local_media_refs(data)
             media_refs = self._extract_media_refs(data)
+            if local_media_refs:
+                media_refs = local_media_refs + media_refs
+
+            if content == "[Voice Message]":
+                transcription = await self._transcribe_first_audio(media_refs)
+                if transcription:
+                    content = f'[Voice Message]\n[Voice]: "{transcription}"'
+                else:
+                    logger.info(
+                        f"Voice message received from {sender_id}, but transcription is unavailable."
+                    )
+                    content = "[Voice Message: Transcription unavailable]"
+
             if media_refs:
                 content = (content + "\n" if content else "") + "\n".join(
                     f"[media_ref: {r}]" for r in media_refs
@@ -141,8 +162,10 @@ class WhatsAppChannel(BaseChannel):
 
             if status == "connected":
                 self._connected = True
-            elif status == "disconnected":
+            elif status in {"disconnected", "reconnecting", "starting", "qr_required"}:
                 self._connected = False
+            elif status == "audio_download_failed":
+                logger.warning("WhatsApp bridge could not persist inbound audio for transcription")
 
         elif msg_type == "qr":
             # QR code for authentication
@@ -169,3 +192,59 @@ class WhatsAppChannel(BaseChannel):
         for r in refs[:8]:
             out.append(self._build_media_uri("whatsapp", media_type, r))
         return out
+
+    async def _import_local_media_refs(self, data: dict[str, Any]) -> list[str]:
+        media_type = str(data.get("mediaType", "file") or "file").strip().lower()
+        raw_paths: list[str] = []
+        raw_path = data.get("localMediaPath")
+        if isinstance(raw_path, str) and raw_path.strip():
+            raw_paths.append(raw_path.strip())
+        raw_many = data.get("localMediaPaths")
+        if isinstance(raw_many, list):
+            for item in raw_many:
+                if isinstance(item, str) and item.strip():
+                    raw_paths.append(item.strip())
+
+        refs: list[str] = []
+        for item in raw_paths[:8]:
+            media_ref = await self._import_bridge_media(item, media_type)
+            if media_ref:
+                refs.append(media_ref)
+        return refs
+
+    async def _import_bridge_media(self, raw_path: str, media_type: str) -> str:
+        source = Path(str(raw_path))
+        if not source.exists() or not source.is_file():
+            return ""
+        target_dir = self.media_root / "whatsapp"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / source.name
+        if target.exists():
+            same_stat = (
+                target.stat().st_size == source.stat().st_size
+                and target.stat().st_mtime_ns == source.stat().st_mtime_ns
+            )
+            if same_stat:
+                return self._build_local_media_uri(target.name)
+            target = target_dir / f"{target.stem}_{int(source.stat().st_mtime_ns)}{target.suffix}"
+        await asyncio.to_thread(shutil.copy2, source, target)
+        return self._build_local_media_uri(target.name)
+
+    def _build_local_media_uri(self, file_name: str) -> str:
+        return f"media://local/whatsapp/{file_name}"
+
+    def _local_path_from_media_uri(self, media_uri: str) -> Path | None:
+        if not media_uri.startswith("media://local/whatsapp/"):
+            return None
+        path = self.media_root / "whatsapp" / media_uri.rsplit("/", 1)[-1]
+        return path if path.exists() else None
+
+    async def _transcribe_first_audio(self, media_refs: list[str]) -> str:
+        for media_uri in media_refs:
+            path = self._local_path_from_media_uri(media_uri)
+            if path is None or not is_supported_audio_file(path):
+                continue
+            text = (await self._transcriber.transcribe(path)).strip()
+            if text:
+                return text
+        return ""

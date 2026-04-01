@@ -6,12 +6,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import makeWASocket, {
   DisconnectReason,
+  downloadMediaMessage,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
 } from '@whiskeysockets/baileys';
 
 import { Boom } from '@hapi/boom';
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 
@@ -24,6 +27,8 @@ export interface InboundMessage {
   content: string;
   timestamp: number;
   isGroup: boolean;
+  mediaType?: string;
+  localMediaPath?: string;
 }
 
 export interface WhatsAppClientOptions {
@@ -46,6 +51,7 @@ export class WhatsAppClient {
     const logger = pino({ level: 'silent' });
     const { state, saveCreds } = await useMultiFileAuthState(this.options.authDir);
     const { version } = await fetchLatestBaileysVersion();
+    this.options.onStatus('starting');
 
     console.log(`Using Baileys version: ${version.join('.')}`);
 
@@ -79,6 +85,7 @@ export class WhatsAppClient {
         console.log('\nðŸ“± Scan this QR code with WhatsApp (Linked Devices):\n');
         qrcode.generate(qr, { small: true });
         this.options.onQR(qr);
+        this.options.onStatus('qr_required');
       }
 
       if (connection === 'close') {
@@ -90,6 +97,7 @@ export class WhatsAppClient {
 
         if (shouldReconnect && !this.reconnecting) {
           this.reconnecting = true;
+          this.options.onStatus('reconnecting');
           console.log('Reconnecting in 5 seconds...');
           setTimeout(() => {
             this.reconnecting = false;
@@ -97,7 +105,7 @@ export class WhatsAppClient {
           }, 5000);
         }
       } else if (connection === 'open') {
-        console.log('âœ?Connected to WhatsApp');
+        console.log('ï¿½?Connected to WhatsApp');
         this.options.onStatus('connected');
       }
     });
@@ -116,8 +124,8 @@ export class WhatsAppClient {
         // Skip status updates
         if (msg.key.remoteJid === 'status@broadcast') continue;
 
-        const content = this.extractMessageContent(msg);
-        if (!content) continue;
+        const inbound = await this.extractInboundMessage(msg);
+        if (!inbound) continue;
 
         const isGroup = msg.key.remoteJid?.endsWith('@g.us') || false;
 
@@ -125,49 +133,100 @@ export class WhatsAppClient {
           id: msg.key.id || '',
           sender: msg.key.remoteJid || '',
           pn: msg.key.remoteJidAlt || '',
-          content,
+          content: inbound.content,
           timestamp: msg.messageTimestamp as number,
           isGroup,
+          mediaType: inbound.mediaType,
+          localMediaPath: inbound.localMediaPath,
         });
       }
     });
   }
 
-  private extractMessageContent(msg: any): string | null {
+  private async extractInboundMessage(
+    msg: any,
+  ): Promise<Pick<InboundMessage, 'content' | 'mediaType' | 'localMediaPath'> | null> {
     const message = msg.message;
     if (!message) return null;
 
     // Text message
     if (message.conversation) {
-      return message.conversation;
+      return { content: message.conversation };
     }
 
     // Extended text (reply, link preview)
     if (message.extendedTextMessage?.text) {
-      return message.extendedTextMessage.text;
+      return { content: message.extendedTextMessage.text };
     }
 
     // Image with caption
     if (message.imageMessage?.caption) {
-      return `[Image] ${message.imageMessage.caption}`;
+      return { content: `[Image] ${message.imageMessage.caption}` };
     }
 
     // Video with caption
     if (message.videoMessage?.caption) {
-      return `[Video] ${message.videoMessage.caption}`;
+      return { content: `[Video] ${message.videoMessage.caption}` };
     }
 
     // Document with caption
     if (message.documentMessage?.caption) {
-      return `[Document] ${message.documentMessage.caption}`;
+      return { content: `[Document] ${message.documentMessage.caption}` };
     }
 
     // Voice/Audio message
     if (message.audioMessage) {
-      return `[Voice Message]`;
+      return {
+        content: '[Voice Message]',
+        mediaType: 'audio',
+        localMediaPath: await this.downloadAudioMessage(msg),
+      };
     }
 
     return null;
+  }
+
+  private async downloadAudioMessage(msg: any): Promise<string> {
+    if (!this.sock) return '';
+    try {
+      const audio = msg.message?.audioMessage;
+      if (!audio) return '';
+      const mediaDir = join(this.options.authDir, 'media');
+      await mkdir(mediaDir, { recursive: true });
+      const ext = this.resolveAudioExtension(audio.mimetype);
+      const messageId = String(msg.key?.id || Date.now());
+      const fileName = `whatsapp_${messageId}${ext}`;
+      const outputPath = join(mediaDir, fileName);
+
+      const media = await downloadMediaMessage(
+        msg,
+        'buffer',
+        {},
+        {
+          logger: pino({ level: 'silent' }),
+          reuploadRequest: this.sock.updateMediaMessage,
+        } as any,
+      );
+      if (!media) return '';
+      const buffer = Buffer.isBuffer(media) ? media : Buffer.from(media as Uint8Array);
+      await writeFile(outputPath, buffer);
+      return outputPath;
+    } catch (error) {
+      console.warn('Audio download failed:', error);
+      this.options.onStatus('audio_download_failed');
+      return '';
+    }
+  }
+
+  private resolveAudioExtension(mimeType?: string): string {
+    const normalized = String(mimeType || '').toLowerCase();
+    if (normalized.includes('ogg')) return '.ogg';
+    if (normalized.includes('mpeg')) return '.mp3';
+    if (normalized.includes('mp4') || normalized.includes('m4a')) return '.m4a';
+    if (normalized.includes('amr')) return '.amr';
+    if (normalized.includes('wav')) return '.wav';
+    if (normalized.includes('webm')) return '.webm';
+    return '.bin';
   }
 
   async sendMessage(to: string, text: string): Promise<void> {
@@ -185,4 +244,5 @@ export class WhatsAppClient {
     }
   }
 }
+
 

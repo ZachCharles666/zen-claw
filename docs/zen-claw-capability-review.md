@@ -28,8 +28,22 @@
 | Web 工具 | 95% | ✅ 基本完整 | IPv6 SSRF 边界未测 |
 | 知识库工具 | 90% | ✅ 基本完整 | ingest 接口合约仍可继续收紧 |
 | 浏览器工具 | 95% | ✅ 基本完整 | 仍可继续补更细的域名/重定向边界测试 |
-| WhatsApp 渠道 | 85% | ⚠️ 部分完整 | 语音转录缺失，依赖外部 Bridge |
+| WhatsApp 渠道 | 90% | ✅ 基本完整 | 依赖外部 Bridge，仍需更强独立 smoke/integration 验收 |
 | 审计日志（Audit） | 88% | ✅ 功能完整 | 更深的合规字段分层仍可增强 |
+
+---
+
+## Node 供应链边界补充
+
+- 当前仓库没有根级 `package.json`，`axios` 也不是直接 npm 依赖，因此不存在一个需要像 `litellm` 那样单点 pin 版本的 `axios` 主风险面。
+- 真实的 Node 风险主要集中在可选 sidecar：
+  - `bridge/`：外部 WhatsApp Bridge，成熟度仍低于 Python 主线
+  - `browser/sidecar/`：Playwright sidecar，属于可选运行组件
+- 这类风险的治理重点不是“是否用了 axios”，而是：
+  - 是否有 lockfile
+  - 是否使用精确版本
+  - 是否禁止无锁安装进入正式路径
+  - 是否把外部 CDN/Node sidecar 与 Python 主线风险边界写清楚
 
 ---
 
@@ -109,11 +123,17 @@
 
 ---
 
-### 3.4 WhatsApp 渠道（85%）
+### 3.4 WhatsApp 渠道（90%）
 
 - 核心消息收发完整（依赖 Node.js `@whiskeysockets/baileys` Bridge）
-- **明确缺失：** 语音消息转录（源码注释 line 115-117 标注"not yet supported"）
-- 外部 Bridge 是强依赖，部署复杂度高于其他渠道
+- 入站语音现在已具备基础闭环：
+  - bridge 会尝试把音频落到本地
+  - Python channel 会把音频导入 workspace `media/whatsapp/`
+  - 若 `GROQ_API_KEY` 可用，会尝试转录
+  - 若转录失败，会优雅降级而不是中断消息流程
+- 当前剩余短板：
+  - 外部 Bridge 仍是强依赖，部署复杂度高于其他渠道
+  - 真实设备级 smoke / integration 验收仍需持续执行
 
 ---
 
@@ -174,7 +194,7 @@
 - **更细的 SSRF 解析绕过测试**：覆盖 hostname / DNS 变化场景
 
 ### P3（长期架构）
-- **WhatsApp 语音转录**：集成 Whisper 或云端 ASR，完善多媒体能力
+- **WhatsApp 真实设备验收**：继续补 QR 登录、文本收发、语音转录、失败退化的独立 smoke / integration 验收
 - **PTY 分配完善**（sec-execd）：为交互式命令会话提供完整终端支持
 
 ---

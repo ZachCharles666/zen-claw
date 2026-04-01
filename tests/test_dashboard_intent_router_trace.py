@@ -65,6 +65,13 @@ def test_process_direct_appends_intent_router_dashboard_event(tmp_path: Path, mo
     assert rows[-1]["intent_name"] == "time"
     assert rows[-1]["route_status"] == "direct_success"
     assert rows[-1]["handled"] is True
+    execution_log_path = data_dir / "dashboard" / "agent_execution.log.jsonl"
+    execution_rows = [
+        json.loads(line) for line in execution_log_path.read_text(encoding="utf-8").splitlines() if line
+    ]
+    assert execution_rows[-1]["routing_decision"]["action"] == "execute"
+    assert execution_rows[-1]["execution_intent"]["path_type"] == "direct"
+    assert execution_rows[-1]["execution_result"]["status"] == "succeeded"
 
 
 def test_build_dashboard_snapshot_includes_intent_router_events(
