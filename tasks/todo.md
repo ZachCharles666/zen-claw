@@ -1,7 +1,6 @@
 # Active Tasks
 
 ## Current Priorities
-
 - [x] Zero-Trust Agent Gateway fail-closed convergence:
   - remove production `compat_unhardened` / `legacy_compat_direct` outbound bypasses
   - require explicit resource allowlists for high-risk capabilities under `production_hardening`

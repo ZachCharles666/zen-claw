@@ -30,8 +30,12 @@ type cfg struct {
 }
 
 type fetchRequest struct {
-	URL      string `json:"url"`
-	MaxBytes int64  `json:"max_bytes,omitempty"`
+	URL              string         `json:"url"`
+	MaxBytes         int64          `json:"max_bytes,omitempty"`
+	SecurityContext  map[string]any `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any `json:"policy_snapshot,omitempty"`
+	GatewayMeta      map[string]any `json:"gateway_meta,omitempty"`
+	GatewaySignature string         `json:"gateway_signature,omitempty"`
 }
 
 type fetchResponse struct {
@@ -46,9 +50,13 @@ type fetchResponse struct {
 }
 
 type searchRequest struct {
-	Query  string `json:"query"`
-	Count  int    `json:"count"`
-	APIKey string `json:"api_key"`
+	Query            string         `json:"query"`
+	Count            int            `json:"count"`
+	APIKey           string         `json:"api_key"`
+	SecurityContext  map[string]any `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any `json:"policy_snapshot,omitempty"`
+	GatewayMeta      map[string]any `json:"gateway_meta,omitempty"`
+	GatewaySignature string         `json:"gateway_signature,omitempty"`
 }
 
 type searchResult struct {
@@ -166,6 +174,22 @@ func handleFetch(w http.ResponseWriter, r *http.Request, c cfg) {
 			PolicyScope: "net_proxy",
 			ErrorKind:   "parameter",
 			Message:     err.Error(),
+		})
+		return
+	}
+	if code, message := validateGatewayEnvelope(req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		writeJSON(w, http.StatusForbidden, fetchResponse{
+			OK:        false,
+			ErrorCode: code,
+			Error:     message,
+		})
+		logAudit(auditPayload{
+			Event:       "net.fetch.denied",
+			TraceID:     traceID,
+			PolicyCode:  code,
+			PolicyScope: "gateway_envelope",
+			ErrorKind:   "permission",
+			Message:     message,
 		})
 		return
 	}
@@ -383,6 +407,22 @@ func handleSearch(w http.ResponseWriter, r *http.Request, c cfg) {
 			PolicyScope: "net_proxy",
 			ErrorKind:   "parameter",
 			Message:     err.Error(),
+		})
+		return
+	}
+	if code, message := validateGatewayEnvelope(req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		writeJSONSearch(w, http.StatusForbidden, searchResponse{
+			OK:        false,
+			ErrorCode: code,
+			Error:     message,
+		})
+		logAudit(auditPayload{
+			Event:       "net.search.denied",
+			TraceID:     traceID,
+			PolicyCode:  code,
+			PolicyScope: "gateway_envelope",
+			ErrorKind:   "permission",
+			Message:     message,
 		})
 		return
 	}
@@ -615,6 +655,39 @@ func parseSet(v string) map[string]struct{} {
 func denied(host string, deny map[string]struct{}) bool {
 	_, ok := deny[host]
 	return ok
+}
+
+func validateGatewayEnvelope(securityContext, gatewayMeta map[string]any, gatewaySignature string) (string, string) {
+	if strings.TrimSpace(gatewaySignature) == "" {
+		return "gateway_signature_required", "gateway signature is required"
+	}
+	requiredSecurity := []string{
+		"channel",
+		"sender_id",
+		"chat_id",
+		"tenant_id",
+		"workspace_id",
+		"agent_profile",
+		"role",
+		"trust_level",
+		"origin_surface",
+	}
+	missing := make([]string, 0, len(requiredSecurity))
+	for _, key := range requiredSecurity {
+		if strings.TrimSpace(fmt.Sprintf("%v", securityContext[key])) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return "security_context_missing", "security_context missing: " + strings.Join(missing, ", ")
+	}
+	if strings.TrimSpace(fmt.Sprintf("%v", gatewayMeta["policy_snapshot_hash"])) == "" {
+		return "policy_snapshot_missing", "policy snapshot hash is required"
+	}
+	if strings.TrimSpace(fmt.Sprintf("%v", gatewayMeta["request_hash"])) == "" {
+		return "request_hash_missing", "gateway request hash is required"
+	}
+	return "", ""
 }
 
 func checkApproval(r *http.Request, c cfg, traceID, method, path string, bodyBytes []byte) bool {

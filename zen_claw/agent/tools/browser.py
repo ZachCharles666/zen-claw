@@ -109,6 +109,13 @@ class _BrowserSidecarBase(Tool):
                 "browser sidecar requires policy snapshot hash",
                 code="browser_sidecar_policy_snapshot_missing",
             )
+        gateway_signature = str(security_context.get("gateway_signature") or "").strip()
+        if not gateway_signature:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "browser sidecar requires gateway signature",
+                code="browser_sidecar_gateway_signature_missing",
+            )
         effective_max_steps = (
             max(1, int(override_max_steps)) if override_max_steps is not None else self.max_steps
         )
@@ -117,6 +124,7 @@ class _BrowserSidecarBase(Tool):
             "payload": payload,
             "security_context": security_context,
             "policy_snapshot": policy_snapshot,
+            "gateway_signature": gateway_signature,
             "policy": {
                 "allowed_domains": self.allowed_domains,
                 "blocked_domains": self.blocked_domains,

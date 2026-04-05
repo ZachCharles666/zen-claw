@@ -178,6 +178,68 @@ async def test_registry_denies_message_without_explicit_channel_allowlist() -> N
     assert denied.meta.get("capability") == "message.send"
 
 
+async def test_registry_denies_high_risk_tool_with_tampered_gateway_envelope() -> None:
+    cfg = Config.model_validate(
+        convert_keys({"tools": {"policy": {"fetchAllowedDomains": ["example.com"]}}})
+    )
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_FetchTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "trace_id": "trace-fetch",
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": ".",
+            "policy_snapshot": {"production_hardening": True},
+        }
+    )
+    reg._request_context["gateway_meta"]["request_hash"] = "tampered"
+
+    denied = await reg.execute("web_fetch", {"url": "https://example.com/"})
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.code == "gateway_envelope_invalid"
+    assert denied.meta.get("policy_scope") == "gateway"
+
+
+async def test_registry_denies_high_risk_tool_without_capability_grant() -> None:
+    cfg = Config.model_validate(
+        convert_keys({"tools": {"policy": {"fetchAllowedDomains": ["example.com"]}}})
+    )
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_FetchTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "trace_id": "trace-fetch",
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": ".",
+            "policy_snapshot": {"production_hardening": True},
+            "subject_type": "plugin",
+            "trust_tier": "untrusted",
+            "capability_grants": [],
+        }
+    )
+
+    denied = await reg.execute("web_fetch", {"url": "https://example.com/"})
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.code == "capability_grant_denied"
+    assert denied.meta.get("capability") == "network.fetch"
+
+
 async def test_registry_denies_web_fetch_for_non_allowlisted_domain() -> None:
     cfg = Config.model_validate(
         convert_keys({"tools": {"policy": {"fetchAllowedDomains": ["example.com"]}}})

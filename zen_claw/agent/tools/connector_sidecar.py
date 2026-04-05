@@ -58,6 +58,7 @@ class ConnectorSidecarClient:
             "method": str(method or "POST").strip().upper() or "POST",
             "headers": dict(headers or {}),
             "body": body,
+            "gateway_signature": str(sec.get("gateway_signature") or ""),
             "connector_meta": {
                 "connector_name": str(connector_name or "").strip().lower(),
                 "action": str(action or "").strip().lower(),
@@ -211,6 +212,13 @@ class ConnectorSidecarClient:
                 ToolErrorKind.PERMISSION,
                 "connector sidecar requires policy snapshot hash",
                 code="connector_sidecar_policy_snapshot_missing",
+                sidecar_target=self.proxy_url,
+            )
+        if not str(request_payload.get("gateway_signature") or "").strip():
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "connector sidecar requires gateway signature",
+                code="connector_sidecar_gateway_signature_missing",
                 sidecar_target=self.proxy_url,
             )
         headers, body_bytes = header_result

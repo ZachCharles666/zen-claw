@@ -10,6 +10,7 @@
 
 ### 2026-04
 
+- `Zero-Trust Agent Gateway — Final Convergence`
 - `Dashboard Frontend — Security Audit Panel`
 - `Dashboard / Audit API — Security Query Surface`
 - `Zero-Trust Agent Gateway — Alpha Baseline`
@@ -104,6 +105,41 @@
 - `Dashboard — Operations Summary Surface`
 
 ## 2026-04-05
+
+### Zero-Trust Agent Gateway — Final Convergence
+
+- What changed:
+  - introduced signed gateway-envelope normalization and verification as the mandatory high-risk execution contract in `ToolRegistry`, including subject-level capability grant checks and explicit `gateway_envelope_required` / `gateway_envelope_invalid` denials
+  - promoted the main loop to issue `subject_type=agent` signed envelopes, removed subagent local filesystem/shell registration plus override bypasses, and constrained subagents to isolated read-only network grants
+  - changed `message.send` to always require connector/outbound sidecar execution, including trusted-local targets, and propagated `gateway_signature` through exec/web/browser/sessions/connector sidecar payloads
+  - added minimal body-level gateway-envelope presence checks in `go/net-proxy`, `go/sec-execd`, and `browser/sidecar` so sidecars fail closed when the signed envelope fields are missing
+  - updated regression coverage for gateway-envelope denial, capability grants, subagent hard isolation, message sidecar-only behavior, and the new channel-role gateway expectation
+- Key files touched:
+  - `zen_claw/security_context.py`
+  - `zen_claw/agent/tools/registry.py`
+  - `zen_claw/agent/loop.py`
+  - `zen_claw/agent/subagent.py`
+  - `zen_claw/agent/tools/message.py`
+  - `zen_claw/agent/tools/shell.py`
+  - `zen_claw/agent/tools/web.py`
+  - `zen_claw/agent/tools/browser.py`
+  - `zen_claw/agent/tools/sessions.py`
+  - `zen_claw/agent/tools/connector_sidecar.py`
+  - `go/sec-execd/main.go`
+  - `go/net-proxy/main.go`
+  - `browser/sidecar/server.js`
+  - `tests/test_tool_policy_engine.py`
+  - `tests/test_subagent_guardrail.py`
+  - `tests/test_tool_native_results.py`
+  - `tests/test_sessions_sidecar.py`
+  - `tests/test_channel_role_rbac.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .`
+  - `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
+  - `1521 passed, 41 skipped in 157.77s (0:02:37)`
+- Follow-up impact:
+  - direct high-risk tool callers now need a valid signed gateway envelope instead of loose request context, and local/trusted `message.send` no longer bypasses connector/outbound isolation
 
 ### Dashboard Frontend — Security Audit Panel
 

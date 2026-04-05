@@ -93,6 +93,7 @@ from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider, LLMResponse
 from zen_claw.security_context import (
     build_security_context,
+    ensure_security_envelope,
     is_trusted_local_surface,
     normalize_workspace_id,
     security_policy_snapshot,
@@ -2326,7 +2327,7 @@ class AgentLoop:
             for v in (self.tool_policy_config.trusted_local_channels or [])
             if str(v).strip()
         }
-        return build_security_context(
+        base_context = build_security_context(
             trace_id=str(trace_id or "").strip(),
             channel=str(channel or "").strip().lower(),
             sender_id=str(meta.get("sender_id") or sender_id or "").strip(),
@@ -2358,6 +2359,16 @@ class AgentLoop:
                     "dev_profile": bool(self.dev_profile),
                 },
             ),
+        )
+        return ensure_security_envelope(
+            base_context,
+            subject_type="agent",
+            trust_tier=(
+                "trusted_local"
+                if is_trusted_local_surface(channel, trusted_local_channels)
+                else "remote_untrusted"
+            ),
+            capability_grants=["*"],
         )
 
     def _apply_intent_contract_policy(self, contract: IntentToolContract) -> None:

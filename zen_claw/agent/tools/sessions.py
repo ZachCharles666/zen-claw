@@ -119,10 +119,18 @@ class _SidecarSessionsBase(Tool):
                 "sessions sidecar requires policy snapshot hash",
                 code="sessions_policy_snapshot_missing",
             )
+        gateway_signature = str(sec.get("gateway_signature") or "").strip()
+        if not gateway_signature:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "sessions sidecar requires gateway signature",
+                code="sessions_gateway_signature_missing",
+            )
         request_payload = {
             **dict(payload),
             "security_context": sec,
             "policy_snapshot": policy_snapshot,
+            "gateway_signature": gateway_signature,
             "gateway_meta": {
                 "gateway_instance": str(sec.get("gateway_instance") or gateway_instance_id()),
                 "policy_snapshot_hash": policy_snapshot_hash,

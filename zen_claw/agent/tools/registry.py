@@ -16,6 +16,11 @@ from zen_claw.agent.tools.policy import ToolPolicyEngine
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.observability.audit import AuditWorker
 from zen_claw.observability.trace import TraceContext
+from zen_claw.security_context import (
+    ensure_security_envelope,
+    extract_security_context,
+    verify_gateway_envelope,
+)
 
 
 class ToolRegistry:
@@ -141,7 +146,7 @@ class ToolRegistry:
 
     def set_request_context(self, context: dict[str, Any] | None) -> None:
         """Attach per-request identity/policy context for resource checks and audit."""
-        self._request_context = dict(context or {})
+        self._request_context = ensure_security_envelope(dict(context or {}))
 
     async def execute(
         self,
@@ -319,6 +324,41 @@ class ToolRegistry:
                 result=result,
             )
             return result
+
+        if self._requires_gateway_envelope(name):
+            if not self._request_context:
+                result = ToolResult.failure(
+                    ToolErrorKind.PERMISSION,
+                    f"Tool '{name}' requires a signed gateway envelope",
+                    code="gateway_envelope_required",
+                    policy_scope="gateway",
+                    skill_names=self._active_skill_names,
+                    skill_permissions_mode=self._skill_permissions_mode,
+                )
+                await self._audit_tool_event(
+                    trace_id=trace_id,
+                    event_type="tool.denied",
+                    tool_name=name,
+                    result=result,
+                )
+                return result
+            valid_envelope, envelope_reason = verify_gateway_envelope(self._request_context)
+            if not valid_envelope:
+                result = ToolResult.failure(
+                    ToolErrorKind.PERMISSION,
+                    f"Tool '{name}' requires a valid signed gateway envelope: {envelope_reason}",
+                    code="gateway_envelope_invalid",
+                    policy_scope="gateway",
+                    skill_names=self._active_skill_names,
+                    skill_permissions_mode=self._skill_permissions_mode,
+                )
+                await self._audit_tool_event(
+                    trace_id=trace_id,
+                    event_type="tool.denied",
+                    tool_name=name,
+                    result=result,
+                )
+                return result
 
         resource_decision = self._evaluate_resource_policy(name, params)
         if resource_decision is not None:
@@ -605,31 +645,71 @@ class ToolRegistry:
         policy = self._security_policy
         if policy is None:
             return None
-        request = capability_request_from_tool(name, params, self._request_context)
+        identity_context = self._identity_context()
+        request = capability_request_from_tool(name, params, identity_context)
         if request is None:
             return None
-        evaluator = CapabilityPolicyEvaluator(policy, self._request_context)
+        grant_denial = self._evaluate_capability_grants(request.capability)
+        if grant_denial is not None:
+            return grant_denial
+        evaluator = CapabilityPolicyEvaluator(policy, identity_context)
         decision = evaluator.evaluate(request)
         if decision.allowed:
             return None
         return evaluator.denial_result(
             decision,
             identity=self._audit_identity_summary(),
-            dev_profile=bool(self._request_context.get("dev_profile")),
+            dev_profile=bool(identity_context.get("dev_profile")),
             skill_names=self._active_skill_names,
             skill_permissions_mode=self._skill_permissions_mode,
         )
 
+    def _identity_context(self) -> dict[str, Any]:
+        return extract_security_context(self._request_context)
+
+    def _evaluate_capability_grants(self, capability: str) -> ToolResult | None:
+        identity_context = self._identity_context()
+        subject_type = str(identity_context.get("subject_type") or "").strip().lower()
+        if not subject_type or subject_type == "agent":
+            return None
+        grants = {
+            str(item or "").strip().lower()
+            for item in (identity_context.get("capability_grants") or [])
+            if str(item or "").strip()
+        }
+        normalized = str(capability or "").strip().lower()
+        if "*" in grants or normalized in grants:
+            return None
+        capability_family = normalized.split(".", 1)[0]
+        if capability_family and f"{capability_family}.*" in grants:
+            return None
+        return ToolResult.failure(
+            ToolErrorKind.PERMISSION,
+            f"Subject '{subject_type}' is not granted capability '{normalized}'",
+            code="capability_grant_denied",
+            policy_scope="gateway_subject",
+            capability=normalized,
+            skill_names=self._active_skill_names,
+            skill_permissions_mode=self._skill_permissions_mode,
+        )
+
+    def _requires_gateway_envelope(self, tool_name: str) -> bool:
+        token = str(tool_name or "").strip().lower()
+        return token in self._HIGH_RISK_TOOL_NAMES
+
     def _audit_identity_summary(self) -> dict[str, Any]:
+        identity_context = self._identity_context()
         return {
-            "channel": str(self._request_context.get("channel") or ""),
-            "sender_id": str(self._request_context.get("sender_id") or ""),
-            "chat_id": str(self._request_context.get("chat_id") or ""),
-            "tenant_id": str(self._request_context.get("tenant_id") or ""),
-            "workspace_id": str(self._request_context.get("workspace_id") or ""),
-            "agent_profile": str(self._request_context.get("agent_profile") or ""),
-            "role": str(self._request_context.get("role") or ""),
-            "channel_role": str(self._request_context.get("channel_role") or ""),
+            "channel": str(identity_context.get("channel") or ""),
+            "sender_id": str(identity_context.get("sender_id") or ""),
+            "chat_id": str(identity_context.get("chat_id") or ""),
+            "tenant_id": str(identity_context.get("tenant_id") or ""),
+            "workspace_id": str(identity_context.get("workspace_id") or ""),
+            "agent_profile": str(identity_context.get("agent_profile") or ""),
+            "role": str(identity_context.get("role") or ""),
+            "channel_role": str(identity_context.get("channel_role") or ""),
+            "subject_type": str(identity_context.get("subject_type") or ""),
+            "trust_tier": str(identity_context.get("trust_tier") or ""),
         }
 
     @staticmethod
@@ -668,7 +748,7 @@ class ToolRegistry:
                 "skill_names": self._active_skill_names or None,
                 "identity": self._audit_identity_summary(),
                 "policy_snapshot": dict(self._request_context.get("policy_snapshot") or {}),
-                "dev_profile": bool(self._request_context.get("dev_profile")),
+                "dev_profile": bool(self._identity_context().get("dev_profile")),
                 "capability": str(result.meta.get("capability") or ""),
                 "resource_scope": dict(result.meta.get("resource_scope") or {}),
                 "matched_scope": dict(result.meta.get("matched_scope") or {}),
@@ -682,3 +762,27 @@ class ToolRegistry:
 
     def __contains__(self, name: str) -> bool:
         return name in self._tools
+    _HIGH_RISK_TOOL_NAMES: frozenset[str] = frozenset(
+        {
+            "exec",
+            "web_fetch",
+            "web_search",
+            "message",
+            "social_platform_post",
+            "social_platform_like",
+            "browser_open",
+            "browser_click",
+            "browser_type",
+            "browser_extract",
+            "browser_screenshot",
+            "browser_save_session",
+            "browser_load_session",
+            "sessions_spawn",
+            "sessions_list",
+            "sessions_kill",
+            "sessions_read",
+            "sessions_write",
+            "sessions_signal",
+            "sessions_resize",
+        }
+    )

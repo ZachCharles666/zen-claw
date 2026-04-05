@@ -8,7 +8,6 @@ from zen_claw.agent.tools.result import ToolErrorKind
 from zen_claw.agent.tools.shell import ExecTool
 from zen_claw.agent.tools.spawn import SpawnTool
 from zen_claw.agent.tools.web import WebFetchTool, WebSearchTool
-from zen_claw.bus.events import OutboundMessage
 from zen_claw.cron.service import CronService
 
 
@@ -72,27 +71,21 @@ async def test_spawn_tool_returns_structured_success() -> None:
     assert "spawned" in result.content
 
 
-async def test_message_tool_returns_structured_success_with_callback() -> None:
-    sent: list[OutboundMessage] = []
-
-    async def cb(msg: OutboundMessage) -> None:
-        sent.append(msg)
-
-    tool = MessageTool(send_callback=cb, default_channel="cli", default_chat_id="direct")
+async def test_message_tool_local_send_requires_sidecar() -> None:
+    tool = MessageTool(
+        send_callback=None,
+        default_channel="cli",
+        default_chat_id="direct",
+    )
     result = await tool.execute("hello")
-    assert result.ok is True
-    assert sent and sent[0].content == "hello"
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "message_send_sidecar_not_configured"
 
 
 async def test_message_tool_external_send_requires_sidecar() -> None:
-    sent: list[OutboundMessage] = []
-
-    async def cb(msg: OutboundMessage) -> None:
-        sent.append(msg)
-
-    tool = MessageTool(send_callback=cb, default_channel="telegram", default_chat_id="direct")
+    tool = MessageTool(send_callback=None, default_channel="telegram", default_chat_id="direct")
     result = await tool.execute("hello", trace_id="t-1")
     assert result.ok is False
     assert result.error is not None
     assert result.error.code == "message_send_sidecar_not_configured"
-    assert sent == []

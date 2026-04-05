@@ -254,6 +254,13 @@ class WebSearchTool(Tool):
                 "proxy search requires policy snapshot hash",
                 code="web_search_proxy_policy_snapshot_missing",
             )
+        gateway_signature = str(security_context.get("gateway_signature") or "").strip()
+        if not gateway_signature:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "proxy search requires gateway signature",
+                code="web_search_proxy_gateway_signature_missing",
+            )
         headers = {"Content-Type": "application/json"}
         payload = {
             "query": query,
@@ -261,6 +268,7 @@ class WebSearchTool(Tool):
             "api_key": self.api_key,
             "security_context": security_context,
             "policy_snapshot": policy_snapshot,
+            "gateway_signature": gateway_signature,
             "gateway_meta": {
                 "gateway_instance": str(security_context.get("gateway_instance") or gateway_instance_id()),
                 "policy_snapshot_hash": policy_snapshot_hash,
@@ -552,6 +560,13 @@ class WebFetchTool(Tool):
                 "proxy fetch requires policy snapshot hash",
                 code="web_fetch_proxy_policy_snapshot_missing",
             )
+        gateway_signature = str(security_context.get("gateway_signature") or "").strip()
+        if not gateway_signature:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "proxy fetch requires gateway signature",
+                code="web_fetch_proxy_gateway_signature_missing",
+            )
         headers = {"Content-Type": "application/json"}
 
         payload = {
@@ -559,6 +574,7 @@ class WebFetchTool(Tool):
             "max_bytes": max_chars,
             "security_context": security_context,
             "policy_snapshot": policy_snapshot,
+            "gateway_signature": gateway_signature,
             "gateway_meta": {
                 "gateway_instance": str(security_context.get("gateway_instance") or gateway_instance_id()),
                 "policy_snapshot_hash": policy_snapshot_hash,

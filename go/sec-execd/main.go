@@ -26,9 +26,13 @@ import (
 )
 
 type execRequest struct {
-	Command        string `json:"command"`
-	WorkingDir     string `json:"working_dir"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	Command          string                 `json:"command"`
+	WorkingDir       string                 `json:"working_dir"`
+	TimeoutSeconds   int                    `json:"timeout_seconds"`
+	SecurityContext  securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta      gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	GatewaySignature string                 `json:"gateway_signature,omitempty"`
 }
 
 type securityContextPayload struct {
@@ -62,13 +66,14 @@ type execResponse struct {
 }
 
 type sessionStartRequest struct {
-	Command         string                 `json:"command"`
-	WorkingDir      string                 `json:"working_dir"`
-	TimeoutSeconds  int                    `json:"timeout_seconds"`
-	PTY             bool                   `json:"pty,omitempty"`
-	SecurityContext securityContextPayload `json:"security_context,omitempty"`
-	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
-	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	Command          string                 `json:"command"`
+	WorkingDir       string                 `json:"working_dir"`
+	TimeoutSeconds   int                    `json:"timeout_seconds"`
+	PTY              bool                   `json:"pty,omitempty"`
+	SecurityContext  securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta      gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	GatewaySignature string                 `json:"gateway_signature,omitempty"`
 }
 
 type sessionStartResponse struct {
@@ -108,9 +113,10 @@ type sessionListResponse struct {
 }
 
 type sessionListRequest struct {
-	SecurityContext securityContextPayload `json:"security_context,omitempty"`
-	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
-	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	SecurityContext  securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta      gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	GatewaySignature string                 `json:"gateway_signature,omitempty"`
 }
 
 type sessionKillResponse struct {
@@ -134,10 +140,11 @@ type sessionReadResponse struct {
 }
 
 type sessionWriteRequest struct {
-	Input           string                 `json:"input"`
-	SecurityContext securityContextPayload `json:"security_context,omitempty"`
-	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
-	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	Input            string                 `json:"input"`
+	SecurityContext  securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta      gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	GatewaySignature string                 `json:"gateway_signature,omitempty"`
 }
 
 type sessionWriteResponse struct {
@@ -150,10 +157,11 @@ type sessionWriteResponse struct {
 }
 
 type sessionSignalRequest struct {
-	Signal          string                 `json:"signal"`
-	SecurityContext securityContextPayload `json:"security_context,omitempty"`
-	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
-	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	Signal           string                 `json:"signal"`
+	SecurityContext  securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta      gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	GatewaySignature string                 `json:"gateway_signature,omitempty"`
 }
 
 type sessionSignalResponse struct {
@@ -167,19 +175,21 @@ type sessionSignalResponse struct {
 }
 
 type sessionResizeRequest struct {
-	Rows            int                    `json:"rows"`
-	Cols            int                    `json:"cols"`
-	SecurityContext securityContextPayload `json:"security_context,omitempty"`
-	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
-	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	Rows             int                    `json:"rows"`
+	Cols             int                    `json:"cols"`
+	SecurityContext  securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta      gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	GatewaySignature string                 `json:"gateway_signature,omitempty"`
 }
 
 type sessionReadRequest struct {
-	Cursor          int                    `json:"cursor,omitempty"`
-	MaxBytes        int                    `json:"max_bytes,omitempty"`
-	SecurityContext securityContextPayload `json:"security_context,omitempty"`
-	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
-	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	Cursor           int                    `json:"cursor,omitempty"`
+	MaxBytes         int                    `json:"max_bytes,omitempty"`
+	SecurityContext  securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot   map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta      gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+	GatewaySignature string                 `json:"gateway_signature,omitempty"`
 }
 
 type sessionResizeResponse struct {
@@ -385,6 +395,7 @@ func validateSessionEnvelope(
 	traceID string,
 	sec securityContextPayload,
 	gateway gatewayMetaPayload,
+	gatewaySignature string,
 ) (string, string) {
 	if strings.TrimSpace(traceID) == "" {
 		return "trace_required", "trace_id is required"
@@ -394,6 +405,12 @@ func validateSessionEnvelope(
 	}
 	if strings.TrimSpace(gateway.PolicySnapshotHash) == "" {
 		return "policy_snapshot_missing", "policy snapshot hash is required"
+	}
+	if strings.TrimSpace(gateway.RequestHash) == "" {
+		return "request_hash_missing", "gateway request hash is required"
+	}
+	if strings.TrimSpace(gatewaySignature) == "" {
+		return "gateway_signature_required", "gateway signature is required"
 	}
 	return "", ""
 }
@@ -471,6 +488,22 @@ func handleExec(w http.ResponseWriter, r *http.Request, cfg *serverConfig) {
 			OK:           false,
 			ErrorCode:    "invalid_json",
 			ErrorMessage: err.Error(),
+		})
+		return
+	}
+	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		logAudit(auditPayload{
+			Event:       "exec.request.denied",
+			TraceID:     traceID,
+			PolicyCode:  code,
+			PolicyScope: "gateway_envelope",
+			ErrorKind:   "permission",
+			Message:     msg,
+		})
+		writeJSON(w, http.StatusForbidden, execResponse{
+			OK:           false,
+			ErrorCode:    code,
+			ErrorMessage: msg,
 		})
 		return
 	}
@@ -634,7 +667,7 @@ func handleSessionStart(w http.ResponseWriter, r *http.Request, cfg *serverConfi
 		})
 		return
 	}
-	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
 		logAudit(auditPayload{
 			Event:              "exec.session.denied",
 			TraceID:            traceID,
@@ -765,7 +798,7 @@ func handleSessionList(w http.ResponseWriter, r *http.Request, cfg *serverConfig
 			return
 		}
 	}
-	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
 		logAudit(auditPayload{
 			Event:              "exec.session.list.denied",
 			TraceID:            traceID,
@@ -857,7 +890,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 				return
 			}
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionStartResponse{
 				OK:           false,
 				ErrorCode:    code,
@@ -930,7 +963,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 				return
 			}
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionKillResponse{
 				OK:           false,
 				SessionID:    sessionID,
@@ -1022,7 +1055,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionWriteResponse{
 				OK:           false,
 				SessionID:    sessionID,
@@ -1132,7 +1165,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionSignalResponse{
 				OK:           false,
 				SessionID:    sessionID,
@@ -1249,7 +1282,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionResizeResponse{
 				OK:           false,
 				SessionID:    sessionID,
@@ -1361,7 +1394,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 				return
 			}
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionReadResponse{
 				OK:           false,
 				SessionID:    sessionID,

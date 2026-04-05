@@ -205,12 +205,20 @@ class ExecTool(Tool):
                 "exec sidecar requires policy snapshot hash",
                 code="exec_sidecar_policy_snapshot_missing",
             )
+        gateway_signature = str(sec.get("gateway_signature") or "").strip()
+        if not gateway_signature:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "exec sidecar requires gateway signature",
+                code="exec_sidecar_gateway_signature_missing",
+            )
         payload = {
             "command": command,
             "working_dir": cwd,
             "timeout_seconds": self.timeout,
             "security_context": sec,
             "policy_snapshot": policy_snapshot,
+            "gateway_signature": gateway_signature,
         }
         if env is not None:
             payload["env"] = env

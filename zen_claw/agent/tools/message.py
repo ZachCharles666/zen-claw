@@ -7,7 +7,7 @@ from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.connector_sidecar import ConnectorSidecarClient
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.bus.events import OutboundMessage
-from zen_claw.observability.trace import TraceContext
+from zen_claw.security_context import ensure_security_envelope
 
 
 class MessageTool(Tool):
@@ -87,63 +87,44 @@ class MessageTool(Tool):
 
         trace_id = str(kwargs.get("trace_id") or self._trace_id or "").strip()
         target_channel = str(channel or "").strip().lower()
-        security_context = dict(kwargs.get("security_context") or {})
-        if target_channel and target_channel not in self._trusted_local_channels:
-            if not self._connector_sidecar.proxy_url:
-                return ToolResult.failure(
-                    ToolErrorKind.RUNTIME,
-                    "External message sending requires connector sidecar configuration",
-                    code="message_send_sidecar_not_configured",
-                )
-            request_payload = self._connector_sidecar.build_request_payload(
-                target_url=f"channel://{target_channel}/{chat_id}",
-                method="POST",
-                headers={"Content-Type": "application/json"},
-                body=json.dumps(
-                    {
-                        "channel": channel,
-                        "chat_id": chat_id,
-                        "content": content,
-                        "reply_to": kwargs.get("reply_to"),
-                        "media": list(kwargs.get("media") or []),
-                        "metadata": dict(kwargs.get("metadata") or {}),
-                    },
-                    ensure_ascii=False,
-                ),
-                connector_name=target_channel,
-                action="connector.message.send",
-                target_resource=f"channel.{target_channel}.message",
-                security_context={
-                    **security_context,
-                    "channel": str(security_context.get("channel") or target_channel).strip().lower(),
-                    "chat_id": str(security_context.get("chat_id") or chat_id).strip(),
-                },
-            )
-            return await self._connector_sidecar.execute_request(
-                request_payload=request_payload,
-                trace_id=trace_id,
-            )
-
-        if not self._send_callback:
+        if not self._connector_sidecar.proxy_url:
             return ToolResult.failure(
                 ToolErrorKind.RUNTIME,
-                "Message sending not configured",
-                code="message_send_not_configured",
+                "Message sending requires connector sidecar configuration",
+                code="message_send_sidecar_not_configured",
             )
-
-        msg = OutboundMessage(
-            channel=channel,
-            chat_id=chat_id,
-            content=content,
-            metadata=TraceContext.child_metadata(self._trace_id or kwargs.get("trace_id")),
+        security_context = ensure_security_envelope(
+            {
+                **dict(kwargs.get("security_context") or {}),
+                "trace_id": trace_id,
+                "channel": str((kwargs.get("security_context") or {}).get("channel") or target_channel)
+                .strip()
+                .lower(),
+                "chat_id": str((kwargs.get("security_context") or {}).get("chat_id") or chat_id).strip(),
+            }
         )
-
-        try:
-            await self._send_callback(msg)
-            return ToolResult.success(f"Message sent to {channel}:{chat_id}")
-        except Exception as e:
-            return ToolResult.failure(
-                ToolErrorKind.RETRYABLE,
-                f"Error sending message: {str(e)}",
-                code="message_send_failed",
-            )
+        request_payload = self._connector_sidecar.build_request_payload(
+            target_url=f"channel://{target_channel}/{chat_id}",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(
+                {
+                    "channel": channel,
+                    "chat_id": chat_id,
+                    "content": content,
+                    "reply_to": kwargs.get("reply_to"),
+                    "media": list(kwargs.get("media") or []),
+                    "metadata": dict(kwargs.get("metadata") or {}),
+                    "trusted_local_target": bool(target_channel in self._trusted_local_channels),
+                },
+                ensure_ascii=False,
+            ),
+            connector_name=target_channel,
+            action="connector.message.send",
+            target_resource=f"channel.{target_channel}.message",
+            security_context=security_context,
+        )
+        return await self._connector_sidecar.execute_request(
+            request_payload=request_payload,
+            trace_id=trace_id,
+        )

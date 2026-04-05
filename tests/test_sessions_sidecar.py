@@ -694,7 +694,7 @@ def test_agent_loop_sidecar_sessions_spawn_write_read_workflow(tmp_path, monkeyp
         tool_policy_config=ToolPolicyConfig(
             exec_allowed_working_dirs=[str(tmp_path)],
             exec_allowed_command_prefixes=["cat"],
-            sessions_allowed_session_ops=["read", "write"],
+            sessions_allowed_session_ops=["spawn", "read", "write"],
         ),
         enable_planning=False,
         max_reflections=1,

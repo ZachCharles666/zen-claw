@@ -60,5 +60,5 @@ async def test_channel_role_admin_clears_role_scope(tmp_path: Path, monkeypatch)
     result = await loop.tools.execute("exec", {})
     assert result.ok is False
     assert result.error is not None
-    assert result.error.code == "resource_scope_exec_prefix"
-    assert result.meta.get("policy_scope") == "resource"
+    assert result.error.code == "gateway_envelope_required"
+    assert result.meta.get("policy_scope") == "gateway"

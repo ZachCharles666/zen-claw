@@ -9,6 +9,10 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from zen_claw.utils.crypto import sign_data, verify_signature
+
+GATEWAY_ENVELOPE_VERSION = 1
+
 
 def stable_json_bytes(payload: Any) -> bytes:
     """Serialize payload deterministically for hashing/signing."""
@@ -31,6 +35,153 @@ def gateway_instance_id() -> str:
         or "local-gateway"
     ).strip()
     return raw or "local-gateway"
+
+
+def _canonical_gateway_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
+    canonical = dict(envelope)
+    canonical.pop("gateway_signature", None)
+    gateway_meta = canonical.get("gateway_meta")
+    if isinstance(gateway_meta, dict):
+        canonical["gateway_meta"] = dict(gateway_meta)
+        canonical["gateway_meta"].pop("request_hash", None)
+    return canonical
+
+
+def sign_gateway_envelope(envelope: dict[str, Any]) -> str:
+    """Return gateway envelope signature."""
+    return sign_data(stable_json_bytes(_canonical_gateway_envelope(envelope)).decode("utf-8"))
+
+
+def verify_gateway_envelope(envelope: dict[str, Any]) -> tuple[bool, str]:
+    """Verify gateway request hash and signature integrity."""
+    if not isinstance(envelope, dict):
+        return False, "envelope_not_object"
+    gateway_signature = str(envelope.get("gateway_signature") or "").strip()
+    gateway_meta = dict(envelope.get("gateway_meta") or {})
+    request_hash = str(gateway_meta.get("request_hash") or "").strip()
+    expected_hash = stable_json_hash(_canonical_gateway_envelope(envelope))
+    if not gateway_signature:
+        return False, "signature_missing"
+    if not request_hash:
+        return False, "request_hash_missing"
+    if request_hash != expected_hash:
+        return False, "request_hash_mismatch"
+    canonical = stable_json_bytes(_canonical_gateway_envelope(envelope)).decode("utf-8")
+    if not verify_signature(canonical, gateway_signature):
+        return False, "signature_invalid"
+    return True, ""
+
+
+def extract_security_context(envelope_or_context: dict[str, Any] | None) -> dict[str, Any]:
+    """Return normalized inner security_context from either envelope or legacy flat context."""
+    raw = dict(envelope_or_context or {})
+    sec = dict(raw.get("security_context") or {})
+    if sec:
+        return sec
+    legacy_keys = {
+        "trace_id",
+        "channel",
+        "sender_id",
+        "chat_id",
+        "tenant_id",
+        "workspace_id",
+        "agent_profile",
+        "role",
+        "trust_level",
+        "origin_surface",
+        "channel_role",
+        "workspace_path",
+        "gateway_instance",
+        "dev_profile",
+        "trusted_local_only",
+        "policy_snapshot",
+        "policy_snapshot_hash",
+        "subject_type",
+        "trust_tier",
+        "capability_grants",
+    }
+    return {key: raw[key] for key in legacy_keys if key in raw}
+
+
+def ensure_security_envelope(
+    envelope_or_context: dict[str, Any] | None,
+    *,
+    trace_id: str = "",
+    subject_type: str = "",
+    trust_tier: str = "",
+    capability_grants: list[str] | None = None,
+) -> dict[str, Any]:
+    """Normalize a legacy flat context or partial envelope into a signed gateway envelope."""
+    raw = dict(envelope_or_context or {})
+    sec = extract_security_context(raw)
+    sec_trace_id = str(trace_id or sec.get("trace_id") or raw.get("trace_id") or "").strip()
+    policy_snapshot = dict(
+        raw.get("policy_snapshot")
+        or sec.get("policy_snapshot")
+        or raw.get("security_context", {}).get("policy_snapshot", {})
+        or {}
+    )
+    if policy_snapshot and "policy_snapshot_hash" not in policy_snapshot:
+        policy_snapshot["policy_snapshot_hash"] = stable_json_hash(policy_snapshot)
+    policy_snapshot_hash = str(
+        raw.get("policy_snapshot_hash")
+        or sec.get("policy_snapshot_hash")
+        or policy_snapshot.get("policy_snapshot_hash")
+        or stable_json_hash(policy_snapshot)
+    )
+    grants = capability_grants
+    if grants is None:
+        if "capability_grants" in raw:
+            grants = raw.get("capability_grants")
+        elif "capability_grants" in sec:
+            grants = sec.get("capability_grants")
+        else:
+            grants = ["*"]
+    envelope = {
+        "trace_id": sec_trace_id,
+        "security_context": {
+            **sec,
+            "trace_id": sec_trace_id,
+            "policy_snapshot": policy_snapshot,
+            "policy_snapshot_hash": policy_snapshot_hash,
+            "gateway_instance": str(
+                sec.get("gateway_instance")
+                or raw.get("gateway_instance")
+                or gateway_instance_id()
+            ).strip(),
+            "subject_type": str(subject_type or raw.get("subject_type") or sec.get("subject_type") or "agent").strip().lower() or "agent",
+            "trust_tier": str(trust_tier or raw.get("trust_tier") or sec.get("trust_tier") or sec.get("trust_level") or "").strip().lower(),
+            "capability_grants": list(grants or []),
+        },
+        "policy_snapshot": policy_snapshot,
+        "policy_snapshot_hash": policy_snapshot_hash,
+        "gateway_meta": {
+            "gateway_instance": str(
+                raw.get("gateway_meta", {}).get("gateway_instance")
+                or sec.get("gateway_instance")
+                or raw.get("gateway_instance")
+                or gateway_instance_id()
+            ).strip(),
+            "policy_snapshot_hash": policy_snapshot_hash,
+            "envelope_version": GATEWAY_ENVELOPE_VERSION,
+        },
+        "subject_type": str(subject_type or raw.get("subject_type") or sec.get("subject_type") or "agent").strip().lower() or "agent",
+        "trust_tier": str(trust_tier or raw.get("trust_tier") or sec.get("trust_tier") or sec.get("trust_level") or "").strip().lower(),
+        "capability_grants": list(grants or []),
+    }
+    flattened = {
+        **dict(envelope["security_context"]),
+        "policy_snapshot": dict(policy_snapshot),
+        "policy_snapshot_hash": policy_snapshot_hash,
+        "gateway_instance": str(envelope["gateway_meta"]["gateway_instance"]),
+        "subject_type": envelope["subject_type"],
+        "trust_tier": envelope["trust_tier"],
+        "capability_grants": list(envelope["capability_grants"]),
+    }
+    envelope.update(flattened)
+    envelope["gateway_meta"]["request_hash"] = stable_json_hash(_canonical_gateway_envelope(envelope))
+    envelope["gateway_signature"] = sign_gateway_envelope(envelope)
+    return envelope
 
 
 @dataclass(frozen=True)
@@ -103,7 +254,7 @@ def build_security_context(
     trusted_local_only: bool = False,
     policy_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return a normalized security context dict."""
+    """Return a signed gateway security envelope."""
     ctx = SecurityContext(
         trace_id=str(trace_id or "").strip(),
         channel=str(channel or "").strip().lower(),
@@ -122,14 +273,14 @@ def build_security_context(
         trusted_local_only=bool(trusted_local_only),
         policy_snapshot=dict(policy_snapshot or {}),
     )
-    return ctx.to_dict()
+    return ensure_security_envelope(ctx.to_dict())
 
 
 def resource_scope_for_security_context(
     security_context: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Project the request context into a stable resource scope."""
-    ctx = dict(security_context or {})
+    ctx = extract_security_context(security_context)
     return {
         "tenant_id": str(ctx.get("tenant_id") or "").strip().lower(),
         "workspace_id": str(ctx.get("workspace_id") or "").strip(),

@@ -64,24 +64,7 @@ class _FakeSpawnManager:
         return "spawned"
 
 
-def test_subagent_sensitive_override_requires_env(monkeypatch) -> None:
-    policy = ToolPolicyConfig()
-    policy.allow_subagent_sensitive_tools = True
-    sub = SubagentManager(
-        provider=_DummyProvider(),  # type: ignore[arg-type]
-        workspace=Path("."),
-        bus=_DummyBus(),  # type: ignore[arg-type]
-        tool_policy_config=policy,
-    )
-
-    monkeypatch.delenv("zen-claw_ALLOW_SUBAGENT_SENSITIVE_TOOLS", raising=False)
-    assert sub._allow_sensitive_override_enabled() is False
-
-    monkeypatch.setenv("zen-claw_ALLOW_SUBAGENT_SENSITIVE_TOOLS", "true")
-    assert sub._allow_sensitive_override_enabled() is True
-
-
-async def test_subagent_sensitive_override_without_env_still_denies_spawn(monkeypatch) -> None:
+async def test_subagent_sensitive_override_config_no_longer_disables_hard_deny() -> None:
     policy = ToolPolicyConfig()
     policy.default_deny_tools = []
     policy.allow_subagent_sensitive_tools = True
@@ -94,7 +77,6 @@ async def test_subagent_sensitive_override_without_env_still_denies_spawn(monkey
         bus=_DummyBus(),  # type: ignore[arg-type]
         tool_policy_config=policy,
     )
-    monkeypatch.delenv("zen-claw_ALLOW_SUBAGENT_SENSITIVE_TOOLS", raising=False)
 
     reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
     reg.register(SpawnTool(manager=_FakeSpawnManager()))  # type: ignore[arg-type]
@@ -104,3 +86,17 @@ async def test_subagent_sensitive_override_without_env_still_denies_spawn(monkey
     assert result.ok is False
     assert result.error is not None
     assert result.error.code == "tool_policy_denied"
+
+
+def test_subagent_hard_isolation_prompt_and_registry_remove_local_sensitive_tools(tmp_path: Path) -> None:
+    policy = ToolPolicyConfig()
+    sub = SubagentManager(
+        provider=_DummyProvider(),  # type: ignore[arg-type]
+        workspace=tmp_path,
+        bus=_DummyBus(),  # type: ignore[arg-type]
+        tool_policy_config=policy,
+    )
+
+    prompt = sub._build_subagent_prompt("research")
+    assert "Read or write local workspace files" in prompt
+    assert "Execute local shell commands" in prompt

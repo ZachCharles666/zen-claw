@@ -77,6 +77,38 @@ function isApproved(req, method, routePath, rawBody) {
   return true;
 }
 
+function validateGatewayEnvelope(payload) {
+  const req = payload && typeof payload === "object" ? payload : {};
+  const securityContext = req.security_context && typeof req.security_context === "object" ? req.security_context : {};
+  const gatewayMeta = req.gateway_meta && typeof req.gateway_meta === "object" ? req.gateway_meta : {};
+  const gatewaySignature = String(req.gateway_signature || "").trim();
+  if (!gatewaySignature) {
+    return { ok: false, code: "gateway_signature_required", error: "gateway signature is required" };
+  }
+  const requiredSecurity = [
+    "channel",
+    "sender_id",
+    "chat_id",
+    "tenant_id",
+    "workspace_id",
+    "agent_profile",
+    "role",
+    "trust_level",
+    "origin_surface",
+  ];
+  const missing = requiredSecurity.filter((key) => !String(securityContext[key] || "").trim());
+  if (missing.length) {
+    return { ok: false, code: "security_context_missing", error: "security_context missing: " + missing.join(", ") };
+  }
+  if (!String(gatewayMeta.policy_snapshot_hash || "").trim()) {
+    return { ok: false, code: "policy_snapshot_missing", error: "policy snapshot hash is required" };
+  }
+  if (!String(gatewayMeta.request_hash || "").trim()) {
+    return { ok: false, code: "request_hash_missing", error: "gateway request hash is required" };
+  }
+  return { ok: true };
+}
+
 const bind = parseBind(process.env.BROWSER_SIDECAR_BIND);
 const approvalToken = String(process.env.BROWSER_SIDECAR_TOKEN || "");
 const approvalSecret = String(process.env.BROWSER_SIDECAR_SECRET || "");
@@ -156,6 +188,10 @@ const server = http.createServer(async (req, res) => {
     const payload = safeJsonParse(body);
     if (!payload || typeof payload !== "object") {
       return sendJson(res, 400, { ok: false, error: "invalid json", error_code: "invalid_json" });
+    }
+    const envelope = validateGatewayEnvelope(payload);
+    if (!envelope.ok) {
+      return sendJson(res, 403, { ok: false, error: envelope.error, error_code: envelope.code });
     }
 
     const action = String(payload.action || "").trim().toLowerCase();

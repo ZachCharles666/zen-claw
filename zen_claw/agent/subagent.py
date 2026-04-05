@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -17,21 +16,25 @@ if TYPE_CHECKING:
 
 from loguru import logger
 
-from zen_claw.agent.tools.filesystem import ListDirTool, ReadFileTool, WriteFileTool
 from zen_claw.agent.tools.policy import ToolPolicyEngine
 from zen_claw.agent.tools.registry import ToolRegistry
 from zen_claw.agent.tools.result import ToolResult
-from zen_claw.agent.tools.shell import ExecTool
 from zen_claw.agent.tools.web import WebFetchTool, WebSearchTool
 from zen_claw.bus.events import InboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider
+from zen_claw.security_context import ensure_security_envelope
 
 SUBAGENT_HARD_DENY_TOOLS: set[str] = {
     "spawn",
     "message",
     "cron",
+    "exec",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_dir",
     "sessions_spawn",
     "sessions_list",
     "sessions_kill",
@@ -160,22 +163,6 @@ class SubagentManager:
                 self.tool_policy_config.kill_switch_enabled,
                 reason=self.tool_policy_config.kill_switch_reason,
             )
-            allowed_dir = self.workspace if self.restrict_to_workspace else None
-            tools.register(ReadFileTool(allowed_dir=allowed_dir))
-            tools.register(WriteFileTool(allowed_dir=allowed_dir))
-            tools.register(ListDirTool(allowed_dir=allowed_dir))
-            tools.register(
-                ExecTool(
-                    working_dir=str(self.workspace),
-                    timeout=self.exec_config.timeout,
-                    restrict_to_workspace=self.restrict_to_workspace,
-                    mode=self.exec_config.mode,
-                    sidecar_url=self.exec_config.sidecar_url,
-                    sidecar_approval_token=self.exec_config.sidecar_approval_token.get_secret_value(),
-                    sidecar_fallback_to_local=self.exec_config.sidecar_fallback_to_local,
-                    sidecar_healthcheck=self.exec_config.sidecar_healthcheck,
-                )
-            )
             tools.register(
                 WebSearchTool(
                     api_key=self.brave_api_key,
@@ -196,6 +183,34 @@ class SubagentManager:
                     proxy_approval_token=self.web_fetch_config.proxy_approval_token.get_secret_value(),
                     proxy_healthcheck=self.web_fetch_config.proxy_healthcheck,
                     proxy_fallback_to_local=self.web_fetch_config.proxy_fallback_to_local,
+                )
+            )
+            tools.set_request_context(
+                ensure_security_envelope(
+                    {
+                        "trace_id": trace_id,
+                        "channel": origin["channel"],
+                        "sender_id": "subagent",
+                        "chat_id": origin["chat_id"],
+                        "tenant_id": "default",
+                        "workspace_id": str(self.workspace.resolve()),
+                        "agent_profile": "subagent",
+                        "role": "subagent",
+                        "channel_role": "agent",
+                        "trust_level": "isolated",
+                        "origin_surface": "subagent",
+                        "workspace_path": str(self.workspace.resolve()),
+                        "policy_snapshot": {
+                            "production_hardening": bool(
+                                self.tool_policy_config.production_hardening
+                            ),
+                            "allow_subagent_sensitive_tools": False,
+                        },
+                        "dev_profile": False,
+                    },
+                    subject_type="subagent",
+                    trust_tier="isolated",
+                    capability_grants=["network.search", "network.fetch"],
                 )
             )
             self._apply_subagent_policy(tools)
@@ -358,14 +373,14 @@ You are a subagent spawned by the main agent to complete a specific task.
 4. Be concise but informative in your findings{skills_info}
 
 ## What You Can Do
-- Read and write files in the workspace
-- Execute shell commands
 - Search the web and fetch web pages
 - Complete the task thoroughly
 
 ## What You Cannot Do
 - Send messages directly to users (no message tool available)
 - Spawn other subagents
+- Read or write local workspace files
+- Execute local shell commands
 - Access the main agent's conversation history
 
 ## Workspace
@@ -384,36 +399,7 @@ When you have completed the task, provide a clear summary of your findings or ac
             allow=self.tool_policy_config.subagent.allow,
             deny=self.tool_policy_config.subagent.deny,
         )
-        allow_sensitive = (
-            self.tool_policy_config.allow_subagent_sensitive_tools
-            and self._allow_sensitive_override_enabled()
+        tools.set_policy_scope(
+            "subagent_hard_deny",
+            deny=SUBAGENT_HARD_DENY_TOOLS,
         )
-        if not allow_sensitive:
-            # Hard guardrail: these tools stay denied even if allowlisted by config.
-            tools.set_policy_scope(
-                "subagent_hard_deny",
-                deny=SUBAGENT_HARD_DENY_TOOLS,
-            )
-        elif self.tool_policy_config.allow_subagent_sensitive_tools:
-            logger.warning(
-                "Subagent hard guardrail disabled by explicit override "
-                + TraceContext.event_text(
-                    "subagent.guardrail.disabled",
-                    None,
-                    policy_scope="subagent_hard_deny",
-                    policy_code="allow_subagent_sensitive_tools_override",
-                    error_kind="permission",
-                    retryable=False,
-                )
-            )
-
-    def _allow_sensitive_override_enabled(self) -> bool:
-        """
-        Require explicit env confirmation before allowing sensitive subagent tools.
-
-        This prevents accidental config-only disabling of guardrails.
-        """
-        if not self.tool_policy_config.allow_subagent_sensitive_tools:
-            return False
-        token = os.getenv("zen-claw_ALLOW_SUBAGENT_SENSITIVE_TOOLS", "").strip().lower()
-        return token in {"1", "true", "yes", "on"}
