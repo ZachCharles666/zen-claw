@@ -8,6 +8,7 @@ import pytest
 from zen_claw.agent.tools._url_guard import is_domain_blocked
 from zen_claw.agent.tools.browser import BrowserOpenTool
 from zen_claw.agent.tools.result import ToolErrorKind
+from zen_claw.security_context import build_security_context
 
 # ---------------------------------------------------------------------------
 # _url_guard unit tests
@@ -60,6 +61,7 @@ def _make_tool(blocked_domains: list[str]) -> BrowserOpenTool:
     return BrowserOpenTool(
         mode="sidecar",
         sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
         blocked_domains=blocked_domains,
     )
 
@@ -69,6 +71,22 @@ def _mock_response(data: dict, status: int = 200) -> MagicMock:
     resp.status_code = status
     resp.json.return_value = data
     return resp
+
+
+def _security_context(trace_id: str) -> dict:
+    return build_security_context(
+        trace_id=trace_id,
+        channel="cli",
+        sender_id="tester",
+        chat_id="direct",
+        tenant_id="default",
+        workspace_id="workspace",
+        agent_profile="default",
+        role="admin",
+        trust_level="trusted_local",
+        origin_surface="cli",
+        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+    )
 
 
 @pytest.mark.asyncio
@@ -84,7 +102,10 @@ async def test_blocked_final_url_returns_error(monkeypatch):
     mock_client.post = AsyncMock(return_value=sidecar_response)
 
     with patch("zen_claw.agent.tools.browser.httpx.AsyncClient", return_value=mock_client):
-        result = await tool._execute_action({"url": "https://safe.com"}, trace_id="t1")
+        result = await tool._execute_action(
+            {"url": "https://safe.com", "__security_context__": _security_context("t1")},
+            trace_id="t1",
+        )
 
     assert not result.ok
     assert result.error is not None
@@ -106,7 +127,10 @@ async def test_blocked_url_field_returns_error(monkeypatch):
     mock_client.post = AsyncMock(return_value=sidecar_response)
 
     with patch("zen_claw.agent.tools.browser.httpx.AsyncClient", return_value=mock_client):
-        result = await tool._execute_action({"url": "https://safe.com"}, trace_id="t2")
+        result = await tool._execute_action(
+            {"url": "https://safe.com", "__security_context__": _security_context("t2")},
+            trace_id="t2",
+        )
 
     assert not result.ok
     assert result.error.code == "browser_blocked_domain"
@@ -126,7 +150,13 @@ async def test_allowed_final_url_passes_through(monkeypatch):
     mock_client.post = AsyncMock(return_value=sidecar_response)
 
     with patch("zen_claw.agent.tools.browser.httpx.AsyncClient", return_value=mock_client):
-        result = await tool._execute_action({"url": "https://allowed.com/page"}, trace_id="t3")
+        result = await tool._execute_action(
+            {
+                "url": "https://allowed.com/page",
+                "__security_context__": _security_context("t3"),
+            },
+            trace_id="t3",
+        )
 
     assert result.ok
     data = json.loads(result.content)
@@ -147,7 +177,10 @@ async def test_no_blocked_domains_no_check(monkeypatch):
     mock_client.post = AsyncMock(return_value=sidecar_response)
 
     with patch("zen_claw.agent.tools.browser.httpx.AsyncClient", return_value=mock_client):
-        result = await tool._execute_action({"url": "https://anything.com/"}, trace_id="t4")
+        result = await tool._execute_action(
+            {"url": "https://anything.com/", "__security_context__": _security_context("t4")},
+            trace_id="t4",
+        )
 
     assert result.ok
 
@@ -166,6 +199,9 @@ async def test_no_url_in_response_skips_check(monkeypatch):
     mock_client.post = AsyncMock(return_value=sidecar_response)
 
     with patch("zen_claw.agent.tools.browser.httpx.AsyncClient", return_value=mock_client):
-        result = await tool._execute_action({}, trace_id="t5")
+        result = await tool._execute_action(
+            {"__security_context__": _security_context("t5")},
+            trace_id="t5",
+        )
 
     assert result.ok

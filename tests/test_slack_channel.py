@@ -5,10 +5,18 @@ import sys
 import time
 import types
 
+import pytest
+
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.slack import SlackChannel
 from zen_claw.config.schema import SlackConfig
+
+_AUTHORIZED_META = {
+    "trace_id": "trace-auth-1",
+    "outbound_dispatch_authorized": True,
+    "outbound_dispatch_mode": "manager_local_dispatch",
+}
 
 
 def test_slack_channel_passive_mode_without_sdk() -> None:
@@ -22,7 +30,14 @@ def test_slack_channel_passive_mode_without_sdk() -> None:
 
         await ch.start()
         assert ch.is_running is True
-        await ch.send(OutboundMessage(channel="slack", chat_id="C1", content="hello"))
+        await ch.send(
+            OutboundMessage(
+                channel="slack",
+                chat_id="C1",
+                content="hello",
+                metadata=dict(_AUTHORIZED_META),
+            )
+        )
         await ch.stop()
         assert ch.is_running is False
 
@@ -50,11 +65,27 @@ def test_slack_channel_uses_async_client_when_sdk_present(monkeypatch) -> None:
     async def _run() -> None:
         ch = SlackChannel(SlackConfig(enabled=True, bot_token="xoxb-test"), MessageBus())
         await ch.start()
-        await ch.send(OutboundMessage(channel="slack", chat_id="C2", content="ping"))
+        await ch.send(
+            OutboundMessage(
+                channel="slack",
+                chat_id="C2",
+                content="ping",
+                metadata=dict(_AUTHORIZED_META),
+            )
+        )
         assert sent and sent[0]["channel"] == "C2"
         assert sent[0]["text"] == "ping"
         assert isinstance(sent[0].get("blocks"), list)
         await ch.stop()
+
+    asyncio.run(_run())
+
+
+def test_slack_direct_send_blocked_by_guardrail() -> None:
+    async def _run() -> None:
+        ch = SlackChannel(SlackConfig(enabled=True, bot_token="x"), MessageBus())
+        with pytest.raises(RuntimeError, match="authorized dispatch context"):
+            await ch.send(OutboundMessage(channel="slack", chat_id="C1", content="hello"))
 
     asyncio.run(_run())
 

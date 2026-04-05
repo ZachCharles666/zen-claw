@@ -4,7 +4,13 @@ from zen_claw.config.schema import Config
 
 def test_tools_policy_default_values() -> None:
     config = Config()
-    assert config.tools.policy.default_deny_tools == ["exec", "spawn"]
+    assert config.tools.policy.default_deny_tools == [
+        "exec",
+        "spawn",
+        "sessions_spawn",
+        "sessions_write",
+        "sessions_signal",
+    ]
     assert config.tools.policy.kill_switch_enabled is False
     assert config.tools.policy.kill_switch_reason == ""
     assert config.tools.policy.cron_allowed_channels == []
@@ -12,6 +18,8 @@ def test_tools_policy_default_values() -> None:
     assert config.tools.policy.agent.allow == ["*"]
     assert config.tools.policy.subagent.allow is not None
     assert "read_file" in config.tools.policy.subagent.allow
+    assert config.tools.policy.production_hardening is True
+    assert config.tools.policy.legacy_compat is False
 
 
 def test_tools_policy_accepts_camel_case_config_keys() -> None:

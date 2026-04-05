@@ -1,11 +1,14 @@
 """Audit worker — writes structured JSONL audit records for all agent actions."""
 
 import asyncio
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 
 from loguru import logger
+
+from zen_claw.utils.crypto import sign_data, verify_signature
 
 
 class AuditWorker:
@@ -62,11 +65,16 @@ class AuditWorker:
         if path is None:
             return True
 
+        prev_hash = self._latest_record_hash(path)
         record = {
             "ts": datetime.now(tz=timezone.utc).isoformat(),
             "trace_id": trace_id,
+            "prev_hash": prev_hash,
             **turn_data,
         }
+        canonical = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        record["hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        record["signature"] = sign_data(canonical)
 
         try:
             async with self._write_lock:
@@ -93,6 +101,69 @@ class AuditWorker:
     def _append_record(self, path: Path, record: dict) -> None:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def _latest_record_hash(self, path: Path) -> str:
+        if not path.exists():
+            return ""
+        try:
+            with open(path, "rb") as fh:
+                lines = fh.read().splitlines()
+            for line in reversed(lines):
+                if not line.strip():
+                    continue
+                row = json.loads(line.decode("utf-8"))
+                if isinstance(row, dict):
+                    return str(row.get("hash") or "")
+        except Exception:
+            return ""
+        return ""
+
+
+def verify_audit_log(path: Path) -> dict[str, object]:
+    """Verify audit hash chain and signatures for one JSONL log."""
+    if not path.exists():
+        return {"ok": True, "checked": 0, "error": "", "error_index": None}
+    prev_hash = ""
+    checked = 0
+    with open(path, "r", encoding="utf-8") as fh:
+        for idx, line in enumerate(fh):
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                return {"ok": False, "checked": checked, "error": "invalid_record", "error_index": idx}
+            signature = str(row.get("signature") or "")
+            observed_hash = str(row.get("hash") or "")
+            base = dict(row)
+            base.pop("signature", None)
+            base.pop("hash", None)
+            if str(base.get("prev_hash") or "") != prev_hash:
+                return {
+                    "ok": False,
+                    "checked": checked,
+                    "error": "audit hash chain broken",
+                    "error_index": idx,
+                }
+            canonical = json.dumps(base, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            expected_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            if observed_hash != expected_hash:
+                return {
+                    "ok": False,
+                    "checked": checked,
+                    "error": "audit hash mismatch",
+                    "error_index": idx,
+                }
+            if signature and not verify_signature(canonical, signature):
+                return {
+                    "ok": False,
+                    "checked": checked,
+                    "error": "audit signature mismatch",
+                    "error_index": idx,
+                }
+            prev_hash = observed_hash
+            checked += 1
+    return {"ok": True, "checked": checked, "error": "", "error_index": None}
 
 
 def get_isolation_config() -> dict:

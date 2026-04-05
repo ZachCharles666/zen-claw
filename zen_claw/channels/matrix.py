@@ -59,30 +59,36 @@ class MatrixChannel(BaseChannel):
             self._http = None
 
     async def send(self, msg: OutboundMessage) -> None:
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
         if not self.config.access_token:
             logger.warning("Matrix send skipped: access_token not configured")
             return
-        try:
-            if await self._send_via_nio_if_available(msg):
-                return
-            txn_id = f"nano-{int(asyncio.get_running_loop().time() * 1000)}"
-            room_id = quote(msg.chat_id, safe="")
-            txn = quote(txn_id, safe="")
-            encrypted_payload = self._build_encrypted_payload(msg)
-            if encrypted_payload:
-                await self._matrix_put(
-                    f"/_matrix/client/v3/rooms/{room_id}/send/m.room.encrypted/{txn}",
-                    encrypted_payload,
-                )
-            else:
-                payload = self._build_text_payload(msg)
-                await self._matrix_put(
-                    f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}",
-                    payload,
-                )
-            await self._send_media_events(msg)
-        except Exception as exc:
-            logger.warning("Matrix send failed: {}", exc)
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
+            try:
+                if await self._send_via_nio_if_available(msg):
+                    return
+                txn_id = f"nano-{int(asyncio.get_running_loop().time() * 1000)}"
+                room_id = quote(msg.chat_id, safe="")
+                txn = quote(txn_id, safe="")
+                encrypted_payload = self._build_encrypted_payload(msg)
+                if encrypted_payload:
+                    await self._matrix_put(
+                        f"/_matrix/client/v3/rooms/{room_id}/send/m.room.encrypted/{txn}",
+                        encrypted_payload,
+                    )
+                else:
+                    payload = self._build_text_payload(msg)
+                    await self._matrix_put(
+                        f"/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn}",
+                        payload,
+                    )
+                await self._send_media_events(msg)
+            except Exception as exc:
+                logger.warning("Matrix send failed: {}", exc)
 
     async def _sync_loop(self) -> None:
         while self._running and self.config.access_token:
@@ -175,6 +181,7 @@ class MatrixChannel(BaseChannel):
         return resp.json() if resp.content else {}
 
     async def _matrix_put(self, path: str, payload: dict) -> dict:
+        await self._assert_outbound_helper_allowed(helper_name="_matrix_put")
         if not self._http:
             self._http = httpx.AsyncClient(timeout=30.0)
         url = f"{self.config.homeserver.rstrip('/')}{path}"
@@ -191,6 +198,7 @@ class MatrixChannel(BaseChannel):
         return resp.json() if resp.content else {}
 
     async def _matrix_post_raw(self, path: str, content: bytes, content_type: str) -> dict:
+        await self._assert_outbound_helper_allowed(helper_name="_matrix_post_raw_upload")
         if not self._http:
             self._http = httpx.AsyncClient(timeout=30.0)
         url = f"{self.config.homeserver.rstrip('/')}{path}"
@@ -282,6 +290,11 @@ class MatrixChannel(BaseChannel):
             return False
 
     async def _send_media_events(self, msg: OutboundMessage) -> None:
+        await self._assert_outbound_helper_allowed(
+            helper_name="_send_media_events",
+            trace_id=msg.trace_id,
+            msg=msg,
+        )
         for media in msg.media:
             await self._send_media_event(msg.chat_id, media)
 

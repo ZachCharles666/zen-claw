@@ -743,6 +743,7 @@ def _print_effective_tool_backends(config) -> None:
     exec_cfg = config.tools.effective_exec()
     search_cfg = config.tools.effective_search()
     fetch_cfg = config.tools.effective_fetch()
+    connector_cfg = config.tools.network.connector
     browser_cfg = config.tools.effective_browser()
     hardening = config.tools.policy.production_hardening
 
@@ -762,6 +763,7 @@ def _print_effective_tool_backends(config) -> None:
         f"  web_fetch: mode={fetch_cfg.mode}, healthcheck={fetch_cfg.proxy_healthcheck}, "
         f"fallbackToLocal={fetch_cfg.proxy_fallback_to_local}"
     )
+    console.print(f"  connector_write: mode={connector_cfg.mode}")
     console.print(
         f"  browser: mode={browser_cfg.mode}, healthcheck={browser_cfg.sidecar_healthcheck}, "
         f"fallbackToOff={browser_cfg.sidecar_fallback_to_off}, maxSteps={browser_cfg.max_steps}"
@@ -1101,6 +1103,7 @@ def gateway(
     exec_cfg = config.tools.effective_exec()
     search_cfg = config.tools.effective_search()
     fetch_cfg = config.tools.effective_fetch()
+    connector_cfg = config.tools.network.connector
     browser_cfg = config.tools.effective_browser()
     agent = AgentLoop(
         bus=bus,
@@ -1117,6 +1120,7 @@ def gateway(
         brave_api_key=search_cfg.api_key or None,
         web_search_config=search_cfg,
         web_fetch_config=fetch_cfg,
+        connector_config=connector_cfg,
         browser_config=browser_cfg,
         exec_config=exec_cfg,
         tool_policy_config=config.tools.policy,
@@ -1284,6 +1288,10 @@ def gateway(
         chaos_enabled=node_chaos_enabled,
         chaos_fail_every=node_chaos_fail_every,
         chaos_channels=node_chaos_channel,
+        connector_proxy_url=config.tools.network.connector.proxy_url,
+        connector_approval_mode=config.tools.network.connector.sidecar_approval_mode,
+        connector_approval_token=config.tools.network.connector.sidecar_approval_token.get_secret_value(),
+        trusted_local_channels=list(config.tools.policy.trusted_local_channels),
     )
 
     if channels.enabled_channels:
@@ -1387,6 +1395,7 @@ def _run_agent_cli(
     exec_cfg = config.tools.effective_exec()
     search_cfg = config.tools.effective_search()
     fetch_cfg = config.tools.effective_fetch()
+    connector_cfg = config.tools.network.connector
     browser_cfg = config.tools.effective_browser()
 
     agent_loop = AgentLoop(
@@ -1408,6 +1417,7 @@ def _run_agent_cli(
         brave_api_key=search_cfg.api_key or None,
         web_search_config=search_cfg,
         web_fetch_config=fetch_cfg,
+        connector_config=connector_cfg,
         browser_config=browser_cfg,
         exec_config=exec_cfg,
         tool_policy_config=config.tools.policy,

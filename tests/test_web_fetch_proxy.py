@@ -2,6 +2,7 @@ import json
 
 from zen_claw.agent.tools.result import ToolErrorKind
 from zen_claw.agent.tools.web import WebFetchTool
+from zen_claw.security_context import build_security_context
 
 
 class _FakeResponse:
@@ -32,9 +33,25 @@ class _FakeClient:
     async def get(self, url: str) -> _FakeResponse:
         return self._health
 
-    async def post(self, url: str, headers: dict, json: dict) -> _FakeResponse:
+    async def post(self, url: str, headers: dict, json: dict | None = None, content: bytes | None = None) -> _FakeResponse:
         self.last_headers = headers
         return self._response
+
+
+def _security_context(trace_id: str) -> dict:
+    return build_security_context(
+        trace_id=trace_id,
+        channel="cli",
+        sender_id="tester",
+        chat_id="direct",
+        tenant_id="default",
+        workspace_id="workspace",
+        agent_profile="default",
+        role="admin",
+        trust_level="trusted_local",
+        origin_surface="cli",
+        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+    )
 
 
 async def test_web_fetch_proxy_success(monkeypatch) -> None:
@@ -48,8 +65,12 @@ async def test_web_fetch_proxy_success(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, payload))
     monkeypatch.setattr("zen_claw.agent.tools.web.httpx.AsyncClient", lambda timeout: fake)
 
-    tool = WebFetchTool(mode="proxy", proxy_url="http://127.0.0.1:4499/v1/fetch")
-    result = await tool.execute("https://example.com")
+    tool = WebFetchTool(
+        mode="proxy",
+        proxy_url="http://127.0.0.1:4499/v1/fetch",
+        proxy_approval_mode="token",
+    )
+    result = await tool.execute("https://example.com", trace_id="trace-fetch-success", security_context=_security_context("trace-fetch-success"))
     assert result.ok is True
     data = json.loads(result.content)
     assert data["extractor"] == "proxy_raw"
@@ -65,8 +86,12 @@ async def test_web_fetch_proxy_denied(monkeypatch) -> None:
     )
     monkeypatch.setattr("zen_claw.agent.tools.web.httpx.AsyncClient", lambda timeout: fake)
 
-    tool = WebFetchTool(mode="proxy", proxy_url="http://127.0.0.1:4499/v1/fetch")
-    result = await tool.execute("https://example.com")
+    tool = WebFetchTool(
+        mode="proxy",
+        proxy_url="http://127.0.0.1:4499/v1/fetch",
+        proxy_approval_mode="token",
+    )
+    result = await tool.execute("https://example.com", trace_id="trace-fetch-denied", security_context=_security_context("trace-fetch-denied"))
     assert result.ok is False
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.PERMISSION
@@ -77,7 +102,11 @@ async def test_web_fetch_proxy_passes_trace_header(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "status": 200, "body": "ok"}))
     monkeypatch.setattr("zen_claw.agent.tools.web.httpx.AsyncClient", lambda timeout: fake)
 
-    tool = WebFetchTool(mode="proxy", proxy_url="http://127.0.0.1:4499/v1/fetch")
-    result = await tool.execute("https://example.com", trace_id="trace-web-1")
+    tool = WebFetchTool(
+        mode="proxy",
+        proxy_url="http://127.0.0.1:4499/v1/fetch",
+        proxy_approval_mode="token",
+    )
+    result = await tool.execute("https://example.com", trace_id="trace-web-1", security_context=_security_context("trace-web-1"))
     assert result.ok is True
     assert fake.last_headers.get("X-Trace-Id") == "trace-web-1"

@@ -98,7 +98,7 @@ async def test_node_dispatcher_message_send_task(tmp_path: Path) -> None:
     task = svc.add_task(
         node_id=node_id,
         task_type="message.send",
-        payload={"channel": "telegram", "chat_id": "123", "content": "hello"},
+        payload={"channel": "cli", "chat_id": "123", "content": "hello"},
     )
     assert task is not None
 
@@ -118,13 +118,46 @@ async def test_node_dispatcher_message_send_task(tmp_path: Path) -> None:
     did_work = await dispatcher.run_once()
     assert did_work is True
     assert len(outbound) == 1
-    assert outbound[0].channel == "telegram"
+    assert outbound[0].channel == "cli"
     assert outbound[0].chat_id == "123"
     assert outbound[0].content == "hello"
     assert str((outbound[0].metadata or {}).get("trace_id") or "")
     rows = svc.list_tasks(node_id=node_id)
     assert rows[0]["status"] == "done"
     assert rows[0]["result"]["sent"] is True
+
+
+@pytest.mark.asyncio
+async def test_node_dispatcher_message_send_external_channel_requires_sidecar(tmp_path: Path) -> None:
+    svc = NodeService(tmp_path / "nodes.json")
+    reg = svc.register_node(name="phone-b2", platform="android", capabilities=["notify"])
+    node_id = reg["node_id"]
+    task = svc.add_task(
+        node_id=node_id,
+        task_type="message.send",
+        payload={"channel": "telegram", "chat_id": "123", "content": "hello"},
+    )
+    assert task is not None
+
+    async def on_agent_prompt(prompt: str, **kwargs) -> str:
+        return "unused"
+
+    outbound: list[OutboundMessage] = []
+
+    async def publish_outbound(msg: OutboundMessage) -> None:
+        outbound.append(msg)
+
+    dispatcher = NodeTaskDispatcher(
+        node_service=svc,
+        on_agent_prompt=on_agent_prompt,
+        publish_outbound=publish_outbound,
+    )
+    did_work = await dispatcher.run_once()
+    assert did_work is True
+    assert outbound == []
+    rows = svc.list_tasks(node_id=node_id)
+    assert rows[0]["status"] == "error"
+    assert "sidecar configuration" in str(rows[0]["error"] or "")
 
 
 @pytest.mark.asyncio
@@ -421,6 +454,7 @@ async def test_node_dispatcher_channel_circuit_opens_on_fail_rate(tmp_path: Path
         channel_circuit_min_samples=1,
         channel_circuit_fail_rate_threshold=1.0,
         channel_circuit_open_sec=60.0,
+        trusted_local_channels=["cli", "system", "webchat", "telegram"],
     )
     did1 = await dispatcher.run_once()
     did2 = await dispatcher.run_once()
@@ -467,6 +501,7 @@ async def test_node_dispatcher_channel_circuit_isolated_per_channel(tmp_path: Pa
         channel_circuit_min_samples=1,
         channel_circuit_fail_rate_threshold=1.0,
         channel_circuit_open_sec=60.0,
+        trusted_local_channels=["cli", "system", "webchat", "telegram", "discord"],
     )
     did1 = await dispatcher.run_once()
     did2 = await dispatcher.run_once()
@@ -516,6 +551,7 @@ async def test_node_dispatcher_channel_circuit_recovers_after_window(tmp_path: P
         channel_circuit_fail_rate_threshold=1.0,
         channel_circuit_open_sec=5.0,
         now_fn=lambda: now["t"],
+        trusted_local_channels=["cli", "system", "webchat", "telegram"],
     )
     did1 = await dispatcher.run_once()
     assert did1 is True
@@ -569,6 +605,7 @@ async def test_node_dispatcher_chaos_injection_targets_channel(tmp_path: Path) -
         chaos_enabled=True,
         chaos_fail_every=1,
         chaos_channels=["telegram"],
+        trusted_local_channels=["cli", "system", "webchat", "telegram", "discord"],
     )
     did1 = await dispatcher.run_once()
     did2 = await dispatcher.run_once()
@@ -614,6 +651,7 @@ async def test_node_dispatcher_chaos_injection_every_n(tmp_path: Path) -> None:
         chaos_enabled=True,
         chaos_fail_every=2,
         chaos_channels=["telegram"],
+        trusted_local_channels=["cli", "system", "webchat", "telegram"],
     )
     did1 = await dispatcher.run_once()
     did2 = await dispatcher.run_once()

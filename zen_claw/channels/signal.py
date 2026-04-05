@@ -45,15 +45,26 @@ class SignalChannel(BaseChannel):
             self._http = None
 
     async def send(self, msg: OutboundMessage) -> None:
-        try:
-            if self.config.mode == "signald":
-                await self._send_via_signald(msg)
-            else:
-                await self._send_via_signal_cli(msg)
-        except Exception as exc:
-            logger.warning("Signal send failed (mode={}): {}", self.config.mode, exc)
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
+            try:
+                if self.config.mode == "signald":
+                    await self._send_via_signald(msg)
+                else:
+                    await self._send_via_signal_cli(msg)
+            except Exception as exc:
+                logger.warning("Signal send failed (mode={}): {}", self.config.mode, exc)
 
     async def _send_via_signald(self, msg: OutboundMessage) -> None:
+        await self._assert_outbound_helper_allowed(
+            helper_name="_send_via_signald",
+            trace_id=msg.trace_id,
+            msg=msg,
+        )
         payload: dict[str, Any] = {
             "account": self.config.account,
             "recipientAddress": {"number": msg.chat_id},
@@ -72,6 +83,11 @@ class SignalChannel(BaseChannel):
             )
 
     async def _send_via_signal_cli(self, msg: OutboundMessage) -> None:
+        await self._assert_outbound_helper_allowed(
+            helper_name="_send_via_signal_cli",
+            trace_id=msg.trace_id,
+            msg=msg,
+        )
         if not self.config.account:
             raise RuntimeError("signal_cli mode requires signal.account")
         argv = [self.config.signal_cli_bin, "-u", self.config.account, "send"]
@@ -154,6 +170,7 @@ class SignalChannel(BaseChannel):
             )
 
     async def _signald_post(self, path: str, payload: dict[str, Any]) -> Any:
+        await self._assert_outbound_helper_allowed(helper_name="_signald_post")
         if not self._http:
             self._http = httpx.AsyncClient(timeout=20.0)
         url = f"{self.config.signald_url.rstrip('/')}{path}"

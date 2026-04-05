@@ -98,25 +98,33 @@ class TelegramChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
         if not self._app:
             logger.warning("Telegram bot not running")
             return
 
-        try:
-            # chat_id should be the Telegram chat ID (integer)
-            chat_id = int(msg.chat_id)
-            # Convert markdown to Telegram HTML
-            html_content = markdown_to_telegram_html(msg.content)
-            await self._app.bot.send_message(chat_id=chat_id, text=html_content, parse_mode="HTML")
-        except ValueError:
-            logger.error(f"Invalid chat_id: {msg.chat_id}")
-        except Exception as e:
-            # Fallback to plain text if HTML parsing fails
-            logger.warning(f"HTML parse failed, falling back to plain text: {e}")
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
             try:
-                await self._app.bot.send_message(chat_id=int(msg.chat_id), text=msg.content)
-            except Exception as e2:
-                logger.error(f"Error sending Telegram message: {e2}")
+                # chat_id should be the Telegram chat ID (integer)
+                chat_id = int(msg.chat_id)
+                # Convert markdown to Telegram HTML
+                html_content = markdown_to_telegram_html(msg.content)
+                await self._app.bot.send_message(
+                    chat_id=chat_id, text=html_content, parse_mode="HTML"
+                )
+            except ValueError:
+                logger.error(f"Invalid chat_id: {msg.chat_id}")
+            except Exception as e:
+                # Fallback to plain text if HTML parsing fails
+                logger.warning(f"HTML parse failed, falling back to plain text: {e}")
+                try:
+                    await self._app.bot.send_message(chat_id=int(msg.chat_id), text=msg.content)
+                except Exception as e2:
+                    logger.error(f"Error sending Telegram message: {e2}")
 
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /start command."""

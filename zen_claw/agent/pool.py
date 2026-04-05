@@ -60,6 +60,9 @@ class ResolvedAgentProfile:
     max_tool_iterations: int
     allowed_models: list[str]
     is_registered: bool
+    dev_profile: bool
+    trusted_local_only: bool
+    allowed_channels: list[str]
 
 
 def _resolve_profile_workspace(
@@ -166,6 +169,9 @@ def resolve_agent_profile(config: Config, agent_id: str) -> ResolvedAgentProfile
             else list(defaults.allowed_models)
         ),
         is_registered=profile is not None or aid == "default",
+        dev_profile=bool(profile.dev_profile) if profile else False,
+        trusted_local_only=bool(profile.trusted_local_only) if profile else False,
+        allowed_channels=list(profile.allowed_channels) if profile else [],
     )
 
 
@@ -212,6 +218,7 @@ class AgentPool:
         exec_cfg = self.config.tools.effective_exec()
         search_cfg = self.config.tools.effective_search()
         fetch_cfg = self.config.tools.effective_fetch()
+        connector_cfg = self.config.tools.network.connector
         browser_cfg = self.config.tools.effective_browser()
         provider = self._build_provider_for_agent(profile)
         workspace = profile.workspace
@@ -236,6 +243,7 @@ class AgentPool:
             brave_api_key=search_cfg.api_key or None,
             web_search_config=search_cfg,
             web_fetch_config=fetch_cfg,
+            connector_config=connector_cfg,
             browser_config=browser_cfg,
             exec_config=exec_cfg,
             tool_policy_config=self.config.tools.policy,
@@ -250,6 +258,9 @@ class AgentPool:
             stability_model=profile.stability_model or None,
             intent_model_overrides=profile.intent_model_overrides,
             task_type_model_overrides=profile.task_type_model_overrides,
+            agent_id=profile.agent_id,
+            dev_profile=profile.dev_profile,
+            trusted_local_only=profile.trusted_local_only,
         )
 
     def _build_provider_for_agent(self, profile: ResolvedAgentProfile) -> LLMProvider:

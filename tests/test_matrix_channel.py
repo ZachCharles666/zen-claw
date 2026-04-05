@@ -1,11 +1,19 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.manager import ChannelManager
 from zen_claw.channels.matrix import MatrixChannel
 from zen_claw.config.schema import Config, MatrixConfig
+
+_AUTHORIZED_META = {
+    "trace_id": "trace-auth-1",
+    "outbound_dispatch_authorized": True,
+    "outbound_dispatch_mode": "manager_local_dispatch",
+}
 
 
 def test_matrix_channel_start_send_stop() -> None:
@@ -20,7 +28,12 @@ def test_matrix_channel_start_send_stop() -> None:
         await ch.start()
         assert ch.is_running is True
         await ch.send(
-            OutboundMessage(channel="matrix", chat_id="!room:matrix.org", content="hello")
+            OutboundMessage(
+                channel="matrix",
+                chat_id="!room:matrix.org",
+                content="hello",
+                metadata=dict(_AUTHORIZED_META),
+            )
         )
         await ch.stop()
         assert ch.is_running is False
@@ -57,6 +70,7 @@ def test_matrix_channel_send_payload() -> None:
                 chat_id="!room:matrix.example.org",
                 content="hello",
                 media=["media://matrix/file/1"],
+                metadata=dict(_AUTHORIZED_META),
             )
         )
         assert str(captured["path"]).startswith("/_matrix/client/v3/rooms/")
@@ -98,7 +112,10 @@ def test_matrix_channel_send_rich_text_and_media_upload() -> None:
                     chat_id="!room:matrix.example.org",
                     content="hello",
                     media=[str(media_file)],
-                    metadata={"matrix_formatted_body": "<b>hello</b>"},
+                    metadata={
+                        **dict(_AUTHORIZED_META),
+                        "matrix_formatted_body": "<b>hello</b>",
+                    },
                 )
             )
         finally:
@@ -289,6 +306,7 @@ def test_matrix_channel_send_encrypted_payload_path() -> None:
                 chat_id="!room:matrix.example.org",
                 content="plain text ignored when encrypted payload exists",
                 metadata={
+                    **dict(_AUTHORIZED_META),
                     "matrix_encrypted_content": {
                         "algorithm": "m.megolm.v1.aes-sha2",
                         "ciphertext": {"AAA": {"body": "xxx", "type": 0}},
@@ -302,6 +320,17 @@ def test_matrix_channel_send_encrypted_payload_path() -> None:
         assert "/send/m.room.encrypted/" in str(captured["path"])
         assert isinstance(captured["payload"], dict)
         assert captured["payload"]["algorithm"] == "m.megolm.v1.aes-sha2"
+
+    asyncio.run(_run())
+
+
+def test_matrix_direct_send_blocked_by_guardrail() -> None:
+    async def _run() -> None:
+        ch = MatrixChannel(MatrixConfig(enabled=True, access_token="mock"), MessageBus())
+        with pytest.raises(RuntimeError, match="authorized dispatch context"):
+            await ch.send(
+                OutboundMessage(channel="matrix", chat_id="!room:matrix.org", content="hello")
+            )
 
     asyncio.run(_run())
 

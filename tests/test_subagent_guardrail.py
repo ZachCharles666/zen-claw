@@ -37,7 +37,14 @@ def test_subagent_hard_deny_overrides_allowlist() -> None:
 
 
 def test_config_parses_allow_subagent_sensitive_tools() -> None:
-    raw = {"tools": {"policy": {"allowSubagentSensitiveTools": True}}}
+    raw = {
+        "tools": {
+            "policy": {
+                "allowSubagentSensitiveTools": True,
+                "productionHardening": False,
+            }
+        }
+    }
     config = Config.model_validate(convert_keys(raw))
     assert config.tools.policy.allow_subagent_sensitive_tools is True
 

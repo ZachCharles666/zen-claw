@@ -2,6 +2,7 @@ import httpx
 
 from zen_claw.agent.tools.result import ToolErrorKind
 from zen_claw.agent.tools.shell import ExecTool
+from zen_claw.security_context import build_security_context
 
 
 class _FakeResponse:
@@ -47,6 +48,23 @@ class _FakeClient:
         return self._health_response
 
 
+def _security_context(trace_id: str) -> dict:
+    return build_security_context(
+        trace_id=trace_id,
+        channel="cli",
+        sender_id="tester",
+        chat_id="direct",
+        tenant_id="default",
+        workspace_id="workspace",
+        agent_profile="default",
+        role="admin",
+        trust_level="trusted_local",
+        origin_surface="cli",
+        workspace_path="workspace",
+        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+    )
+
+
 async def test_exec_tool_sidecar_success(monkeypatch) -> None:
     response = _FakeResponse(200, {"ok": True, "stdout": "hello", "exit_code": 0})
     monkeypatch.setattr(
@@ -55,7 +73,11 @@ async def test_exec_tool_sidecar_success(monkeypatch) -> None:
     )
 
     tool = ExecTool(mode="sidecar", sidecar_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute("echo hello")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-exec-success",
+        security_context=_security_context("trace-exec-success"),
+    )
     assert result.ok is True
     assert "hello" in result.content
 
@@ -71,7 +93,11 @@ async def test_exec_tool_sidecar_permission_error(monkeypatch) -> None:
     )
 
     tool = ExecTool(mode="sidecar", sidecar_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute("echo hello")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-exec-perm",
+        security_context=_security_context("trace-exec-perm"),
+    )
     assert result.ok is False
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.PERMISSION
@@ -85,7 +111,11 @@ async def test_exec_tool_sidecar_timeout(monkeypatch) -> None:
     )
 
     tool = ExecTool(mode="sidecar", sidecar_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute("echo hello")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-exec-timeout",
+        security_context=_security_context("trace-exec-timeout"),
+    )
     assert result.ok is False
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.RETRYABLE
@@ -109,7 +139,11 @@ async def test_exec_tool_sidecar_fallbacks_to_local(monkeypatch) -> None:
         sidecar_fallback_to_local=True,
     )
     monkeypatch.setattr(tool, "_execute_local", fake_local)
-    result = await tool.execute("echo hello")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-exec-fallback",
+        security_context=_security_context("trace-exec-fallback"),
+    )
     assert result.ok is True
     assert result.content == "local-ok"
 
@@ -124,7 +158,11 @@ async def test_exec_tool_sidecar_healthcheck_failed(monkeypatch) -> None:
         sidecar_url="http://127.0.0.1:4488/v1/exec",
         sidecar_healthcheck=True,
     )
-    result = await tool.execute("echo hello")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-exec-health",
+        security_context=_security_context("trace-exec-health"),
+    )
     assert result.ok is False
     assert result.error is not None
     assert result.error.code == "exec_sidecar_unhealthy"
@@ -148,7 +186,11 @@ async def test_exec_tool_sidecar_healthcheck_failed_then_fallback(monkeypatch) -
         sidecar_fallback_to_local=True,
     )
     monkeypatch.setattr(tool, "_execute_local", fake_local)
-    result = await tool.execute("echo hello")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-exec-health-fallback",
+        security_context=_security_context("trace-exec-health-fallback"),
+    )
     assert result.ok is True
     assert result.content == "local-from-healthcheck"
 
@@ -157,7 +199,13 @@ async def test_exec_tool_sidecar_passes_trace_id_header(monkeypatch) -> None:
     observed: dict[str, str] = {}
 
     class _HeaderClient(_FakeClient):
-        async def post(self, url: str, headers: dict, json: dict) -> _FakeResponse:
+        async def post(
+            self,
+            url: str,
+            headers: dict,
+            json: dict | None = None,
+            content: bytes | None = None,
+        ) -> _FakeResponse:
             observed["trace"] = headers.get("X-Trace-Id", "")
             return _FakeResponse(200, {"ok": True, "stdout": "ok", "exit_code": 0})
 
@@ -167,7 +215,11 @@ async def test_exec_tool_sidecar_passes_trace_id_header(monkeypatch) -> None:
     )
 
     tool = ExecTool(mode="sidecar", sidecar_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute("echo hello", trace_id="trace-xyz")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-xyz",
+        security_context=_security_context("trace-xyz"),
+    )
     assert result.ok is True
     assert observed.get("trace") == "trace-xyz"
 
@@ -201,7 +253,11 @@ async def test_exec_tool_sidecar_hmac_adds_signature_headers(monkeypatch) -> Non
         sidecar_approval_mode="hmac",
         sidecar_approval_token="secret",
     )
-    result = await tool.execute("echo hello", trace_id="trace-xyz")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-xyz",
+        security_context=_security_context("trace-xyz"),
+    )
     assert result.ok is True
     assert observed.get("trace") == "trace-xyz"
     assert observed.get("sig")

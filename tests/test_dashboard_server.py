@@ -393,6 +393,38 @@ def test_render_html_includes_observability_cards() -> None:
                 "production_hardening": False,
                 "subagent_hard_guardrail": True,
                 "skill_permissions_mode": "off",
+                "security_query_coverage": {
+                    "events_total": 3,
+                    "with_policy_snapshot_hash": 2,
+                    "with_request_hash": 2,
+                    "with_gateway_instance": 1,
+                },
+                "security_audit_recent_events": [
+                    {
+                        "event_type": "approval.approved",
+                        "capability": "exec.run",
+                        "trace_id": "trace-sec-2",
+                        "trust_level": "remote_untrusted",
+                        "gateway_instance": "gw-2",
+                        "policy_snapshot_hash": "policy-2",
+                        "request_hash": "req-2",
+                        "decision_id": "APR-1",
+                        "error_code": "",
+                        "at": "2026-04-05T00:01:00+00:00",
+                    }
+                ],
+                "security_approval_recent_events": [
+                    {
+                        "event_type": "approval.approved",
+                        "capability": "exec.run",
+                        "trace_id": "trace-sec-2",
+                        "decision_id": "APR-1",
+                        "policy_snapshot_hash": "policy-2",
+                        "request_hash": "req-2",
+                        "actor": "ops_reviewer",
+                        "at": "2026-04-05T00:01:00+00:00",
+                    }
+                ],
             },
             "sidecars": [],
             "node": {
@@ -478,6 +510,32 @@ def test_render_html_includes_observability_cards() -> None:
     assert "Bind route" in html
     assert "Clear route" in html
     assert "Agent History" in html
+    assert "Recent Security Events" in html
+    assert "Approval Activity" in html
+    assert "coverage: events=" in html
+    assert "securityAuditCapability" in html
+    assert "securityAuditTrace_id" in html
+    assert "securityAuditTenant_id" in html
+    assert "securityAuditWorkspace_id" in html
+    assert "securityAuditTrust_level" in html
+    assert "securityAuditGateway_instance" in html
+    assert "securityAuditDecision_id" in html
+    assert "securityAuditPolicy_snapshot_hash" in html
+    assert "securityAuditRequest_hash" in html
+    assert "securityAuditEvent_type" in html
+    assert "securityAuditLimit" in html
+    assert "securityAuditOffset" in html
+    assert "securityAuditStatus" in html
+    assert "securityAuditPanel" in html
+    assert "buildSecurityAuditQuery" in html
+    assert "loadSecurityAudit" in html
+    assert "exportSecurityAudit" in html
+    assert "window.__securityAuditState" in html
+    assert "/api/v1/security/audit" in html
+    assert "trace-sec-2" in html
+    assert "exec.run" in html
+    assert "remote_untrusted" in html
+    assert "APR-1" in html
     assert "Load history" in html
     assert "Export agent CSV" in html
     assert "Mark Applied" in html

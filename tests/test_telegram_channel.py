@@ -10,6 +10,12 @@ from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.telegram import TelegramChannel
 from zen_claw.config.schema import TelegramConfig
 
+_AUTHORIZED_META = {
+    "trace_id": "trace-auth-1",
+    "outbound_dispatch_authorized": True,
+    "outbound_dispatch_mode": "manager_local_dispatch",
+}
+
 
 def _make_config(**kwargs) -> TelegramConfig:
     defaults = dict(enabled=True, token="", admins=[], users=[], allow_from=[], agent_profile="default", proxy=None)
@@ -64,11 +70,23 @@ async def test_telegram_send_without_app_logs_warning(caplog) -> None:
     import logging
     ch, _ = _make_channel()
     ch._app = None
-    msg = OutboundMessage(channel="telegram", chat_id="12345", content="hello")
+    msg = OutboundMessage(
+        channel="telegram",
+        chat_id="12345",
+        content="hello",
+        metadata=dict(_AUTHORIZED_META),
+    )
     with caplog.at_level(logging.WARNING):
         await ch.send(msg)
     # Should not raise; app is None so warning is logged by loguru (may not hit caplog)
     assert ch._app is None
+
+
+@pytest.mark.asyncio
+async def test_telegram_direct_send_blocked_by_guardrail() -> None:
+    ch, _ = _make_channel(_make_config(token="abc"))
+    with pytest.raises(RuntimeError, match="authorized dispatch context"):
+        await ch.send(OutboundMessage(channel="telegram", chat_id="12345", content="hello"))
 
 
 # ── RBAC: is_allowed ─────────────────────────────────────────────────────────

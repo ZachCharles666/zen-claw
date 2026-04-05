@@ -93,22 +93,30 @@ class DingTalkChannel(BaseChannel):
         self._stop_event.set()
 
     async def send(self, msg: OutboundMessage) -> None:
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
         if not self.config.webhook_url:
             logger.warning(
                 "DingTalk: webhook_url is required to send messages, even in Stream mode."
             )
             return
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
+            content_str = msg.content or ""
 
-        content_str = msg.content or ""
+            # Super basic media appending since DingTalk's webhook rich media differs heavily by msgtype
+            if msg.media:
+                for uri in msg.media:
+                    if uri.startswith("media://local/"):
+                        content_str += f"\n[Media attached: {uri}]"
 
-        # Super basic media appending since DingTalk's webhook rich media differs heavily by msgtype
-        if msg.media:
-            for uri in msg.media:
-                if uri.startswith("media://local/"):
-                    content_str += f"\n[Media attached: {uri}]"
-
-        payload = {"msgtype": "markdown", "markdown": {"title": "Agent Reply", "text": content_str}}
-        await self._post_to_dingtalk(payload)
+            payload = {
+                "msgtype": "markdown",
+                "markdown": {"title": "Agent Reply", "text": content_str},
+            }
+            await self._post_to_dingtalk(payload)
 
     def _on_stream_message(self, message: CallbackMessage) -> None:
         """Handler for DingTalk Stream incoming messages."""
@@ -192,6 +200,7 @@ class DingTalkChannel(BaseChannel):
         return {"success": True}
 
     async def _post_to_dingtalk(self, payload: dict[str, Any]) -> None:
+        await self._assert_outbound_helper_allowed(helper_name="_post_to_dingtalk")
         url = self.config.webhook_url
         if self.config.secret:
             ts = int(time.time() * 1000)

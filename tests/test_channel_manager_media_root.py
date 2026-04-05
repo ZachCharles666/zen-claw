@@ -179,6 +179,7 @@ async def test_channel_manager_drop_notice_respects_cooldown(tmp_path: Path) -> 
     cfg.channels.outbound_rate_limit_drop_notice = True
     cfg.channels.outbound_rate_limit_drop_notice_cooldown_sec = 30
     cfg.channels.outbound_rate_limit_drop_notice_text = "busy"
+    cfg.tools.policy.trusted_local_channels = ["cli", "system", "webchat"]
     mgr = ChannelManager(cfg, MessageBus())
 
     sent: list[str] = []
@@ -187,12 +188,12 @@ async def test_channel_manager_drop_notice_respects_cooldown(tmp_path: Path) -> 
         async def send(self, msg):
             sent.append(msg.content)
 
-    msg = OutboundMessage(channel="discord", chat_id="u1", content="payload")
+    msg = OutboundMessage(channel="webchat", chat_id="u1", content="payload")
     await mgr._maybe_send_drop_notice(_FakeChannel(), msg, "t1")
     await mgr._maybe_send_drop_notice(_FakeChannel(), msg, "t2")
     assert sent == ["busy"]
 
     # Simulate cooldown elapsed.
-    mgr._last_drop_notice_at["discord:u1"] = mgr._last_drop_notice_at["discord:u1"] - 31
+    mgr._last_drop_notice_at["webchat:u1"] = mgr._last_drop_notice_at["webchat:u1"] - 31
     await mgr._maybe_send_drop_notice(_FakeChannel(), msg, "t3")
     assert sent == ["busy", "busy"]

@@ -7,6 +7,7 @@ from zen_claw.agent.tools.browser import (
     BrowserTypeTool,
 )
 from zen_claw.agent.tools.result import ToolErrorKind
+from zen_claw.security_context import build_security_context
 
 
 class _FakeResponse:
@@ -38,18 +39,42 @@ class _FakeClient:
     async def get(self, url: str) -> _FakeResponse:
         return self._health
 
-    async def post(self, url: str, headers: dict, json: dict) -> _FakeResponse:
+    async def post(self, url: str, headers: dict, json: dict | None = None, content: bytes | None = None) -> _FakeResponse:
         self.last_headers = headers
-        self.last_json = json
+        self.last_json = json or {}
         return self._response
+
+
+def _security_context(trace_id: str = "trace-browser-test") -> dict:
+    return build_security_context(
+        trace_id=trace_id,
+        channel="cli",
+        sender_id="tester",
+        chat_id="direct",
+        tenant_id="default",
+        workspace_id="workspace",
+        agent_profile="default",
+        role="admin",
+        trust_level="trusted_local",
+        origin_surface="cli",
+        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+    )
 
 
 async def test_browser_open_sidecar_success(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "session_id": "s-open"}))
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
-    tool = BrowserOpenTool(mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser")
-    result = await tool.execute(url="https://example.com")
+    tool = BrowserOpenTool(
+        mode="sidecar",
+        sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
+    )
+    result = await tool.execute(
+        url="https://example.com",
+        trace_id="trace-browser-open",
+        security_context=_security_context("trace-browser-open"),
+    )
     assert result.ok is True
     data = json.loads(result.content)
     assert data["session_id"] == "s-open"
@@ -60,8 +85,15 @@ async def test_browser_sidecar_trace_header(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, {"ok": True}))
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
-    tool = BrowserExtractTool(mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser")
-    result = await tool.execute(trace_id="trace-browser-1")
+    tool = BrowserExtractTool(
+        mode="sidecar",
+        sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
+    )
+    result = await tool.execute(
+        trace_id="trace-browser-1",
+        security_context=_security_context("trace-browser-1"),
+    )
     assert result.ok is True
     assert fake.last_headers.get("X-Trace-Id") == "trace-browser-1"
 
@@ -74,9 +106,14 @@ async def test_browser_sends_approval_token_header(monkeypatch) -> None:
     tool = BrowserOpenTool(
         mode="sidecar",
         sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
         sidecar_approval_token="super-secret",
     )
-    result = await tool.execute(url="https://example.com")
+    result = await tool.execute(
+        url="https://example.com",
+        trace_id="trace-browser-token",
+        security_context=_security_context("trace-browser-token"),
+    )
     assert result.ok is True
     assert fake.last_headers.get("X-Approval-Token") == "super-secret"
 
@@ -86,8 +123,16 @@ async def test_browser_no_token_header_when_token_empty(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "session_id": "s1"}))
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
-    tool = BrowserOpenTool(mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser")
-    result = await tool.execute(url="https://example.com")
+    tool = BrowserOpenTool(
+        mode="sidecar",
+        sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
+    )
+    result = await tool.execute(
+        url="https://example.com",
+        trace_id="trace-browser-no-token",
+        security_context=_security_context("trace-browser-no-token"),
+    )
     assert result.ok is True
     assert "X-Approval-Token" not in fake.last_headers
 
@@ -105,8 +150,17 @@ async def test_browser_click_sidecar_success(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "session_id": "s1"}))
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
-    tool = BrowserClickTool(mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser")
-    result = await tool.execute(sessionId="s1", selector="#submit")
+    tool = BrowserClickTool(
+        mode="sidecar",
+        sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
+    )
+    result = await tool.execute(
+        sessionId="s1",
+        selector="#submit",
+        trace_id="trace-browser-click",
+        security_context=_security_context("trace-browser-click"),
+    )
     assert result.ok is True
     assert fake.last_json["action"] == "click"
     assert fake.last_json["payload"]["selector"] == "#submit"
@@ -116,8 +170,19 @@ async def test_browser_type_sidecar_success(monkeypatch) -> None:
     fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "session_id": "s1"}))
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
-    tool = BrowserTypeTool(mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser")
-    result = await tool.execute(sessionId="s1", selector="#q", text="zen-claw", clear=True)
+    tool = BrowserTypeTool(
+        mode="sidecar",
+        sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
+    )
+    result = await tool.execute(
+        sessionId="s1",
+        selector="#q",
+        text="zen-claw",
+        clear=True,
+        trace_id="trace-browser-type",
+        security_context=_security_context("trace-browser-type"),
+    )
     assert result.ok is True
     assert fake.last_json["action"] == "type"
     assert fake.last_json["payload"]["text"] == "zen-claw"
@@ -128,9 +193,17 @@ async def test_browser_open_max_steps_override(monkeypatch) -> None:
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
     tool = BrowserOpenTool(
-        mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser", max_steps=20
+        mode="sidecar",
+        sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
+        max_steps=20,
     )
-    result = await tool.execute(url="https://example.com", maxSteps=50)
+    result = await tool.execute(
+        url="https://example.com",
+        maxSteps=50,
+        trace_id="trace-browser-steps",
+        security_context=_security_context("trace-browser-steps"),
+    )
     assert result.ok is True
     assert fake.last_json["policy"]["max_steps"] == 50
 
@@ -140,8 +213,16 @@ async def test_browser_open_max_steps_override_minimum(monkeypatch) -> None:
     monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
 
     tool = BrowserOpenTool(
-        mode="sidecar", sidecar_url="http://127.0.0.1:4500/v1/browser", max_steps=20
+        mode="sidecar",
+        sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
+        max_steps=20,
     )
-    result = await tool.execute(url="https://example.com", maxSteps=0)
+    result = await tool.execute(
+        url="https://example.com",
+        maxSteps=0,
+        trace_id="trace-browser-steps-min",
+        security_context=_security_context("trace-browser-steps-min"),
+    )
     assert result.ok is True
     assert fake.last_json["policy"]["max_steps"] == 1

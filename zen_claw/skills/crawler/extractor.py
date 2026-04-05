@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from zen_claw.agent.tools.browser import BrowserExtractTool, BrowserOpenTool
 from zen_claw.knowledge.ingestor import Document, Ingestor
 from zen_claw.knowledge.pipeline import RAGPipeline
+from zen_claw.security_context import build_security_context, normalize_workspace_id
 
 
 @dataclass
@@ -270,9 +271,25 @@ class CrawlerExtractor:
         from zen_claw.config.loader import load_config
 
         browser_cfg = load_config().tools.effective_browser()
+        sidecar_approval_mode = str(getattr(browser_cfg, "sidecar_approval_mode", "token") or "token")
+        security_context = build_security_context(
+            trace_id=f"crawler-{source.name or 'source'}",
+            channel="system",
+            sender_id="crawler",
+            chat_id=str(source.name or source.url or "crawler"),
+            tenant_id="default",
+            workspace_id=normalize_workspace_id(self._data_dir),
+            agent_profile="crawler",
+            role="system",
+            trust_level="trusted_builtin",
+            origin_surface="crawler",
+            workspace_path=str(self._data_dir),
+            policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "crawler-policy"},
+        )
         open_tool = BrowserOpenTool(
             mode=browser_cfg.mode,
             sidecar_url=browser_cfg.sidecar_url,
+            sidecar_approval_mode=sidecar_approval_mode,
             sidecar_approval_token=browser_cfg.sidecar_approval_token.get_secret_value(),
             sidecar_healthcheck=browser_cfg.sidecar_healthcheck,
             sidecar_fallback_to_off=browser_cfg.sidecar_fallback_to_off,
@@ -284,6 +301,7 @@ class CrawlerExtractor:
         extract_tool = BrowserExtractTool(
             mode=browser_cfg.mode,
             sidecar_url=browser_cfg.sidecar_url,
+            sidecar_approval_mode=sidecar_approval_mode,
             sidecar_approval_token=browser_cfg.sidecar_approval_token.get_secret_value(),
             sidecar_healthcheck=browser_cfg.sidecar_healthcheck,
             sidecar_fallback_to_off=browser_cfg.sidecar_fallback_to_off,
@@ -292,7 +310,12 @@ class CrawlerExtractor:
             max_steps=browser_cfg.max_steps,
             timeout_sec=browser_cfg.timeout_sec,
         )
-        opened = await open_tool.execute(url=source.url, maxSteps=min(browser_cfg.max_steps, 6))
+        opened = await open_tool.execute(
+            url=source.url,
+            maxSteps=min(browser_cfg.max_steps, 6),
+            trace_id=str(security_context.get("trace_id") or ""),
+            security_context=security_context,
+        )
         if not opened.ok:
             message = opened.error.message if opened.error else "browser open failed"
             raise RuntimeError(message)
@@ -305,6 +328,8 @@ class CrawlerExtractor:
             selector=source.selector or None,
             maxChars=max(100, int(source.max_chars or 20_000)),
             maxSteps=min(browser_cfg.max_steps, 6),
+            trace_id=str(security_context.get("trace_id") or ""),
+            security_context=security_context,
         )
         if not extracted.ok:
             message = extracted.error.message if extracted.error else "browser extract failed"

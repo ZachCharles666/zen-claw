@@ -16,11 +16,12 @@ from datetime import UTC, datetime
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 if TYPE_CHECKING:
     from zen_claw.config.schema import Config
 
+from zen_claw.channels.outbound_adapter import ChannelOutboundAdapter
 from zen_claw.channels.registry import build_channel_rbac_row, iter_channel_specs
 
 try:
@@ -61,6 +62,313 @@ def _read_jsonl(path: Path, *, limit: int = 100) -> list[dict[str, Any]]:
     except (OSError, ValueError, json.JSONDecodeError):
         return []
     return rows[-limit:]
+
+
+class SecurityAuditQueryRow(TypedDict):
+    ts: str
+    at_ms: int
+    trace_id: str
+    event_type: str
+    tool: str
+    capability: str
+    resource_scope: dict[str, Any]
+    policy_snapshot_hash: str
+    request_hash: str
+    decision_id: str
+    gateway_instance: str
+    trust_level: str
+    channel: str
+    sender_id: str
+    chat_id: str
+    tenant_id: str
+    workspace_id: str
+    agent_profile: str
+    role: str
+    sidecar_target: str
+    error_code: str
+    ok: bool | None
+    actor: str
+
+
+def _dict_like(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _string_or_empty(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _audit_ts_to_ms(ts: str) -> int:
+    raw = str(ts or "").strip()
+    if not raw:
+        return 0
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        return int(datetime.fromisoformat(normalized).timestamp() * 1000)
+    except ValueError:
+        return 0
+
+
+def _is_security_audit_row(row: dict[str, Any]) -> bool:
+    event_type = _string_or_empty(row.get("event_type")).lower()
+    capability = _string_or_empty(row.get("capability"))
+    request_hash = _string_or_empty(row.get("request_hash"))
+    policy_snapshot_hash = _string_or_empty(row.get("policy_snapshot_hash"))
+    approval = _dict_like(row.get("approval"))
+    if event_type in {
+        "tool.executed",
+        "tool.denied",
+        "tool.approval_requested",
+        "tool.approval_consumed",
+        "approval.requested",
+        "approval.approved",
+        "approval.denied",
+        "approval.expired",
+        "approval.execution_started",
+        "approval.execution_finished",
+    }:
+        return True
+    if event_type.startswith("message.outbound."):
+        return True
+    if capability or request_hash or policy_snapshot_hash:
+        return True
+    if _string_or_empty(approval.get("request_hash")) or _string_or_empty(
+        approval.get("policy_snapshot_hash")
+    ):
+        return True
+    return False
+
+
+def _normalize_security_audit_row(raw: dict[str, Any]) -> SecurityAuditQueryRow | None:
+    if not isinstance(raw, dict) or not _is_security_audit_row(raw):
+        return None
+    identity = _dict_like(raw.get("identity"))
+    security_context = _dict_like(raw.get("security_context"))
+    approval = _dict_like(raw.get("approval"))
+    gateway_meta = _dict_like(raw.get("gateway_meta"))
+    resource_scope = _dict_like(raw.get("resource_scope"))
+    if not resource_scope:
+        resource_scope = _dict_like(approval.get("resource_scope"))
+    capability = _string_or_empty(
+        raw.get("capability") or approval.get("capability") or raw.get("action")
+    )
+    policy_snapshot_hash = _string_or_empty(
+        raw.get("policy_snapshot_hash")
+        or approval.get("policy_snapshot_hash")
+        or gateway_meta.get("policy_snapshot_hash")
+    )
+    request_hash = _string_or_empty(raw.get("request_hash") or approval.get("request_hash"))
+    decision_id = _string_or_empty(raw.get("decision_id") or approval.get("approval_id"))
+    gateway_instance = _string_or_empty(
+        raw.get("gateway_instance")
+        or gateway_meta.get("gateway_instance")
+        or identity.get("gateway_instance")
+        or security_context.get("gateway_instance")
+    )
+    event_type = _string_or_empty(raw.get("event_type"))
+    ok_value = raw.get("ok")
+    if not isinstance(ok_value, bool):
+        if event_type in {"approval.approved", "approval.execution_started", "approval.execution_finished"}:
+            ok_value = True
+        elif event_type in {"approval.denied", "approval.expired"}:
+            ok_value = False
+        else:
+            ok_value = None
+    normalized: SecurityAuditQueryRow = {
+        "ts": _string_or_empty(raw.get("ts")),
+        "at_ms": _audit_ts_to_ms(raw.get("ts")),
+        "trace_id": _string_or_empty(raw.get("trace_id")),
+        "event_type": event_type,
+        "tool": _string_or_empty(raw.get("tool") or approval.get("tool_name")),
+        "capability": capability,
+        "resource_scope": dict(resource_scope),
+        "policy_snapshot_hash": policy_snapshot_hash,
+        "request_hash": request_hash,
+        "decision_id": decision_id,
+        "gateway_instance": gateway_instance,
+        "trust_level": _string_or_empty(
+            raw.get("trust_level")
+            or identity.get("trust_level")
+            or security_context.get("trust_level")
+        ),
+        "channel": _string_or_empty(
+            raw.get("channel") or identity.get("channel") or security_context.get("channel")
+        ),
+        "sender_id": _string_or_empty(
+            raw.get("sender_id") or identity.get("sender_id") or security_context.get("sender_id")
+        ),
+        "chat_id": _string_or_empty(
+            raw.get("chat_id") or identity.get("chat_id") or security_context.get("chat_id")
+        ),
+        "tenant_id": _string_or_empty(
+            raw.get("tenant_id") or identity.get("tenant_id") or security_context.get("tenant_id")
+        ),
+        "workspace_id": _string_or_empty(
+            raw.get("workspace_id")
+            or identity.get("workspace_id")
+            or security_context.get("workspace_id")
+        ),
+        "agent_profile": _string_or_empty(
+            raw.get("agent_profile")
+            or identity.get("agent_profile")
+            or security_context.get("agent_profile")
+        ),
+        "role": _string_or_empty(raw.get("role") or identity.get("role") or security_context.get("role")),
+        "sidecar_target": _string_or_empty(
+            raw.get("sidecar_target") or approval.get("sidecar_target")
+        ),
+        "error_code": _string_or_empty(raw.get("error_code")),
+        "ok": ok_value,
+        "actor": _string_or_empty(raw.get("actor") or approval.get("actor")),
+    }
+    return normalized
+
+
+def _read_security_audit_rows(*, data_dir: Path, limit: int = 5000) -> list[SecurityAuditQueryRow]:
+    audit_log_path = data_dir / "audit_logs" / f"{datetime.now(tz=UTC).strftime('%Y-%m-%d')}.jsonl"
+    rows = []
+    for raw in reversed(_read_jsonl(audit_log_path, limit=limit)):
+        normalized = _normalize_security_audit_row(raw)
+        if normalized is not None:
+            rows.append(normalized)
+    rows.sort(key=lambda row: int(row.get("at_ms") or 0), reverse=True)
+    return rows
+
+
+def _build_security_query_coverage(rows: list[SecurityAuditQueryRow]) -> dict[str, int]:
+    return {
+        "events_total": len(rows),
+        "with_capability": len([row for row in rows if _string_or_empty(row.get("capability"))]),
+        "with_resource_scope": len([row for row in rows if _dict_like(row.get("resource_scope"))]),
+        "with_policy_snapshot_hash": len(
+            [row for row in rows if _string_or_empty(row.get("policy_snapshot_hash"))]
+        ),
+        "with_request_hash": len([row for row in rows if _string_or_empty(row.get("request_hash"))]),
+        "with_decision_id": len([row for row in rows if _string_or_empty(row.get("decision_id"))]),
+        "with_gateway_instance": len(
+            [row for row in rows if _string_or_empty(row.get("gateway_instance"))]
+        ),
+        "with_trust_level": len([row for row in rows if _string_or_empty(row.get("trust_level"))]),
+    }
+
+
+def _security_audit_csv(rows: list[SecurityAuditQueryRow]) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    header = [
+        "ts",
+        "event_type",
+        "capability",
+        "trace_id",
+        "tenant_id",
+        "workspace_id",
+        "agent_profile",
+        "channel",
+        "trust_level",
+        "gateway_instance",
+        "policy_snapshot_hash",
+        "request_hash",
+        "decision_id",
+        "tool",
+        "error_code",
+        "ok",
+        "sidecar_target",
+        "resource_scope",
+    ]
+    writer.writerow(header)
+    for row in rows:
+        writer.writerow(
+            [
+                _string_or_empty(row.get("ts")),
+                _string_or_empty(row.get("event_type")),
+                _string_or_empty(row.get("capability")),
+                _string_or_empty(row.get("trace_id")),
+                _string_or_empty(row.get("tenant_id")),
+                _string_or_empty(row.get("workspace_id")),
+                _string_or_empty(row.get("agent_profile")),
+                _string_or_empty(row.get("channel")),
+                _string_or_empty(row.get("trust_level")),
+                _string_or_empty(row.get("gateway_instance")),
+                _string_or_empty(row.get("policy_snapshot_hash")),
+                _string_or_empty(row.get("request_hash")),
+                _string_or_empty(row.get("decision_id")),
+                _string_or_empty(row.get("tool")),
+                _string_or_empty(row.get("error_code")),
+                "" if row.get("ok") is None else bool(row.get("ok")),
+                _string_or_empty(row.get("sidecar_target")),
+                json.dumps(_dict_like(row.get("resource_scope")), ensure_ascii=False, sort_keys=True),
+            ]
+        )
+    return buf.getvalue()
+
+
+def _filter_security_audit_rows(
+    *,
+    rows: list[SecurityAuditQueryRow],
+    event_type: str = "",
+    capability: str = "",
+    trace_id: str = "",
+    tenant_id: str = "",
+    workspace_id: str = "",
+    agent_profile: str = "",
+    channel: str = "",
+    trust_level: str = "",
+    gateway_instance: str = "",
+    decision_id: str = "",
+    policy_snapshot_hash: str = "",
+    request_hash: str = "",
+    from_at_ms: int = 0,
+    to_at_ms: int = 0,
+) -> list[SecurityAuditQueryRow]:
+    filters = {
+        "event_type": _string_or_empty(event_type).lower(),
+        "capability": _string_or_empty(capability).lower(),
+        "trace_id": _string_or_empty(trace_id).lower(),
+        "tenant_id": _string_or_empty(tenant_id).lower(),
+        "workspace_id": _string_or_empty(workspace_id).lower(),
+        "agent_profile": _string_or_empty(agent_profile).lower(),
+        "channel": _string_or_empty(channel).lower(),
+        "trust_level": _string_or_empty(trust_level).lower(),
+        "gateway_instance": _string_or_empty(gateway_instance).lower(),
+        "decision_id": _string_or_empty(decision_id).lower(),
+        "policy_snapshot_hash": _string_or_empty(policy_snapshot_hash).lower(),
+        "request_hash": _string_or_empty(request_hash).lower(),
+    }
+    bounded_from = max(0, int(from_at_ms or 0))
+    bounded_to = max(0, int(to_at_ms or 0))
+    filtered = []
+    for row in rows:
+        row_at_ms = int(row.get("at_ms") or 0)
+        if bounded_from and row_at_ms < bounded_from:
+            continue
+        if bounded_to and row_at_ms > bounded_to:
+            continue
+        if filters["event_type"] and _string_or_empty(row.get("event_type")).lower() != filters["event_type"]:
+            continue
+        if filters["capability"] and _string_or_empty(row.get("capability")).lower() != filters["capability"]:
+            continue
+        if filters["trace_id"] and _string_or_empty(row.get("trace_id")).lower() != filters["trace_id"]:
+            continue
+        if filters["tenant_id"] and _string_or_empty(row.get("tenant_id")).lower() != filters["tenant_id"]:
+            continue
+        if filters["workspace_id"] and _string_or_empty(row.get("workspace_id")).lower() != filters["workspace_id"]:
+            continue
+        if filters["agent_profile"] and _string_or_empty(row.get("agent_profile")).lower() != filters["agent_profile"]:
+            continue
+        if filters["channel"] and _string_or_empty(row.get("channel")).lower() != filters["channel"]:
+            continue
+        if filters["trust_level"] and _string_or_empty(row.get("trust_level")).lower() != filters["trust_level"]:
+            continue
+        if filters["gateway_instance"] and _string_or_empty(row.get("gateway_instance")).lower() != filters["gateway_instance"]:
+            continue
+        if filters["decision_id"] and _string_or_empty(row.get("decision_id")).lower() != filters["decision_id"]:
+            continue
+        if filters["policy_snapshot_hash"] and _string_or_empty(row.get("policy_snapshot_hash")).lower() != filters["policy_snapshot_hash"]:
+            continue
+        if filters["request_hash"] and _string_or_empty(row.get("request_hash")).lower() != filters["request_hash"]:
+            continue
+        filtered.append(row)
+    return filtered
 
 
 def _build_model_routing_summary(
@@ -595,10 +903,45 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
     from zen_claw.agent.pool import list_agent_profiles
     from zen_claw.agent.skills import SkillsLoader
     from zen_claw.config.loader import get_data_dir
+    from zen_claw.observability.audit import verify_audit_log
     from zen_claw.runtime.sidecar_supervisor import collect_sidecar_status
 
     data_dir = get_data_dir()
     now_ms = int(time.time() * 1000)
+    audit_log_path = data_dir / "audit_logs" / f"{datetime.now(tz=UTC).strftime('%Y-%m-%d')}.jsonl"
+    audit_verify = verify_audit_log(audit_log_path)
+    security_audit_rows = _read_security_audit_rows(data_dir=data_dir, limit=5000)
+    connector_audit_rows = [
+        row
+        for row in security_audit_rows
+        if str(row.get("tool") or "") in {"social_platform_post", "social_platform_like", "message"}
+        and str(row.get("event_type") or "")
+        in {"tool.executed", "tool.denied", "tool.approval_requested", "tool.approval_consumed"}
+    ][:10]
+    webhook_dispatch_rows = _read_jsonl(data_dir / "webhook_dispatch.log.jsonl", limit=50)
+    webhook_security_rows = [
+        row
+        for row in reversed(webhook_dispatch_rows)
+        if isinstance(row, dict) and (str(row.get("sidecar_target") or "").strip() or str(row.get("trace_id") or "").strip())
+    ][:10]
+    outbound_audit_rows = [
+        row
+        for row in security_audit_rows
+        if str(row.get("event_type") or "").startswith("message.outbound.")
+    ][:10]
+    capability_audit_rows = [
+        row
+        for row in security_audit_rows
+        if (
+            str(row.get("capability") or "").strip()
+            or str(row.get("tool") or "").strip() in {"social_platform_post", "social_platform_like", "message"}
+        )
+    ][:20]
+    approval_audit_rows = [
+        row for row in security_audit_rows if str(row.get("event_type") or "").startswith("approval.")
+    ][:10]
+    security_query_coverage = _build_security_query_coverage(security_audit_rows)
+    outbound_adapter = ChannelOutboundAdapter(config)
     try:
         skills_loader = SkillsLoader(config.workspace_path)
         skills_inventory = skills_loader.build_skills_inventory()
@@ -873,6 +1216,7 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "alpha_contract_support": dict(row.get("alpha_contract_support") or {}),
             "alpha_contract_missing": list(row.get("alpha_contract_missing") or []),
             "alpha_contract_ready": bool(row.get("alpha_contract_ready")),
+            "outbound_isolation_mode": outbound_adapter.outbound_mode_for_channel(row["name"]),
             "configuration": row["configuration"],
         }
         for row in (build_channel_rbac_row(config, spec) for spec in iter_channel_specs())
@@ -1152,6 +1496,16 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "skill_count": len(row.skill_names or []),
             "allowed_tools_count": len(row.allowed_tools or []),
             "denied_tools_count": len(row.denied_tools or []),
+            "dev_profile": bool(row.dev_profile),
+            "trusted_local_only": bool(row.trusted_local_only),
+            "allowed_channels": list(row.allowed_channels or []),
+            "message_write_enabled": "message" in (row.allowed_tools or []) or "*" in (row.allowed_tools or []),
+            "connector_write_enabled": any(
+                tool in {"social_platform_post", "social_platform_like"}
+                for tool in (row.allowed_tools or [])
+            )
+            or "*" in (row.allowed_tools or []),
+            "webhook_write_enabled": bool(getattr(config.agents.profiles.get(row.agent_id), "on_complete_webhook", "")),
         }
         for row in agent_profiles
     ]
@@ -1447,6 +1801,51 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         ).strip().lower()
         == "delegate"
     ]
+    security_missing_context_rows = [
+        _to_control_plane_row(
+            surface="security",
+            target=str(row.get("capability") or row.get("tool") or row.get("event_type") or ""),
+            action="missing_context",
+            actor=str(row.get("actor") or ""),
+            detail=(
+                "missing="
+                + ",".join(
+                    field
+                    for field, value in [
+                        ("policy_snapshot_hash", row.get("policy_snapshot_hash")),
+                        ("request_hash", row.get("request_hash")),
+                        ("gateway_instance", row.get("gateway_instance")),
+                    ]
+                    if not str(value or "").strip()
+                )
+            ),
+            trace_id=str(row.get("trace_id") or ""),
+            at_ms=int(row.get("at_ms") or 0),
+            pending_apply=False,
+        )
+        for row in security_audit_rows
+        if not str(row.get("policy_snapshot_hash") or "").strip()
+        or not str(row.get("request_hash") or "").strip()
+        or not str(row.get("gateway_instance") or "").strip()
+    ]
+    security_approval_activity_rows = [
+        _to_control_plane_row(
+            surface="security",
+            target=str(row.get("decision_id") or row.get("capability") or row.get("event_type") or ""),
+            action=str(row.get("event_type") or ""),
+            actor=str(row.get("actor") or ""),
+            detail=(
+                "capability="
+                + str(row.get("capability") or "-")
+                + "; trust="
+                + str(row.get("trust_level") or "-")
+            ),
+            trace_id=str(row.get("trace_id") or ""),
+            at_ms=int(row.get("at_ms") or 0),
+            pending_apply=False,
+        )
+        for row in approval_audit_rows
+    ]
     attention_sections = [
         {
             "key": "failed_checks",
@@ -1501,6 +1900,18 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "title": "Runtime Unsupported",
             "count": len(runtime_unsupported_rows),
             "rows": runtime_unsupported_rows[:5],
+        },
+        {
+            "key": "security_missing_context",
+            "title": "Security Missing Context",
+            "count": len(security_missing_context_rows),
+            "rows": security_missing_context_rows[:5],
+        },
+        {
+            "key": "security_approval_activity",
+            "title": "Security Approval Activity",
+            "count": len(security_approval_activity_rows),
+            "rows": security_approval_activity_rows[:5],
         },
     ]
     ops_summary["attention_sections"] = [section for section in attention_sections if int(section["count"]) > 0]
@@ -1557,6 +1968,220 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
             "production_hardening": bool(config.tools.policy.production_hardening),
             "subagent_hard_guardrail": not bool(config.tools.policy.allow_subagent_sensitive_tools),
             "skill_permissions_mode": str(config.agents.defaults.skill_permissions_mode),
+            "legacy_compat": bool(config.tools.policy.legacy_compat),
+            "local_fallback_enabled": bool(
+                config.tools.effective_exec().sidecar_fallback_to_local
+                or config.tools.effective_search().proxy_fallback_to_local
+                or config.tools.effective_fetch().proxy_fallback_to_local
+                or config.tools.effective_browser().sidecar_fallback_to_off
+            ),
+            "trusted_local_channels": list(config.tools.policy.trusted_local_channels or []),
+            "dev_profiles": [
+                row["agent_id"] for row in agent_profile_rows if bool(row.get("dev_profile"))
+            ],
+            "dev_profile_total": len(
+                [row for row in agent_profile_rows if bool(row.get("dev_profile"))]
+            ),
+            "sensitive_profiles": [
+                row["agent_id"]
+                for row in agent_profile_rows
+                if bool(row.get("allowed_tools_count")) or bool(row.get("denied_tools_count"))
+            ][:8],
+            "connector_write_policy_configured": any(
+                [
+                    config.tools.policy.connector_allowed_names,
+                    config.tools.policy.connector_allowed_actions,
+                    config.tools.policy.connector_allowed_target_resources,
+                    config.tools.policy.connector_allowed_tenants,
+                    config.tools.policy.connector_allowed_workspaces,
+                ]
+            ),
+            "connector_write_sidecar": str(config.tools.network.connector.proxy_url or ""),
+            "connector_write_profiles": [
+                row["agent_id"] for row in agent_profile_rows if bool(row.get("connector_write_enabled"))
+            ][:8],
+            "message_write_profiles": [
+                row["agent_id"] for row in agent_profile_rows if bool(row.get("message_write_enabled"))
+            ][:8],
+            "webhook_write_profiles": [
+                row["agent_id"] for row in agent_profile_rows if bool(row.get("webhook_write_enabled"))
+            ][:8],
+            "connector_write_recent_events": [
+                {
+                    "event_type": str(row.get("event_type") or ""),
+                    "tool": str(row.get("tool") or ""),
+                    "capability": str(row.get("capability") or ""),
+                    "trace_id": str(row.get("trace_id") or ""),
+                    "error_code": str(row.get("error_code") or ""),
+                    "sidecar_target": str(row.get("sidecar_target") or ""),
+                    "at": str(row.get("ts") or ""),
+                }
+                for row in connector_audit_rows
+            ],
+            "capability_policy_families": [
+                family
+                for family, enabled in [
+                    ("filesystem", bool(config.tools.policy.filesystem_allowed_subpaths)),
+                    (
+                        "exec",
+                        bool(config.tools.policy.exec_allowed_working_dirs)
+                        or bool(config.tools.policy.exec_allowed_command_prefixes),
+                    ),
+                    (
+                        "network",
+                        bool(config.tools.policy.fetch_allowed_domains)
+                        or bool(config.tools.policy.search_allowed_domains)
+                        or bool(config.tools.policy.browser_allowed_domains),
+                    ),
+                    ("message", bool(config.tools.policy.message_allowed_channels)),
+                    (
+                        "knowledge",
+                        bool(config.tools.policy.knowledge_allowed_tenants)
+                        or bool(config.tools.policy.knowledge_allowed_notebooks),
+                    ),
+                    (
+                        "connector",
+                        any(
+                            [
+                                config.tools.policy.connector_allowed_names,
+                                config.tools.policy.connector_allowed_actions,
+                                config.tools.policy.connector_allowed_target_resources,
+                                config.tools.policy.connector_allowed_tenants,
+                                config.tools.policy.connector_allowed_workspaces,
+                            ]
+                        ),
+                    ),
+                ]
+                if enabled
+            ],
+            "sensitive_capability_profiles": {
+                "message.send": [
+                    row["agent_id"] for row in agent_profile_rows if bool(row.get("message_write_enabled"))
+                ][:8],
+                "connector.write": [
+                    row["agent_id"] for row in agent_profile_rows if bool(row.get("connector_write_enabled"))
+                ][:8],
+                "connector.webhook.trigger": [
+                    row["agent_id"] for row in agent_profile_rows if bool(row.get("webhook_write_enabled"))
+                ][:8],
+            },
+            "capability_policy_recent_events": [
+                {
+                    "event_type": str(row.get("event_type") or ""),
+                    "capability": str(row.get("capability") or ""),
+                    "tool": str(row.get("tool") or ""),
+                    "channel": str(row.get("channel") or ""),
+                    "trace_id": str(row.get("trace_id") or ""),
+                    "error_code": str(row.get("error_code") or ""),
+                    "at": str(row.get("ts") or ""),
+                }
+                for row in capability_audit_rows
+            ],
+            "security_audit_recent_events": [
+                {
+                    "event_type": str(row.get("event_type") or ""),
+                    "capability": str(row.get("capability") or ""),
+                    "trace_id": str(row.get("trace_id") or ""),
+                    "trust_level": str(row.get("trust_level") or ""),
+                    "gateway_instance": str(row.get("gateway_instance") or ""),
+                    "policy_snapshot_hash": str(row.get("policy_snapshot_hash") or ""),
+                    "request_hash": str(row.get("request_hash") or ""),
+                    "decision_id": str(row.get("decision_id") or ""),
+                    "error_code": str(row.get("error_code") or ""),
+                    "at": str(row.get("ts") or ""),
+                }
+                for row in security_audit_rows[:10]
+            ],
+            "security_approval_recent_events": [
+                {
+                    "event_type": str(row.get("event_type") or ""),
+                    "capability": str(row.get("capability") or ""),
+                    "trace_id": str(row.get("trace_id") or ""),
+                    "decision_id": str(row.get("decision_id") or ""),
+                    "policy_snapshot_hash": str(row.get("policy_snapshot_hash") or ""),
+                    "request_hash": str(row.get("request_hash") or ""),
+                    "actor": str(row.get("actor") or ""),
+                    "at": str(row.get("ts") or ""),
+                }
+                for row in approval_audit_rows
+            ],
+            "security_query_coverage": dict(security_query_coverage),
+            "legacy_tool_policy_paths": False,
+            "write_isolation_paths": [
+                "connector.record.create",
+                "connector.record.update",
+                "connector.message.send",
+                "connector.webhook.trigger",
+            ],
+            "webhook_write_recent_events": [
+                {
+                    "trace_id": str(row.get("trace_id") or ""),
+                    "error_code": str(row.get("error_code") or ""),
+                    "sidecar_target": str(row.get("sidecar_target") or ""),
+                    "success": bool(row.get("success")),
+                    "at_ms": int(row.get("at_ms") or 0),
+                }
+                for row in webhook_security_rows
+            ],
+            "channel_outbound_local_only": [
+                row["name"] for row in channel_rows if row.get("outbound_isolation_mode") == "local_only"
+            ],
+            "channel_outbound_isolated": [
+                row["name"]
+                for row in channel_rows
+                if row.get("outbound_isolation_mode") == "isolated_external"
+            ],
+            "channel_outbound_blocked": [
+                row["name"]
+                for row in channel_rows
+                if row.get("outbound_isolation_mode") == "blocked_no_sidecar"
+            ],
+            "external_channel_guardrail_coverage": [
+                row["name"]
+                for row in channel_rows
+                if row.get("name") not in {"webchat", "cli", "system", "webhook_trigger"}
+            ],
+            "legacy_direct_send_channels": [
+                row["name"]
+                for row in channel_rows
+                if bool(config.tools.policy.legacy_compat)
+                and row.get("name") not in {"webchat", "cli", "system", "webhook_trigger"}
+            ],
+            "legacy_direct_send_exposed": bool(config.tools.policy.legacy_compat),
+            "channel_outbound_recent_events": [
+                {
+                    "event_type": str(row.get("event_type") or ""),
+                    "channel": str(row.get("channel") or ""),
+                    "trace_id": str(row.get("trace_id") or ""),
+                    "action": str(row.get("action") or ""),
+                    "error_code": str(row.get("error_code") or ""),
+                    "isolation_mode": str(row.get("isolation_mode") or ""),
+                    "sidecar_target": str(row.get("sidecar_target") or ""),
+                    "at": str(row.get("ts") or ""),
+                }
+                for row in outbound_audit_rows
+            ],
+            "channel_outbound_guardrail_recent_events": [
+                {
+                    "event_type": str(row.get("event_type") or ""),
+                    "channel": str(row.get("channel") or ""),
+                    "trace_id": str(row.get("trace_id") or ""),
+                    "error_code": str(row.get("error_code") or ""),
+                    "send_path": str(row.get("send_path") or row.get("helper_name") or ""),
+                    "isolation_mode": str(row.get("isolation_mode") or ""),
+                    "at": str(row.get("ts") or ""),
+                }
+                for row in outbound_audit_rows
+                if str(row.get("event_type") or "")
+                in {
+                    "message.outbound.direct_blocked",
+                    "message.outbound.legacy_allowed",
+                    "message.outbound.helper_blocked",
+                }
+            ],
+            "audit_chain_ok": bool(audit_verify.get("ok")),
+            "audit_chain_checked": int(audit_verify.get("checked") or 0),
+            "audit_chain_error": str(audit_verify.get("error") or ""),
         },
         "providers": provider_rows,
         "sidecars": collect_sidecar_status(config),
@@ -1678,6 +2303,22 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
 
 def _build_ops_summary_report(snapshot: dict[str, Any]) -> dict[str, Any]:
     ops = snapshot.get("ops") if isinstance(snapshot.get("ops"), dict) else {}
+    security = snapshot.get("security") if isinstance(snapshot.get("security"), dict) else {}
+    security_coverage = (
+        security.get("security_query_coverage")
+        if isinstance(security.get("security_query_coverage"), dict)
+        else {}
+    )
+    security_approval_events = (
+        security.get("security_approval_recent_events")
+        if isinstance(security.get("security_approval_recent_events"), list)
+        else []
+    )
+    recent_security_events = (
+        security.get("security_audit_recent_events")
+        if isinstance(security.get("security_audit_recent_events"), list)
+        else []
+    )
     rows = [
         {"surface": "ops", "metric": "status", "value": str(ops.get("status") or "ok")},
         {
@@ -1754,6 +2395,55 @@ def _build_ops_summary_report(snapshot: dict[str, Any]) -> dict[str, Any]:
             "surface": "model_routing",
             "metric": "recent_routes",
             "value": int(ops.get("model_routes") or 0),
+        },
+        {
+            "surface": "security",
+            "metric": "recent_events",
+            "value": int(security_coverage.get("events_total") or 0),
+        },
+        {
+            "surface": "security",
+            "metric": "approval_events",
+            "value": len(security_approval_events),
+        },
+        {
+            "surface": "security",
+            "metric": "missing_policy_snapshot_hash",
+            "value": max(
+                0,
+                int(security_coverage.get("events_total") or 0)
+                - int(security_coverage.get("with_policy_snapshot_hash") or 0),
+            ),
+        },
+        {
+            "surface": "security",
+            "metric": "missing_request_hash",
+            "value": max(
+                0,
+                int(security_coverage.get("events_total") or 0)
+                - int(security_coverage.get("with_request_hash") or 0),
+            ),
+        },
+        {
+            "surface": "security",
+            "metric": "missing_gateway_instance",
+            "value": max(
+                0,
+                int(security_coverage.get("events_total") or 0)
+                - int(security_coverage.get("with_gateway_instance") or 0),
+            ),
+        },
+        {
+            "surface": "security",
+            "metric": "untrusted_events",
+            "value": len(
+                [
+                    row
+                    for row in recent_security_events
+                    if str(row.get("trust_level") or "").strip().lower()
+                    in {"untrusted_packaged", "remote_untrusted"}
+                ]
+            ),
         },
     ]
     return {
@@ -2407,6 +3097,7 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
         from zen_claw.providers.litellm_provider import LiteLLMProvider
 
         cfg = load_config()
+        connector_cfg = cfg.tools.network.connector
         provider_cfg = cfg.get_provider(cfg.agents.defaults.model)
         if not provider_cfg or not provider_cfg.api_key:
             return f"[echo] {message}"
@@ -2428,6 +3119,7 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             max_reflections=cfg.agents.defaults.max_reflections,
             auto_parameter_rewrite=cfg.agents.defaults.auto_parameter_rewrite,
             max_context_tokens=cfg.agents.defaults.max_tokens,
+            connector_config=connector_cfg,
             compression_trigger_ratio=cfg.agents.defaults.compression_trigger_ratio,
             compression_hysteresis_ratio=cfg.agents.defaults.compression_hysteresis_ratio,
             compression_cooldown_turns=cfg.agents.defaults.compression_cooldown_turns,
@@ -4120,6 +4812,87 @@ button{margin-top:12px;width:100%;padding:10px;border:none;border-radius:8px;bac
                 "agent_id_filter": str(agent_id or ""),
                 "limit": bounded_limit,
                 "offset": bounded_offset,
+            }
+        )
+
+    @api_router.get(
+        "/security/audit",
+        summary="Security Audit 查询",
+        description="返回当天 zero-trust / capability / approval / outbound security 审计事件，支持筛选、分页和 CSV 导出。",
+        tags=["dashboard"],
+    )
+    async def api_security_audit(
+        event_type: str = "",
+        capability: str = "",
+        trace_id: str = "",
+        tenant_id: str = "",
+        workspace_id: str = "",
+        agent_profile: str = "",
+        channel: str = "",
+        trust_level: str = "",
+        gateway_instance: str = "",
+        decision_id: str = "",
+        policy_snapshot_hash: str = "",
+        request_hash: str = "",
+        from_at_ms: int = 0,
+        to_at_ms: int = 0,
+        limit: int = 20,
+        offset: int = 0,
+        format: str = "",
+    ):
+        from zen_claw.config.loader import get_data_dir
+
+        bounded_limit = max(1, min(int(limit or 20), 100))
+        bounded_offset = max(0, int(offset or 0))
+        fmt = str(format or "json").strip().lower()
+        rows = _filter_security_audit_rows(
+            rows=_read_security_audit_rows(data_dir=get_data_dir(), limit=5000),
+            event_type=event_type,
+            capability=capability,
+            trace_id=trace_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            agent_profile=agent_profile,
+            channel=channel,
+            trust_level=trust_level,
+            gateway_instance=gateway_instance,
+            decision_id=decision_id,
+            policy_snapshot_hash=policy_snapshot_hash,
+            request_hash=request_hash,
+            from_at_ms=max(0, int(from_at_ms or 0)),
+            to_at_ms=max(0, int(to_at_ms or 0)),
+        )
+        page = rows[bounded_offset : bounded_offset + bounded_limit]
+        if fmt == "csv":
+            csv_payload = _security_audit_csv(page)
+            return StreamingResponse(
+                iter([csv_payload]),
+                media_type="text/csv; charset=utf-8",
+                headers={"Content-Disposition": "attachment; filename=security-audit.csv"},
+            )
+        return JSONResponse(
+            {
+                "rows": page,
+                "total": len(rows),
+                "returned": len(page),
+                "limit": bounded_limit,
+                "offset": bounded_offset,
+                "filters": {
+                    "event_type": str(event_type or ""),
+                    "capability": str(capability or ""),
+                    "trace_id": str(trace_id or ""),
+                    "tenant_id": str(tenant_id or ""),
+                    "workspace_id": str(workspace_id or ""),
+                    "agent_profile": str(agent_profile or ""),
+                    "channel": str(channel or ""),
+                    "trust_level": str(trust_level or ""),
+                    "gateway_instance": str(gateway_instance or ""),
+                    "decision_id": str(decision_id or ""),
+                    "policy_snapshot_hash": str(policy_snapshot_hash or ""),
+                    "request_hash": str(request_hash or ""),
+                    "from_at_ms": max(0, int(from_at_ms or 0)),
+                    "to_at_ms": max(0, int(to_at_ms or 0)),
+                },
             }
         )
 
@@ -10869,6 +11642,206 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
       if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
       return Math.floor(sec / 86400) + 'd ago';
     }}
+    window.__securityAuditState = window.__securityAuditState || {{
+      filters: {{
+        capability: "",
+        trace_id: "",
+        tenant_id: "",
+        workspace_id: "",
+        trust_level: "",
+        gateway_instance: "",
+        decision_id: "",
+        policy_snapshot_hash: "",
+        request_hash: "",
+        event_type: "",
+        limit: "10",
+        offset: "0",
+      }},
+      rows: [],
+      initialized: false,
+      loading: false,
+      error: "",
+      lastLoadedAtMs: 0,
+      total: 0,
+      returned: 0,
+    }};
+    function shortCode(value, keep = 8) {{
+      const text = String(value || "").trim();
+      if (!text) return "-";
+      return text.length > keep ? text.slice(0, keep) : text;
+    }}
+    function securityRowClass(row) {{
+      const trust = String(row?.trust_level || "").trim().toLowerCase();
+      if (trust === "remote_untrusted") return "bad";
+      if (trust === "untrusted_packaged") return "warn";
+      return "";
+    }}
+    function scopePreview(scope) {{
+      if (!scope || typeof scope !== "object") return "-";
+      const keys = Object.keys(scope).slice(0, 2);
+      if (!keys.length) return "-";
+      return keys.map(k => `${{k}}=${{String(scope[k] ?? "-")}}`).join("; ");
+    }}
+    function buildSecurityAuditQuery(formatOverride) {{
+      const state = window.__securityAuditState || {{}};
+      const base = state.filters || {{}};
+      const qs = new URLSearchParams();
+      const fields = [
+        "capability",
+        "trace_id",
+        "tenant_id",
+        "workspace_id",
+        "trust_level",
+        "gateway_instance",
+        "decision_id",
+        "policy_snapshot_hash",
+        "request_hash",
+        "event_type",
+        "limit",
+        "offset",
+      ];
+      for (const field of fields) {{
+        const el = document.getElementById(`securityAudit${{field.charAt(0).toUpperCase() + field.slice(1)}}`);
+        const value = String(el?.value ?? base[field] ?? "").trim();
+        if (value) qs.set(field, value);
+      }}
+      const fmt = String(formatOverride || "").trim().toLowerCase();
+      if (fmt) qs.set("format", fmt);
+      return qs;
+    }}
+    function syncSecurityAuditFiltersFromInputs() {{
+      const state = window.__securityAuditState || {{}};
+      state.filters = state.filters || {{}};
+      const fields = [
+        "capability",
+        "trace_id",
+        "tenant_id",
+        "workspace_id",
+        "trust_level",
+        "gateway_instance",
+        "decision_id",
+        "policy_snapshot_hash",
+        "request_hash",
+        "event_type",
+        "limit",
+        "offset",
+      ];
+      for (const field of fields) {{
+        const el = document.getElementById(`securityAudit${{field.charAt(0).toUpperCase() + field.slice(1)}}`);
+        if (el) state.filters[field] = String(el.value || "").trim();
+      }}
+    }}
+    async function loadSecurityAudit(options) {{
+      const opts = options || {{}};
+      const key = getSkillsApiKey();
+      const state = window.__securityAuditState || {{}};
+      const status = document.getElementById("securityAuditStatus");
+      if (!key) {{
+        state.error = "API key required for security audit";
+        if (status) status.textContent = state.error;
+        renderSecurity(window.__snap || {{}});
+        return;
+      }}
+      if (state.loading && !opts.force) return;
+      syncSecurityAuditFiltersFromInputs();
+      const qs = buildSecurityAuditQuery("");
+      state.loading = true;
+      state.error = "";
+      if (status && !opts.silent) status.textContent = "loading security audit...";
+      try {{
+        const resp = await fetch(`/api/v1/security/audit?${{qs.toString()}}`, {{
+          headers: {{
+            'X-API-Key': key
+          }}
+        }});
+        const body = await resp.json().catch(() => ({{}}));
+        if (!resp.ok) {{
+          throw new Error(body.detail || body.error || ('http ' + resp.status));
+        }}
+        state.rows = Array.isArray(body.rows) ? body.rows : [];
+        state.total = Number(body.total || 0);
+        state.returned = Number(body.returned || 0);
+        state.initialized = true;
+        state.lastLoadedAtMs = Date.now();
+        state.error = "";
+        if (status) status.textContent = `security audit ready: ${{state.returned}} / ${{state.total}}`;
+      }} catch (err) {{
+        state.error = `security audit failed: ${{err.message || err}}`;
+        if (status) status.textContent = state.error;
+      }} finally {{
+        state.loading = false;
+        renderSecurity(window.__snap || {{}});
+      }}
+    }}
+    async function exportSecurityAudit(format) {{
+      const key = getSkillsApiKey();
+      const status = document.getElementById("securityAuditStatus");
+      const fmt = String(format || "json").trim().toLowerCase() || "json";
+      if (!key) {{
+        if (status) status.textContent = "API key required for security audit export";
+        return;
+      }}
+      syncSecurityAuditFiltersFromInputs();
+      if (status) status.textContent = `exporting security audit ${{fmt}}...`;
+      try {{
+        const qs = buildSecurityAuditQuery(fmt === "csv" ? "csv" : "json");
+        const resp = await fetch(`/api/v1/security/audit?${{qs.toString()}}`, {{
+          headers: {{
+            'X-API-Key': key
+          }}
+        }});
+        if (!resp.ok) {{
+          const body = await resp.json().catch(() => ({{}}));
+          throw new Error(body.detail || body.error || ('http ' + resp.status));
+        }}
+        const blob = fmt === "csv"
+          ? await resp.blob()
+          : new Blob([JSON.stringify(await resp.json(), null, 2)], {{ type: "application/json;charset=utf-8" }});
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = fmt === "csv" ? "security-audit.csv" : "security-audit.json";
+        anchor.click();
+        URL.revokeObjectURL(url);
+        if (status) status.textContent = `security audit ${{fmt}} exported`;
+      }} catch (err) {{
+        if (status) status.textContent = `security audit export failed: ${{err.message || err}}`;
+      }}
+    }}
+    function renderSecurity(data) {{
+      const security = data.security || {{}};
+      const state = window.__securityAuditState || {{}};
+      state.filters = state.filters || {{}};
+      const coverage = security.security_query_coverage || {{}};
+      const recentEvents = Array.isArray(security.security_audit_recent_events) ? security.security_audit_recent_events.slice(0, 5) : [];
+      const approvalEvents = Array.isArray(security.security_approval_recent_events) ? security.security_approval_recent_events.slice(0, 5) : [];
+      const rows = Array.isArray(state.rows) ? state.rows : [];
+      const now = Date.now();
+      const recentEventsHtml = recentEvents.map(row => `<tr>
+        <td>${{fmtAgo(Date.parse(row.at || "") || 0, now)}}</td>
+        <td>${{esc(row.event_type || "-")}}</td>
+        <td><code title="${{esc(row.capability || "-")}}">${{esc(shortCode(row.capability || "-", 18))}}</code></td>
+        <td><code title="${{esc(row.trace_id || "-")}}">${{esc(shortCode(row.trace_id || "-", 10))}}</code></td>
+        <td class="${{securityRowClass(row)}}">${{esc(row.trust_level || "-")}}</td>
+      </tr>`).join('');
+      const approvalEventsHtml = approvalEvents.map(row => `<tr>
+        <td>${{fmtAgo(Date.parse(row.at || "") || 0, now)}}</td>
+        <td>${{esc(row.event_type || "-")}}</td>
+        <td><code title="${{esc(row.decision_id || "-")}}">${{esc(shortCode(row.decision_id || "-", 10))}}</code></td>
+        <td><code title="${{esc(row.request_hash || "-")}}">${{esc(shortCode(row.request_hash || "-", 10))}}</code></td>
+      </tr>`).join('');
+      const resultRowsHtml = rows.map(row => `<tr class="${{securityRowClass(row)}}">
+        <td>${{fmtAgo(row.at_ms, now)}}</td>
+        <td title="${{esc(row.event_type || "-")}}">${{esc(row.event_type || "-")}}</td>
+        <td title="${{esc((row.capability || "-") + "\\n" + scopePreview(row.resource_scope))}}"><code>${{esc(shortCode(row.capability || "-", 18))}}</code><br/><span class="muted">${{esc(scopePreview(row.resource_scope))}}</span></td>
+        <td title="${{esc(row.trace_id || "-")}}"><code>${{esc(shortCode(row.trace_id || "-", 10))}}</code></td>
+        <td title="${{esc(`tenant=${{row.tenant_id || "-"}} workspace=${{row.workspace_id || "-"}} profile=${{row.agent_profile || "-"}}`)}}"><code>${{esc(row.tenant_id || "-")}}</code><br/><span class="muted">${{esc(row.workspace_id || "-")}}</span></td>
+        <td title="${{esc(`trust=${{row.trust_level || "-"}} gateway=${{row.gateway_instance || "-"}}`)}}">${{esc(row.trust_level || "-")}}<br/><span class="muted">${{esc(shortCode(row.gateway_instance || "-", 12))}}</span></td>
+        <td title="${{esc(`decision=${{row.decision_id || "-"}}\\nrequest=${{row.request_hash || "-"}}\\npolicy=${{row.policy_snapshot_hash || "-"}}`)}}"><code>${{esc(shortCode(row.decision_id || "-", 10))}}</code><br/><span class="muted">${{esc(shortCode(row.request_hash || "-", 10))}}</span></td>
+        <td title="${{esc(row.error_code || "-")}}">${{esc(row.error_code || (row.ok === true ? "ok" : "-"))}}</td>
+      </tr>`).join('');
+      p("security", `hardening: ${{badge(security.production_hardening)}}<br/>subagent guardrail: ${{badge(security.subagent_hard_guardrail)}}<br/>skill perms: <b>${{esc(security.skill_permissions_mode || "-")}}</b><br/>coverage: events=<b>${{coverage.events_total || 0}}</b> / policy=<b>${{coverage.with_policy_snapshot_hash || 0}}</b> / request=<b>${{coverage.with_request_hash || 0}}</b> / gateway=<b>${{coverage.with_gateway_instance || 0}}</b><br/><br/><div style="margin:10px 0 8px 0;"><b>Recent Security Events</b><table><thead><tr><th>When</th><th>Event</th><th>Capability</th><th>Trace</th><th>Trust</th></tr></thead><tbody>${{recentEventsHtml || '<tr><td colspan="5" class="muted">No security audit events</td></tr>'}}</tbody></table></div><div style="margin:10px 0 8px 0;"><b>Approval Activity</b><table><thead><tr><th>When</th><th>Event</th><th>Decision</th><th>Request</th></tr></thead><tbody>${{approvalEventsHtml || '<tr><td colspan="4" class="muted">No approval activity</td></tr>'}}</tbody></table></div><div style="margin:10px 0 8px 0;"><b>Security Audit</b><br/><span class="muted">capability</span> <input id="securityAuditCapability" type="text" value="${{esc(state.filters.capability || '')}}" placeholder="exec.run" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:110px;" /> <span class="muted">trace</span> <input id="securityAuditTrace_id" type="text" value="${{esc(state.filters.trace_id || '')}}" placeholder="trace-1" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:110px;" /> <span class="muted">tenant</span> <input id="securityAuditTenant_id" type="text" value="${{esc(state.filters.tenant_id || '')}}" placeholder="default" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:100px;" /> <span class="muted">workspace</span> <input id="securityAuditWorkspace_id" type="text" value="${{esc(state.filters.workspace_id || '')}}" placeholder="ws-1" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:90px;" /> <span class="muted">trust</span> <input id="securityAuditTrust_level" type="text" value="${{esc(state.filters.trust_level || '')}}" placeholder="remote_untrusted" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:130px;" /> <br/><span class="muted">gateway</span> <input id="securityAuditGateway_instance" type="text" value="${{esc(state.filters.gateway_instance || '')}}" placeholder="gw-1" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:100px; margin-top:6px;" /> <span class="muted">decision</span> <input id="securityAuditDecision_id" type="text" value="${{esc(state.filters.decision_id || '')}}" placeholder="APR-1" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:90px;" /> <span class="muted">policy</span> <input id="securityAuditPolicy_snapshot_hash" type="text" value="${{esc(state.filters.policy_snapshot_hash || '')}}" placeholder="policy-hash" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:110px;" /> <span class="muted">request</span> <input id="securityAuditRequest_hash" type="text" value="${{esc(state.filters.request_hash || '')}}" placeholder="request-hash" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:110px;" /> <span class="muted">event</span> <input id="securityAuditEvent_type" type="text" value="${{esc(state.filters.event_type || '')}}" placeholder="approval.approved" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:130px;" /> <span class="muted">limit</span> <input id="securityAuditLimit" type="text" value="${{esc(state.filters.limit || '10')}}" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:48px;" /> <span class="muted">offset</span> <input id="securityAuditOffset" type="text" value="${{esc(state.filters.offset || '0')}}" style="padding:4px 6px; border:1px solid #d9e0ea; border-radius:6px; width:48px;" /> <button onclick="loadSecurityAudit()" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Load</button> <button onclick="exportSecurityAudit('csv')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Export CSV</button> <button onclick="exportSecurityAudit('json')" style="padding:4px 8px; border:1px solid #d9e0ea; border-radius:6px; background:#fff;">Export JSON</button> <span id="securityAuditStatus" class="muted">${{esc(state.error || (state.initialized ? `returned / total: ${{state.returned || 0}} / ${{state.total || 0}}` : 'Load security audit results'))}}</span><div id="securityAuditPanel" style="margin-top:6px;"><table><thead><tr><th>When</th><th>Event</th><th>Capability</th><th>Trace</th><th>Tenant / Workspace</th><th>Trust / Gateway</th><th>Decision / Request</th><th>Error</th></tr></thead><tbody>${{resultRowsHtml || '<tr><td colspan="8" class="muted">No security audit results</td></tr>'}}</tbody></table></div></div>`);
+    }}
     function describeExecutionTrace(summary) {{
       const data = summary || {{}};
       const parts = [];
@@ -11537,7 +12510,7 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
         </tr>`).join('');
       p("cron", `total: <b>${{data.cron.total_jobs}}</b><br/>enabled: <b>${{data.cron.enabled_jobs}}</b><br/>failed: <span class="${{data.cron.failed_jobs > 0 ? 'bad' : 'ok'}}">${{data.cron.failed_jobs}}</span><br/>webhook jobs: <b>${{data.cron.webhook_jobs || 0}}</b><br/>knowledge-related: <b>${{data.cron.knowledge_related_jobs || 0}}</b><br/><br/><table><thead><tr><th>Name</th><th>Schedule</th><th>Target</th><th>Knowledge</th><th>Last</th></tr></thead><tbody>${{cronRows || '<tr><td colspan="5" class="muted">No cron jobs</td></tr>'}}</tbody></table>`);
       renderKnowledge(data);
-      p("security", `hardening: ${{badge(data.security.production_hardening)}}<br/>subagent guardrail: ${{badge(data.security.subagent_hard_guardrail)}}<br/>skill perms: <b>${{data.security.skill_permissions_mode}}</b>`);
+      renderSecurity(data);
       const running = (data.sidecars || []).filter(x => x.status === "running").length;
       p("sidecars", `running: <b>${{running}}</b> / ${{(data.sidecars || []).length}}<br/>details in raw snapshot`);
       const chainClass = data.node.approval_chain_ok ? 'ok' : 'bad';
@@ -11558,6 +12531,7 @@ def _render_html(snapshot: dict[str, Any], refresh_sec: int) -> str:
         if (!r.ok) throw new Error('http ' + r.status);
         const data = await r.json();
         render(data);
+        await loadSecurityAudit({{ silent: true }});
       }} catch (e) {{
         p("agent", '<span class="bad">fetch failed</span>');
       }}

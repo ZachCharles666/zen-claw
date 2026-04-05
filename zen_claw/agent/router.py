@@ -42,6 +42,10 @@ class AgentRouter:
     ) -> AgentRouteDecision:
         explicit = self._normalize_optional_agent_id(explicit_agent_id)
         if explicit is not None:
+            if explicit != "default" and explicit not in self.config.agents.profiles:
+                return AgentRouteDecision(agent_id=explicit, reason="explicit", registered=False)
+            if not self._is_profile_allowed_on_channel(explicit, channel):
+                return AgentRouteDecision(agent_id="default", reason="explicit_denied", registered=True)
             return AgentRouteDecision(
                 agent_id=explicit,
                 reason="explicit",
@@ -53,13 +57,15 @@ class AgentRouter:
             normalized = self._normalize_optional_agent_id(bound)
             if normalized is None:
                 normalized = "default"
+            if not self._is_profile_allowed_on_channel(normalized, channel):
+                normalized = "default"
             return AgentRouteDecision(
                 agent_id=normalized,
                 reason="bound_route",
                 registered=normalized == "default" or normalized in self.config.agents.profiles,
             )
 
-        keyword_match = self._match_keyword(content)
+        keyword_match = self._match_keyword(content, channel=channel)
         if keyword_match is not None:
             return keyword_match
 
@@ -67,6 +73,8 @@ class AgentRouter:
         if channel_profile:
             normalized = self._normalize_optional_agent_id(channel_profile)
             if normalized is None:
+                normalized = "default"
+            if not self._is_profile_allowed_on_channel(normalized, channel):
                 normalized = "default"
             return AgentRouteDecision(
                 agent_id=normalized,
@@ -98,13 +106,15 @@ class AgentRouter:
             return ""
         return str(getattr(channel_cfg, "agent_profile", "") or "").strip()
 
-    def _match_keyword(self, content: str) -> AgentRouteDecision | None:
+    def _match_keyword(self, content: str, *, channel: str) -> AgentRouteDecision | None:
         text = " ".join(str(content or "").strip().lower().split())
         if not text:
             return None
 
         best: tuple[int, str, str] | None = None
         for agent_id, profile in self.config.agents.profiles.items():
+            if not self._is_profile_allowed_on_channel(agent_id, channel):
+                continue
             for keyword in getattr(profile, "routing_keywords", []):
                 if keyword and keyword in text:
                     candidate = (len(keyword), keyword, agent_id)
@@ -119,3 +129,23 @@ class AgentRouter:
             matched_keyword=keyword,
             registered=True,
         )
+
+    def _is_profile_allowed_on_channel(self, agent_id: str, channel: str) -> bool:
+        normalized = normalize_agent_id(agent_id)
+        if normalized == "default":
+            return True
+        profile = self.config.agents.profiles.get(normalized)
+        if profile is None:
+            return False
+        channel_key = str(channel or "").strip().lower()
+        allowed_channels = {str(v).strip().lower() for v in getattr(profile, "allowed_channels", []) if str(v).strip()}
+        if allowed_channels and channel_key not in allowed_channels:
+            return False
+        trusted_locals = {
+            str(v).strip().lower()
+            for v in (getattr(self.config.tools.policy, "trusted_local_channels", []) or [])
+            if str(v).strip()
+        }
+        if bool(getattr(profile, "dev_profile", False)) or bool(getattr(profile, "trusted_local_only", False)):
+            return channel_key in trusted_locals
+        return True

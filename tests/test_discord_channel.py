@@ -10,6 +10,12 @@ from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.discord import DiscordChannel
 from zen_claw.config.schema import DiscordConfig
 
+_AUTHORIZED_META = {
+    "trace_id": "trace-auth-1",
+    "outbound_dispatch_authorized": True,
+    "outbound_dispatch_mode": "manager_local_dispatch",
+}
+
 
 def _make_config(**kwargs) -> DiscordConfig:
     defaults = dict(
@@ -73,10 +79,22 @@ async def test_discord_stop_when_not_running_is_safe() -> None:
 async def test_discord_send_without_http_logs_warning() -> None:
     ch, _ = _make_channel()
     ch._http = None
-    msg = OutboundMessage(channel="discord", chat_id="123456789", content="hello")
+    msg = OutboundMessage(
+        channel="discord",
+        chat_id="123456789",
+        content="hello",
+        metadata=dict(_AUTHORIZED_META),
+    )
     # Should not raise
     await ch.send(msg)
     assert ch._http is None
+
+
+@pytest.mark.asyncio
+async def test_discord_direct_send_blocked_by_guardrail() -> None:
+    ch, _ = _make_channel()
+    with pytest.raises(RuntimeError, match="authorized dispatch context"):
+        await ch.send(OutboundMessage(channel="discord", chat_id="123456789", content="hello"))
 
 
 # ── RBAC: is_allowed ─────────────────────────────────────────────────────────

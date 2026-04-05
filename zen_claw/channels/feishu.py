@@ -274,88 +274,93 @@ class FeishuChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu."""
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
         if not self._client:
             logger.warning("Feishu client not initialized")
             return
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
+            try:
+                # Determine receive_id_type based on chat_id format
+                # open_id starts with "ou_", chat_id starts with "oc_"
+                if msg.chat_id.startswith("oc_"):
+                    receive_id_type = "chat_id"
+                else:
+                    receive_id_type = "open_id"
 
-        try:
-            # Determine receive_id_type based on chat_id format
-            # open_id starts with "ou_", chat_id starts with "oc_"
-            if msg.chat_id.startswith("oc_"):
-                receive_id_type = "chat_id"
-            else:
-                receive_id_type = "open_id"
+                # Build card with markdown + table support
+                content_str = msg.content or ""
 
-            # Build card with markdown + table support
-            content_str = msg.content or ""
+                # Process outgoing media uploads if present
+                if msg.media:
+                    for uri in msg.media:
+                        if uri.startswith("media://local/"):
+                            # Extract the local path
+                            local_path = self.media_root / uri.split("/")[-1]
+                            if local_path.exists():
+                                # If it's an image, upload as image and prepend to content
+                                # Basic integration for now, sending images as markdown tags
+                                try:
+                                    from lark_oapi.api.im.v1 import (
+                                        CreateImageRequest,
+                                        CreateImageRequestBody,
+                                    )
 
-            # Process outgoing media uploads if present
-            if msg.media:
-                for uri in msg.media:
-                    if uri.startswith("media://local/"):
-                        # Extract the local path
-                        local_path = self.media_root / uri.split("/")[-1]
-                        if local_path.exists():
-                            # If it's an image, upload as image and prepend to content
-                            # Basic integration for now, sending images as markdown tags
-                            try:
-                                from lark_oapi.api.im.v1 import (
-                                    CreateImageRequest,
-                                    CreateImageRequestBody,
-                                )
-
-                                with local_path.open("rb") as f:
-                                    req = (
-                                        CreateImageRequest.builder()
-                                        .request_body(
-                                            CreateImageRequestBody.builder()
-                                            .image_type("message")
-                                            .image(f)
+                                    with local_path.open("rb") as f:
+                                        req = (
+                                            CreateImageRequest.builder()
+                                            .request_body(
+                                                CreateImageRequestBody.builder()
+                                                .image_type("message")
+                                                .image(f)
+                                                .build()
+                                            )
                                             .build()
                                         )
-                                        .build()
+                                        resp = self._client.im.v1.image.create(req)
+                                        if resp.success() and resp.data:
+                                            img_key = resp.data.image_key
+                                            content_str = f"![image]({img_key})\n" + content_str
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Failed to upload media {local_path} to Feishu: {e}"
                                     )
-                                    resp = self._client.im.v1.image.create(req)
-                                    if resp.success() and resp.data:
-                                        img_key = resp.data.image_key
-                                        content_str = f"![image]({img_key})\n" + content_str
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to upload media {local_path} to Feishu: {e}"
-                                )
 
-            elements = self._build_card_elements(content_str)
-            card = {
-                "config": {"wide_screen_mode": True},
-                "elements": elements,
-            }
-            content = json.dumps(card, ensure_ascii=False)
+                elements = self._build_card_elements(content_str)
+                card = {
+                    "config": {"wide_screen_mode": True},
+                    "elements": elements,
+                }
+                content = json.dumps(card, ensure_ascii=False)
 
-            request = (
-                CreateMessageRequest.builder()
-                .receive_id_type(receive_id_type)
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(msg.chat_id)
-                    .msg_type("interactive")
-                    .content(content)
+                request = (
+                    CreateMessageRequest.builder()
+                    .receive_id_type(receive_id_type)
+                    .request_body(
+                        CreateMessageRequestBody.builder()
+                        .receive_id(msg.chat_id)
+                        .msg_type("interactive")
+                        .content(content)
+                        .build()
+                    )
                     .build()
                 )
-                .build()
-            )
 
-            response = self._client.im.v1.message.create(request)
+                response = self._client.im.v1.message.create(request)
 
-            if not response.success():
-                logger.error(
-                    f"Failed to send Feishu message: code={response.code}, "
-                    f"msg={response.msg}, log_id={response.get_log_id()}"
-                )
-            else:
-                logger.debug(f"Feishu message sent to {msg.chat_id}")
+                if not response.success():
+                    logger.error(
+                        f"Failed to send Feishu message: code={response.code}, "
+                        f"msg={response.msg}, log_id={response.get_log_id()}"
+                    )
+                else:
+                    logger.debug(f"Feishu message sent to {msg.chat_id}")
 
-        except Exception as e:
-            logger.error(f"Error sending Feishu message: {e}")
+            except Exception as e:
+                logger.error(f"Error sending Feishu message: {e}")
 
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """
@@ -468,6 +473,7 @@ class FeishuChannel(BaseChannel):
 
     async def send_voice_message(self, chat_id: str, audio_path: Path) -> None:
         """Send voice message to Feishu, best-effort helper for TTS integration."""
+        await self._assert_outbound_helper_allowed(helper_name="send_voice_message")
         if not audio_path.exists():
             logger.error(f"Feishu: audio file not found: {audio_path}")
             return

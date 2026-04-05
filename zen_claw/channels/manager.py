@@ -11,6 +11,7 @@ from loguru import logger
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.base import BaseChannel
+from zen_claw.channels.outbound_adapter import ChannelOutboundAdapter
 from zen_claw.channels.registry import get_channel_config, iter_channel_specs
 from zen_claw.channels.routing import AgentRouteStore
 from zen_claw.config.schema import Config
@@ -78,6 +79,7 @@ class ChannelManager:
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._audit_worker = audit_worker
+        self._outbound_adapter = ChannelOutboundAdapter(config)
         self._dispatch_task: asyncio.Task | None = None
         self._route_store = self._init_route_store()
         self._route_gc_ttl_ms = 24 * 60 * 60 * 1000
@@ -129,11 +131,11 @@ class ChannelManager:
         from zen_claw.config.loader import get_data_dir
 
         candidates = []
+        candidates.append(self.config.workspace_path / ".zen-claw" / "channels" / "agent_routes.db")
         try:
             candidates.append(get_data_dir() / "channels" / "agent_routes.db")
         except Exception:
             pass
-        candidates.append(self.config.workspace_path / ".zen-claw" / "channels" / "agent_routes.db")
         last_err = None
         for db_path in candidates:
             try:
@@ -242,6 +244,7 @@ class ChannelManager:
     def _bind_access_checker(self, channel: BaseChannel) -> None:
         """Inject centralized RBAC checker into channel instance."""
         channel.access_checker = self._is_sender_allowed
+        channel.security_policy = self.config.tools.policy
 
     def _init_channels(self) -> None:
         """Initialize channels based on config."""
@@ -376,18 +379,15 @@ class ChannelManager:
                                 chat_id=msg.chat_id,
                             )
                         )
-                        await channel.send(msg)
-                        if self._audit_worker:
-                            await self._audit_worker.audit_turn(
-                                trace_id,
-                                {
-                                    "event_type": "message.outbound",
-                                    "channel": msg.channel,
-                                    "chat_id": msg.chat_id,
-                                    "content_length": len(msg.content or ""),
-                                },
-                            )
+                        await self._dispatch_message(channel=channel, msg=msg, trace_id=trace_id)
                     except Exception as e:
+                        await self._audit_outbound_event(
+                            trace_id=trace_id,
+                            event_type="message.outbound.failed",
+                            msg=msg,
+                            error_code="channel_dispatch_runtime",
+                            sidecar_target=self._outbound_adapter.sidecar_target,
+                        )
                         logger.error(
                             f"Error sending to {msg.channel}: {e} "
                             + TraceContext.event_text(
@@ -432,15 +432,24 @@ class ChannelManager:
             return
         self._last_drop_notice_at[key] = now
         try:
-            await channel.send(
-                OutboundMessage(
+            await self._dispatch_message(
+                channel=channel,
+                msg=OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
                     content=self._drop_notice_text,
                     metadata={"trace_id": trace_id, "rate_limited_notice": True},
-                )
+                ),
+                trace_id=trace_id,
             )
         except Exception:
+            await self._audit_outbound_event(
+                trace_id=trace_id,
+                event_type="message.outbound.failed",
+                msg=msg,
+                error_code="channel_dispatch_rate_drop_notice_failed",
+                sidecar_target=self._outbound_adapter.sidecar_target,
+            )
             logger.warning(
                 "Failed to send rate-limit drop notice "
                 + TraceContext.event_text(
@@ -452,6 +461,116 @@ class ChannelManager:
                     retryable=True,
                 )
             )
+
+    async def _dispatch_message(
+        self,
+        *,
+        channel: BaseChannel,
+        msg: OutboundMessage,
+        trace_id: str,
+    ) -> None:
+        mode = self._outbound_adapter.outbound_mode_for_channel(msg.channel)
+        if mode == "local_only":
+            meta = dict(msg.metadata or {})
+            meta["trace_id"] = trace_id
+            meta["outbound_dispatch_authorized"] = True
+            meta["outbound_dispatch_mode"] = "manager_local_dispatch"
+            meta["outbound_dispatch_source"] = "channel_manager"
+            msg.metadata = meta
+            await channel.send(msg)
+            await self._audit_outbound_event(
+                trace_id=trace_id,
+                event_type="message.outbound.executed",
+                msg=msg,
+                isolation_mode=mode,
+            )
+            return
+
+        results = await self._outbound_adapter.dispatch(msg, trace_id=trace_id)
+        if not results:
+            await self._audit_outbound_event(
+                trace_id=trace_id,
+                event_type="message.outbound.executed",
+                msg=msg,
+                isolation_mode=mode,
+                sidecar_target=self._outbound_adapter.sidecar_target,
+            )
+            return
+        for action, result in results:
+            event_type = "message.outbound.uploaded" if action == "connector.file.upload" and result.ok else "message.outbound.executed" if result.ok else "message.outbound.denied"
+            await self._audit_outbound_event(
+                trace_id=trace_id,
+                event_type=event_type,
+                msg=msg,
+                action=action,
+                result=result,
+                isolation_mode=mode,
+                sidecar_target=str(result.meta.get("sidecar_target") or self._outbound_adapter.sidecar_target),
+            )
+            if not result.ok:
+                error = result.error.message if result.error else "channel outbound isolation failed"
+                raise RuntimeError(error)
+
+    async def _audit_outbound_event(
+        self,
+        *,
+        trace_id: str,
+        event_type: str,
+        msg: OutboundMessage,
+        action: str = "",
+        result: Any | None = None,
+        error_code: str = "",
+        isolation_mode: str = "",
+        sidecar_target: str = "",
+    ) -> None:
+        if self._audit_worker is None:
+            return
+        meta = msg.metadata if isinstance(msg.metadata, dict) else {}
+        await self._audit_worker.audit_turn(
+            trace_id,
+            {
+                "event_type": event_type,
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "content_length": len(msg.content or ""),
+                "media_count": len(msg.media or []),
+                "connector_name": str(msg.channel or "").strip().lower(),
+                "capability": str(action or ""),
+                "action": str(action or ""),
+                "target_resource": (
+                    f"channel.{str(msg.channel or '').strip().lower()}.file"
+                    if action == "connector.file.upload"
+                    else f"channel.{str(msg.channel or '').strip().lower()}.message"
+                    if action
+                    else ""
+                ),
+                "identity": {
+                    "channel": str(meta.get("origin_channel") or "system"),
+                    "sender_id": str(meta.get("sender_id") or meta.get("route_user_id") or ""),
+                    "chat_id": str(meta.get("origin_chat_id") or msg.chat_id or ""),
+                    "tenant_id": str(meta.get("tenant_id") or "default"),
+                    "workspace_id": str(meta.get("workspace_id") or self.config.workspace_path.name),
+                    "agent_profile": str(
+                        meta.get("agent_profile")
+                        or meta.get("profile_id")
+                        or meta.get("routed_agent_id")
+                        or "default"
+                    ),
+                    "role": str(meta.get("role") or meta.get("channel_role") or "operator"),
+                },
+                "policy_snapshot": {
+                    "production_hardening": bool(self.config.tools.policy.production_hardening),
+                    "legacy_compat": bool(self.config.tools.policy.legacy_compat),
+                },
+                "dev_profile": bool(meta.get("dev_profile")),
+                "legacy_compat": bool(self.config.tools.policy.legacy_compat),
+                "isolation_mode": str(isolation_mode or self._outbound_adapter.outbound_mode_for_channel(msg.channel)),
+                "sidecar_target": str(sidecar_target or ""),
+                "error_code": str(
+                    error_code or (getattr(getattr(result, "error", None), "code", "") if result is not None else "")
+                ),
+            },
+        )
 
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""

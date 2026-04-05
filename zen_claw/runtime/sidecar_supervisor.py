@@ -107,6 +107,7 @@ def _build_service_specs(config, workspace: Path) -> list[_ServiceSpec]:
     search_cfg = config.tools.effective_search()
     fetch_cfg = config.tools.effective_fetch()
     browser_cfg = config.tools.effective_browser()
+    connector_cfg = config.tools.network.connector
 
     if exec_cfg.mode == "sidecar":
         env = {
@@ -147,15 +148,34 @@ def _build_service_specs(config, workspace: Path) -> list[_ServiceSpec]:
                 "sidecar supervisor skipped net-proxy auto-start because proxy URLs use different bind addresses"
             )
         else:
+            net_approval_mode = (
+                search_cfg.proxy_approval_mode
+                if search_cfg.proxy_approval_token.get_secret_value()
+                else fetch_cfg.proxy_approval_mode
+                if fetch_cfg.proxy_approval_token.get_secret_value()
+                else connector_cfg.sidecar_approval_mode
+            )
+            net_approval_token = (
+                search_cfg.proxy_approval_token.get_secret_value()
+                or fetch_cfg.proxy_approval_token.get_secret_value()
+                or connector_cfg.sidecar_approval_token.get_secret_value()
+            )
+            env = {
+                "NET_PROXY_BIND": first_bind,
+            }
+            if net_approval_mode == "hmac":
+                env["NET_PROXY_APPROVAL_SECRET"] = net_approval_token
+                env["NET_PROXY_APPROVAL_TOKEN"] = ""
+            else:
+                env["NET_PROXY_APPROVAL_TOKEN"] = net_approval_token
+                env["NET_PROXY_APPROVAL_SECRET"] = ""
             specs.append(
                 _ServiceSpec(
                     name="net-proxy",
                     health_url=_healthz_from_url(first, "/v1/search"),
                     bind_address=first_bind,
                     cwd=Path("go/net-proxy"),
-                    env={
-                        "NET_PROXY_BIND": first_bind,
-                    },
+                    env=env,
                     binary_env_var="zen_claw_NET_PROXY_BIN",
                     binary_name="net-proxy",
                 )
@@ -167,6 +187,12 @@ def _build_service_specs(config, workspace: Path) -> list[_ServiceSpec]:
             "BROWSER_SIDECAR_MAX_STEPS": str(browser_cfg.max_steps),
             "BROWSER_SIDECAR_TIMEOUT_SEC": str(browser_cfg.timeout_sec),
         }
+        if browser_cfg.sidecar_approval_mode == "hmac":
+            env["BROWSER_SIDECAR_SECRET"] = browser_cfg.sidecar_approval_token.get_secret_value()
+            env["BROWSER_SIDECAR_TOKEN"] = ""
+        else:
+            env["BROWSER_SIDECAR_TOKEN"] = browser_cfg.sidecar_approval_token.get_secret_value()
+            env["BROWSER_SIDECAR_SECRET"] = ""
         if browser_cfg.allowed_domains:
             env["BROWSER_SIDECAR_ALLOW_DOMAINS"] = ",".join(browser_cfg.allowed_domains)
         if browser_cfg.blocked_domains:

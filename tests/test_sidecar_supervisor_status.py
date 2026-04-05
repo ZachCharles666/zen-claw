@@ -7,7 +7,11 @@ from zen_claw.runtime.sidecar_supervisor import SidecarSupervisor, collect_sidec
 
 
 def _config() -> Config:
-    return Config.model_validate({})
+    cfg = Config.model_validate({})
+    cfg.tools.network.exec.mode = "local"
+    cfg.tools.network.search.mode = "local"
+    cfg.tools.network.fetch.mode = "local"
+    return cfg
 
 
 def test_collect_sidecar_status_empty_when_no_sidecar_modes(tmp_path: Path) -> None:

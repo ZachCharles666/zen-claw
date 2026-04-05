@@ -1,11 +1,19 @@
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.channels.manager import ChannelManager
 from zen_claw.channels.signal import SignalChannel
 from zen_claw.config.schema import Config, SignalConfig
+
+_AUTHORIZED_META = {
+    "trace_id": "trace-auth-1",
+    "outbound_dispatch_authorized": True,
+    "outbound_dispatch_mode": "manager_local_dispatch",
+}
 
 
 def test_signal_channel_start_send_stop() -> None:
@@ -19,7 +27,14 @@ def test_signal_channel_start_send_stop() -> None:
 
         await ch.start()
         assert ch.is_running is True
-        await ch.send(OutboundMessage(channel="signal", chat_id="+100", content="hello"))
+        await ch.send(
+            OutboundMessage(
+                channel="signal",
+                chat_id="+100",
+                content="hello",
+                metadata=dict(_AUTHORIZED_META),
+            )
+        )
         await ch.stop()
         assert ch.is_running is False
 
@@ -53,6 +68,7 @@ def test_signal_channel_signald_send_payload() -> None:
                 chat_id="+18880002",
                 content="hello",
                 media=["C:/tmp/a.jpg"],
+                metadata=dict(_AUTHORIZED_META),
             )
         )
         assert captured["path"] == "/v1/send"
@@ -116,11 +132,28 @@ def test_signal_channel_send_falls_back_to_jsonrpc() -> None:
 
         ch._signald_post = _fake_post  # type: ignore[method-assign]
         ch._signald_rpc_multi = _fake_rpc  # type: ignore[method-assign]
-        await ch.send(OutboundMessage(channel="signal", chat_id="+17770002", content="hi"))
+        await ch.send(
+            OutboundMessage(
+                channel="signal",
+                chat_id="+17770002",
+                content="hi",
+                metadata=dict(_AUTHORIZED_META),
+            )
+        )
         assert calls == [
             ("post", "/v1/send"),
             ("rpc_multi", ("send", "sendMessage", "send_message")),
         ]
+
+    asyncio.run(_run())
+
+
+def test_signal_direct_send_blocked_by_guardrail() -> None:
+    async def _run() -> None:
+        ch = SignalChannel(SignalConfig(enabled=True), MessageBus())
+
+        with pytest.raises(RuntimeError, match="authorized dispatch context"):
+            await ch.send(OutboundMessage(channel="signal", chat_id="+100", content="hello"))
 
     asyncio.run(_run())
 

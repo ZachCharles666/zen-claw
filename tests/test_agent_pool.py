@@ -75,6 +75,9 @@ def test_resolve_agent_profile_applies_registered_overrides(tmp_path: Path) -> N
                             "skillNames": ["content_gen", "rag_retrieve"],
                             "allowedTools": ["read_file", "web_fetch"],
                             "deniedTools": ["exec"],
+                            "devProfile": True,
+                            "trustedLocalOnly": True,
+                            "allowedChannels": ["cli"],
                         }
                 },
             }
@@ -92,6 +95,9 @@ def test_resolve_agent_profile_applies_registered_overrides(tmp_path: Path) -> N
     assert profile.skill_names == ["content_gen", "rag_retrieve"]
     assert profile.allowed_tools == ["read_file", "web_fetch"]
     assert profile.denied_tools == ["exec"]
+    assert profile.dev_profile is True
+    assert profile.trusted_local_only is True
+    assert profile.allowed_channels == ["cli"]
 
 
 def test_list_agent_profiles_includes_default_and_registered(tmp_path: Path) -> None:

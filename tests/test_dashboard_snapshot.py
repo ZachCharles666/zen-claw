@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from zen_claw.config.schema import Config
@@ -1377,3 +1378,324 @@ def test_build_dashboard_snapshot_clears_pending_channel_reload_after_apply(
     assert snapshot["channels"]["pending_reload"] is False
     assert snapshot["channels"]["pending_reload_count"] == 0
     assert snapshot["channels"]["last_apply"]["event"] == "channels.config.applied"
+
+
+def test_build_dashboard_snapshot_includes_zero_trust_security_fields(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config.model_validate(
+        {
+            "agents": {
+                "profiles": {
+                    "dev_shell": {
+                        "dev_profile": True,
+                        "trusted_local_only": True,
+                        "allowed_channels": ["cli"],
+                        "allowed_tools": ["read_file"],
+                    }
+                }
+            },
+            "tools": {
+                "policy": {
+                    "production_hardening": True,
+                    "legacy_compat": False,
+                    "trusted_local_channels": ["cli", "system"],
+                }
+            },
+        }
+    )
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "audit_logs").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["security"]["production_hardening"] is True
+    assert snapshot["security"]["legacy_compat"] is False
+    assert snapshot["security"]["local_fallback_enabled"] is False
+    assert snapshot["security"]["trusted_local_channels"] == ["cli", "system"]
+    assert snapshot["security"]["dev_profile_total"] == 1
+    assert snapshot["security"]["dev_profiles"] == ["dev_shell"]
+    assert snapshot["security"]["connector_write_policy_configured"] is False
+    assert snapshot["security"]["connector_write_profiles"] == []
+    assert snapshot["security"]["message_write_profiles"] == []
+    assert snapshot["security"]["webhook_write_profiles"] == []
+    assert snapshot["security"]["capability_policy_families"] == []
+    assert snapshot["security"]["sensitive_capability_profiles"]["message.send"] == []
+    assert snapshot["security"]["legacy_tool_policy_paths"] is False
+    assert snapshot["security"]["connector_write_recent_events"] == []
+    assert snapshot["security"]["security_audit_recent_events"] == []
+    assert snapshot["security"]["security_approval_recent_events"] == []
+    assert snapshot["security"]["security_query_coverage"] == {
+        "events_total": 0,
+        "with_capability": 0,
+        "with_resource_scope": 0,
+        "with_policy_snapshot_hash": 0,
+        "with_request_hash": 0,
+        "with_decision_id": 0,
+        "with_gateway_instance": 0,
+        "with_trust_level": 0,
+    }
+    assert snapshot["security"]["webhook_write_recent_events"] == []
+    assert snapshot["security"]["channel_outbound_local_only"] == []
+    assert "telegram" in snapshot["security"]["channel_outbound_isolated"]
+    assert snapshot["security"]["channel_outbound_blocked"] == []
+    assert snapshot["security"]["channel_outbound_recent_events"] == []
+    assert snapshot["security"]["write_isolation_paths"] == [
+        "connector.record.create",
+        "connector.record.update",
+        "connector.message.send",
+        "connector.webhook.trigger",
+    ]
+    assert snapshot["security"]["audit_chain_ok"] is True
+    assert snapshot["security"]["audit_chain_checked"] == 0
+
+
+def test_build_dashboard_snapshot_includes_connector_security_summary(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config.model_validate(
+        {
+            "agents": {"profiles": {"ops": {"allowed_tools": ["social_platform_post"]}}},
+            "tools": {
+                "policy": {
+                    "connector_allowed_names": ["moltbook"],
+                    "connector_allowed_actions": ["connector.record.create"],
+                    "connector_allowed_target_resources": ["moltbook.posts"],
+                }
+            },
+        }
+    )
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "audit_logs").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "audit_logs" / f"{datetime.now(tz=UTC).strftime('%Y-%m-%d')}.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": "2026-04-05T00:00:00+00:00",
+                "trace_id": "trace-1",
+                "prev_hash": "",
+                "event_type": "tool.denied",
+                "tool": "social_platform_post",
+                "error_code": "resource_scope_connector_unconfigured",
+                "hash": "placeholder",
+                "signature": "",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["security"]["connector_write_policy_configured"] is True
+    assert snapshot["security"]["connector_write_profiles"] == ["ops"]
+    assert snapshot["security"]["message_write_profiles"] == []
+    assert snapshot["security"]["webhook_write_profiles"] == []
+    assert snapshot["security"]["connector_write_recent_events"][0]["tool"] == "social_platform_post"
+    assert "connector" in snapshot["security"]["capability_policy_families"]
+    assert snapshot["security"]["capability_policy_recent_events"][0]["capability"] in {
+        "",
+        "connector.record.create",
+        "connector.message.send",
+    }
+
+
+def test_build_dashboard_snapshot_includes_security_query_fields(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config()
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "audit_logs").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    audit_path = data_dir / "audit_logs" / f"{datetime.now(tz=UTC).strftime('%Y-%m-%d')}.jsonl"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "ts": "2026-04-05T00:00:00+00:00",
+                "trace_id": "trace-sec-1",
+                "prev_hash": "",
+                "event_type": "tool.executed",
+                "tool": "social_platform_post",
+                "capability": "connector.record.create",
+                "resource_scope": {"connector_name": "moltbook"},
+                "policy_snapshot_hash": "policy-1",
+                "request_hash": "req-1",
+                "gateway_instance": "gw-1",
+                "sidecar_target": "http://127.0.0.1:4499/v1/fetch",
+                "identity": {
+                    "channel": "cli",
+                    "sender_id": "user-1",
+                    "chat_id": "chat-1",
+                    "tenant_id": "default",
+                    "workspace_id": "ws-1",
+                    "agent_profile": "ops",
+                    "role": "operator",
+                    "trust_level": "trusted_local",
+                },
+                "hash": "placeholder-1",
+                "signature": "",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "ts": "2026-04-05T00:01:00+00:00",
+                "trace_id": "trace-sec-2",
+                "prev_hash": "placeholder-1",
+                "event_type": "approval.approved",
+                "approval": {
+                    "approval_id": "APR-1",
+                    "capability": "exec.run",
+                    "request_hash": "req-2",
+                    "policy_snapshot_hash": "policy-2",
+                    "actor": "ops_reviewer",
+                },
+                "identity": {
+                    "channel": "webchat",
+                    "sender_id": "user-2",
+                    "chat_id": "chat-2",
+                    "tenant_id": "default",
+                    "workspace_id": "ws-2",
+                    "agent_profile": "default",
+                    "role": "operator",
+                    "trust_level": "remote_untrusted",
+                    "gateway_instance": "gw-2",
+                },
+                "resource_scope": {"working_dir": "E:/nano-claw-public"},
+                "hash": "placeholder-2",
+                "signature": "",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    assert snapshot["security"]["security_audit_recent_events"][0]["trace_id"] == "trace-sec-2"
+    assert snapshot["security"]["security_audit_recent_events"][0]["decision_id"] == "APR-1"
+    assert snapshot["security"]["security_audit_recent_events"][0]["request_hash"] == "req-2"
+    assert snapshot["security"]["security_audit_recent_events"][0]["policy_snapshot_hash"] == "policy-2"
+    assert snapshot["security"]["security_audit_recent_events"][0]["gateway_instance"] == "gw-2"
+    assert snapshot["security"]["security_audit_recent_events"][0]["trust_level"] == "remote_untrusted"
+    assert snapshot["security"]["security_approval_recent_events"][0]["decision_id"] == "APR-1"
+    assert snapshot["security"]["security_approval_recent_events"][0]["actor"] == "ops_reviewer"
+    assert snapshot["security"]["security_query_coverage"]["events_total"] == 2
+    assert snapshot["security"]["security_query_coverage"]["with_capability"] == 2
+    assert snapshot["security"]["security_query_coverage"]["with_resource_scope"] == 2
+    assert snapshot["security"]["security_query_coverage"]["with_policy_snapshot_hash"] == 2
+    assert snapshot["security"]["security_query_coverage"]["with_request_hash"] == 2
+    assert snapshot["security"]["security_query_coverage"]["with_decision_id"] == 1
+    assert snapshot["security"]["security_query_coverage"]["with_gateway_instance"] == 2
+    assert snapshot["security"]["security_query_coverage"]["with_trust_level"] == 2
+
+
+def test_build_dashboard_snapshot_includes_channel_outbound_isolation_summary(
+    monkeypatch, tmp_path: Path
+) -> None:
+    cfg = Config.model_validate(
+        {
+            "channels": {"discord": {"enabled": True}, "webchat": {"enabled": True}},
+            "tools": {
+                "network": {"connector": {"proxy_url": "http://127.0.0.1:4499/v1/fetch"}},
+                "policy": {
+                    "connector_allowed_names": ["discord"],
+                    "connector_allowed_actions": ["connector.message.send"],
+                    "connector_allowed_target_resources": ["channel.discord.message"],
+                },
+            },
+        }
+    )
+    data_dir = tmp_path / "data"
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "audit_logs").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    (data_dir / "audit_logs" / f"{datetime.now(tz=UTC).strftime('%Y-%m-%d')}.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": "2026-04-05T00:00:00+00:00",
+                "trace_id": "trace-out-1",
+                "prev_hash": "",
+                "event_type": "message.outbound.executed",
+                "channel": "discord",
+                "action": "connector.message.send",
+                "isolation_mode": "isolated_external",
+                "sidecar_target": "http://127.0.0.1:4499/v1/fetch",
+                "hash": "placeholder",
+                "signature": "",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "ts": "2026-04-05T00:01:00+00:00",
+                "trace_id": "trace-out-2",
+                "prev_hash": "placeholder",
+                "event_type": "message.outbound.direct_blocked",
+                "channel": "discord",
+                "error_code": "external_channel_direct_send_blocked",
+                "send_path": "send",
+                "isolation_mode": "guardrail_blocked",
+                "hash": "placeholder-2",
+                "signature": "",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    snapshot = build_dashboard_snapshot(cfg)
+    rows = {row["name"]: row for row in snapshot["channels"]["rows"]}
+    assert rows["discord"]["outbound_isolation_mode"] == "isolated_external"
+    assert rows["webchat"]["outbound_isolation_mode"] == "isolated_external"
+    assert "discord" in snapshot["security"]["channel_outbound_isolated"]
+    assert "webchat" in snapshot["security"]["channel_outbound_isolated"]
+    assert "webchat" not in snapshot["security"]["channel_outbound_local_only"]
+    assert "discord" in snapshot["security"]["external_channel_guardrail_coverage"]
+    assert snapshot["security"]["legacy_direct_send_exposed"] is False
+    assert snapshot["security"]["channel_outbound_recent_events"][0]["channel"] == "discord"
+    assert (
+        snapshot["security"]["channel_outbound_guardrail_recent_events"][0]["event_type"]
+        == "message.outbound.direct_blocked"
+    )

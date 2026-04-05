@@ -206,3 +206,41 @@ def test_read_log_returns_records(tmp_path: Path):
         assert "bar" in intents
     finally:
         srv.stop()
+
+
+def test_dispatch_via_sidecar_records_sidecar_target(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "status": 202, "body": {"queued": True}}
+
+    def _fake_post(url, headers=None, content=None, json=None, timeout=None):  # noqa: ANN001
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["content"] = content
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr("zen_claw.webhooks.outbound.httpx.post", _fake_post)
+    dispatcher = WebhookDispatcher(
+        tmp_path,
+        connector_proxy_url="http://127.0.0.1:4499/v1/fetch",
+        connector_approval_token="token-1",
+    )
+    record = dispatcher.dispatch(
+        "https://hooks.example.test/run",
+        agent_id="bot",
+        trace_id="trace-1",
+        tenant_id="tenant-a",
+        workspace_id="ws-1",
+        agent_profile="ops",
+    )
+    assert record.success is True
+    assert record.sidecar_target == "http://127.0.0.1:4499/v1/fetch"
+    assert record.trace_id == "trace-1"
+    assert captured["url"] == "http://127.0.0.1:4499/v1/fetch"

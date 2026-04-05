@@ -182,6 +182,8 @@ class SubagentManager:
                     max_results=self.web_search_config.max_results,
                     mode=self.web_search_config.mode,
                     proxy_url=self.web_search_config.proxy_url,
+                    proxy_approval_mode=self.web_search_config.proxy_approval_mode,
+                    proxy_approval_token=self.web_search_config.proxy_approval_token.get_secret_value(),
                     proxy_healthcheck=self.web_search_config.proxy_healthcheck,
                     proxy_fallback_to_local=self.web_search_config.proxy_fallback_to_local,
                 )
@@ -190,6 +192,8 @@ class SubagentManager:
                 WebFetchTool(
                     mode=self.web_fetch_config.mode,
                     proxy_url=self.web_fetch_config.proxy_url,
+                    proxy_approval_mode=self.web_fetch_config.proxy_approval_mode,
+                    proxy_approval_token=self.web_fetch_config.proxy_approval_token.get_secret_value(),
                     proxy_healthcheck=self.web_fetch_config.proxy_healthcheck,
                     proxy_fallback_to_local=self.web_fetch_config.proxy_fallback_to_local,
                 )

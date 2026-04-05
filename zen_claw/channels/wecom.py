@@ -57,13 +57,23 @@ class WeComChannel(BaseChannel):
         self._stop_event.set()
 
     async def send(self, msg: OutboundMessage) -> None:
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
         to_user = str((msg.metadata or {}).get("wecom_from_user", ""))
         if not to_user:
             return
-        token = await self._get_access_token()
-        if not token:
-            return
-        await self._send_app_message(to_user=to_user, text=msg.content or "", access_token=token)
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
+            token = await self._get_access_token()
+            if not token:
+                return
+            await self._send_app_message(
+                to_user=to_user,
+                text=msg.content or "",
+                access_token=token,
+            )
 
     def verify_signature(
         self, timestamp: str, nonce: str, msg_signature: str, echostr: str = ""
@@ -153,6 +163,7 @@ class WeComChannel(BaseChannel):
             return ""
 
     async def _send_app_message(self, to_user: str, text: str, access_token: str) -> None:
+        await self._assert_outbound_helper_allowed(helper_name="_send_app_message")
         url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}"
         payload = {
             "touser": to_user,

@@ -82,3 +82,17 @@ async def test_message_tool_returns_structured_success_with_callback() -> None:
     result = await tool.execute("hello")
     assert result.ok is True
     assert sent and sent[0].content == "hello"
+
+
+async def test_message_tool_external_send_requires_sidecar() -> None:
+    sent: list[OutboundMessage] = []
+
+    async def cb(msg: OutboundMessage) -> None:
+        sent.append(msg)
+
+    tool = MessageTool(send_callback=cb, default_channel="telegram", default_chat_id="direct")
+    result = await tool.execute("hello", trace_id="t-1")
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "message_send_sidecar_not_configured"
+    assert sent == []

@@ -216,6 +216,12 @@ class SocialAgentLoop:
             endpoint=f"/api/posts/{post_id}/comments",
             payload={"body": text},
             auth_header=self._pc.auth_header,
+            connector_name=self._pc.platform,
+            action="connector.record.create",
+            target_resource=f"{self._pc.platform}.posts.comments",
+            tenant_id="default",
+            workspace_id=self._workspace.name,
+            agent_profile="social_loop",
         )
         return bool(res.ok)
 
@@ -226,6 +232,12 @@ class SocialAgentLoop:
                 base_url=self._pc.base_url,
                 post_id=post_id,
                 auth_header=self._pc.auth_header,
+                connector_name=self._pc.platform,
+                action="connector.record.update",
+                target_resource=f"{self._pc.platform}.posts.reactions",
+                tenant_id="default",
+                workspace_id=self._workspace.name,
+                agent_profile="social_loop",
             )
             if not res.ok:
                 logger.debug("social loop: like failed for post {} — {}", post_id, res)

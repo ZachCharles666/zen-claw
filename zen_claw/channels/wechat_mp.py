@@ -58,38 +58,44 @@ class WechatMPChannel(BaseChannel):
         self._stop_event.set()
 
     async def send(self, msg: OutboundMessage) -> None:
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
         # WeChat MP uses async customer service API; keep no-op fallback if metadata lacks to_user.
         to_user = str((msg.metadata or {}).get("wechat_from_user", ""))
         if not to_user:
             return
-        token = await self._get_access_token()
-        if not token:
-            return
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
+            token = await self._get_access_token()
+            if not token:
+                return
 
-        content_str = msg.content or ""
+            content_str = msg.content or ""
 
-        # Process outgoing media uploads if present
-        if msg.media:
-            for uri in msg.media:
-                if uri.startswith("media://local/"):
-                    local_path = self.media_root / uri.split("/")[-1]
-                    if local_path.exists():
-                        media_id = await self.upload_media(
-                            local_path, "image", token
-                        )  # Hardcode image for demo
-                        if media_id:
-                            # Send image message directly using a separate customer service API call
-                            await self._send_customer_service_image(
-                                to_user=to_user, media_id=media_id, access_token=token
-                            )
-                        else:
-                            content_str += f"\n[Attached Media {uri} failed to upload]"
+            # Process outgoing media uploads if present
+            if msg.media:
+                for uri in msg.media:
+                    if uri.startswith("media://local/"):
+                        local_path = self.media_root / uri.split("/")[-1]
+                        if local_path.exists():
+                            media_id = await self.upload_media(
+                                local_path, "image", token
+                            )  # Hardcode image for demo
+                            if media_id:
+                                # Send image message directly using a separate customer service API call
+                                await self._send_customer_service_image(
+                                    to_user=to_user, media_id=media_id, access_token=token
+                                )
+                            else:
+                                content_str += f"\n[Attached Media {uri} failed to upload]"
 
-        # Send text if it's not empty after stripping
-        if content_str.strip():
-            await self._send_customer_service_message(
-                to_user=to_user, text=content_str, access_token=token
-            )
+            # Send text if it's not empty after stripping
+            if content_str.strip():
+                await self._send_customer_service_message(
+                    to_user=to_user, text=content_str, access_token=token
+                )
 
     @staticmethod
     def verify_signature(token: str, timestamp: str, nonce: str, signature: str) -> bool:
@@ -220,6 +226,9 @@ class WechatMPChannel(BaseChannel):
     async def _send_customer_service_message(
         self, to_user: str, text: str, access_token: str
     ) -> None:
+        await self._assert_outbound_helper_allowed(
+            helper_name="_send_customer_service_message"
+        )
         url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={access_token}"
         payload = {"touser": to_user, "msgtype": "text", "text": {"content": text}}
         try:
@@ -231,6 +240,7 @@ class WechatMPChannel(BaseChannel):
     async def _send_customer_service_image(
         self, to_user: str, media_id: str, access_token: str
     ) -> None:
+        await self._assert_outbound_helper_allowed(helper_name="_send_customer_service_image")
         url = f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={access_token}"
         payload = {"touser": to_user, "msgtype": "image", "image": {"media_id": media_id}}
         try:
@@ -270,6 +280,7 @@ class WechatMPChannel(BaseChannel):
 
     async def upload_media(self, file_path: Path, media_type: str, access_token: str) -> str | None:
         """Upload temporary media to WeChat and return MediaId."""
+        await self._assert_outbound_helper_allowed(helper_name="upload_media")
         url = f"https://api.weixin.qq.com/cgi-bin/media/upload?access_token={access_token}&type={media_type}"
 
         try:

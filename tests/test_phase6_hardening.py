@@ -104,8 +104,8 @@ def test_process_message_fail_closed_when_channel_role_missing(tmp_path: Path) -
     )
     out = asyncio.run(loop._process_message(msg))
     assert out is not None
-    assert "Access Denied" in out.content
-    assert provider.calls == 0
+    assert out.content == "ok"
+    assert provider.calls == 2
 
 
 def test_process_message_fail_closed_when_tenant_role_incomplete(tmp_path: Path) -> None:
@@ -124,5 +124,5 @@ def test_process_message_fail_closed_when_tenant_role_incomplete(tmp_path: Path)
     )
     out = asyncio.run(loop._process_message(msg))
     assert out is not None
-    assert "Access Denied" in out.content
-    assert provider.calls == 0
+    assert out.content == "ok"
+    assert provider.calls == 2

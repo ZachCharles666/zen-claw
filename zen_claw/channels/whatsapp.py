@@ -89,16 +89,21 @@ class WhatsAppChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through WhatsApp."""
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
         if not self._ws or not self._connected:
             logger.warning("WhatsApp bridge not connected")
             return
-
-        try:
-            content = strip_markdown(msg.content)
-            payload = {"type": "send", "to": msg.chat_id, "text": content}
-            await self._ws.send(json.dumps(payload))
-        except Exception as e:
-            logger.error(f"Error sending WhatsApp message: {e}")
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
+            try:
+                content = strip_markdown(msg.content)
+                payload = {"type": "send", "to": msg.chat_id, "text": content}
+                await self._ws.send(json.dumps(payload))
+            except Exception as e:
+                logger.error(f"Error sending WhatsApp message: {e}")
 
     async def _handle_bridge_message(self, raw: str) -> None:
         """Handle a message from the bridge."""

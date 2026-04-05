@@ -1,5 +1,6 @@
 """Tool registry for dynamic tool management."""
 
+import inspect
 import json
 import time
 from typing import Any
@@ -7,6 +8,10 @@ from typing import Any
 from loguru import logger
 
 from zen_claw.agent.tools.base import Tool
+from zen_claw.agent.tools.capability_policy import (
+    CapabilityPolicyEvaluator,
+    capability_request_from_tool,
+)
 from zen_claw.agent.tools.policy import ToolPolicyEngine
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.observability.audit import AuditWorker
@@ -39,6 +44,8 @@ class ToolRegistry:
         self._profile_denied_tools: set[str] = set()
         self._active_skill_names: list[str] = []
         self._skill_permissions_mode: str = "off"
+        self._security_policy: Any = None
+        self._request_context: dict[str, Any] = {}
 
     def register(self, tool: Tool) -> None:
         """Register a tool."""
@@ -127,6 +134,14 @@ class ToolRegistry:
     def clear_policy_scope(self, scope: str) -> None:
         """Clear tool policy for a scope."""
         self._policy.clear_scope(scope)
+
+    def set_security_policy(self, policy: Any) -> None:
+        """Attach the current security policy config for resource-scoped checks."""
+        self._security_policy = policy
+
+    def set_request_context(self, context: dict[str, Any] | None) -> None:
+        """Attach per-request identity/policy context for resource checks and audit."""
+        self._request_context = dict(context or {})
 
     async def execute(
         self,
@@ -297,7 +312,23 @@ class ToolRegistry:
                     skill_permissions_mode=self._skill_permissions_mode,
                 )
             )
+            await self._audit_tool_event(
+                trace_id=trace_id,
+                event_type="tool.denied",
+                tool_name=name,
+                result=result,
+            )
             return result
+
+        resource_decision = self._evaluate_resource_policy(name, params)
+        if resource_decision is not None:
+            await self._audit_tool_event(
+                trace_id=trace_id,
+                event_type="tool.denied",
+                tool_name=name,
+                result=resource_decision,
+            )
+            return resource_decision
 
         # Check Quota
         if self._quota_engine:
@@ -336,7 +367,12 @@ class ToolRegistry:
                 )
                 return result
 
-            raw_result = await tool.execute(**params, trace_id=trace_id)
+            exec_kwargs = dict(params)
+            if self._tool_accepts_kwarg(tool, "trace_id"):
+                exec_kwargs["trace_id"] = trace_id
+            if self._tool_accepts_kwarg(tool, "security_context"):
+                exec_kwargs["security_context"] = dict(self._request_context)
+            raw_result = await tool.execute(**exec_kwargs)
             result = self._normalize_result(name, raw_result)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             logger.info(
@@ -354,16 +390,12 @@ class ToolRegistry:
                 )
             )
             if self._audit_worker and trace_id:
-                await self._audit_worker.audit_turn(
-                    trace_id,
-                    {
-                        "event_type": "tool.executed",
-                        "tool": name,
-                        "ok": result.ok,
-                        "elapsed_ms": elapsed_ms,
-                        "error_kind": result.error.kind.value if result.error else None,
-                        "skill_names": self._active_skill_names or None,
-                    },
+                await self._audit_tool_event(
+                    trace_id=trace_id,
+                    event_type="tool.executed",
+                    tool_name=name,
+                    result=result,
+                    elapsed_ms=elapsed_ms,
                 )
             return result
         except PermissionError as e:
@@ -568,6 +600,82 @@ class ToolRegistry:
         """Enable/disable the global tool execution kill switch."""
         self._kill_switch_enabled = bool(enabled)
         self._kill_switch_reason = (reason or "").strip()
+
+    def _evaluate_resource_policy(self, name: str, params: dict[str, Any]) -> ToolResult | None:
+        policy = self._security_policy
+        if policy is None:
+            return None
+        request = capability_request_from_tool(name, params, self._request_context)
+        if request is None:
+            return None
+        evaluator = CapabilityPolicyEvaluator(policy, self._request_context)
+        decision = evaluator.evaluate(request)
+        if decision.allowed:
+            return None
+        return evaluator.denial_result(
+            decision,
+            identity=self._audit_identity_summary(),
+            dev_profile=bool(self._request_context.get("dev_profile")),
+            skill_names=self._active_skill_names,
+            skill_permissions_mode=self._skill_permissions_mode,
+        )
+
+    def _audit_identity_summary(self) -> dict[str, Any]:
+        return {
+            "channel": str(self._request_context.get("channel") or ""),
+            "sender_id": str(self._request_context.get("sender_id") or ""),
+            "chat_id": str(self._request_context.get("chat_id") or ""),
+            "tenant_id": str(self._request_context.get("tenant_id") or ""),
+            "workspace_id": str(self._request_context.get("workspace_id") or ""),
+            "agent_profile": str(self._request_context.get("agent_profile") or ""),
+            "role": str(self._request_context.get("role") or ""),
+            "channel_role": str(self._request_context.get("channel_role") or ""),
+        }
+
+    @staticmethod
+    def _tool_accepts_kwarg(tool: Tool, key: str) -> bool:
+        try:
+            params = inspect.signature(tool.execute).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        for param in params:
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                return True
+            if param.name == key:
+                return True
+        return False
+
+    async def _audit_tool_event(
+        self,
+        *,
+        trace_id: str | None,
+        event_type: str,
+        tool_name: str,
+        result: ToolResult,
+        elapsed_ms: int | None = None,
+    ) -> None:
+        if not self._audit_worker or not trace_id:
+            return
+        await self._audit_worker.audit_turn(
+            trace_id,
+            {
+                "event_type": event_type,
+                "tool": tool_name,
+                "ok": result.ok,
+                "elapsed_ms": elapsed_ms,
+                "error_kind": result.error.kind.value if result.error else None,
+                "error_code": result.error.code if result.error else None,
+                "skill_names": self._active_skill_names or None,
+                "identity": self._audit_identity_summary(),
+                "policy_snapshot": dict(self._request_context.get("policy_snapshot") or {}),
+                "dev_profile": bool(self._request_context.get("dev_profile")),
+                "capability": str(result.meta.get("capability") or ""),
+                "resource_scope": dict(result.meta.get("resource_scope") or {}),
+                "matched_scope": dict(result.meta.get("matched_scope") or {}),
+                "sidecar_target": str(result.meta.get("sidecar_target") or ""),
+                "approval": dict(result.meta.get("approval") or {}),
+            },
+        )
 
     def __len__(self) -> int:
         return len(self._tools)

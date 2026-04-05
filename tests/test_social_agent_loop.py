@@ -22,6 +22,7 @@ class _FakeResp:
 class _FakeClient:
     def __init__(self, response: _FakeResp):
         self._response = response
+        self.calls: list[dict] = []
 
     async def __aenter__(self):
         return self
@@ -29,7 +30,10 @@ class _FakeClient:
     async def __aexit__(self, *args):
         return None
 
-    async def post(self, url, headers, json):
+    async def post(self, url, headers=None, json=None, content=None):
+        self.calls.append(
+            {"url": url, "headers": headers or {}, "json": json, "content": content}
+        )
         return self._response
 
 
@@ -40,7 +44,7 @@ async def test_social_post_tool_success(monkeypatch):
         "body": json.dumps({"id": "post_123", "status": "created"}),
     }
     monkeypatch.setattr(
-        "zen_claw.agent.tools.social_platform.httpx.AsyncClient",
+        "zen_claw.agent.tools.connector_sidecar.httpx.AsyncClient",
         lambda timeout: _FakeClient(_FakeResp(200, payload)),
     )
     tool = SocialPlatformPostTool()
@@ -49,6 +53,9 @@ async def test_social_post_tool_success(monkeypatch):
         endpoint="/api/posts",
         payload={"title": "Hello"},
         auth_header="Bearer token",
+        connector_name="moltbook",
+        action="connector.record.create",
+        target_resource="moltbook.posts",
     )
     assert result.ok is True
     data = json.loads(result.content)
@@ -62,6 +69,9 @@ async def test_social_post_tool_invalid_base_url():
         endpoint="/api/posts",
         payload={},
         auth_header="Bearer token",
+        connector_name="moltbook",
+        action="connector.record.create",
+        target_resource="moltbook.posts",
     )
     assert result.ok is False
     assert result.error is not None
@@ -72,7 +82,7 @@ async def test_social_post_tool_invalid_base_url():
 async def test_social_post_tool_auth_failure(monkeypatch):
     payload = {"ok": False, "status": 401, "error": "Unauthorized"}
     monkeypatch.setattr(
-        "zen_claw.agent.tools.social_platform.httpx.AsyncClient",
+        "zen_claw.agent.tools.connector_sidecar.httpx.AsyncClient",
         lambda timeout: _FakeClient(_FakeResp(401, payload)),
     )
     tool = SocialPlatformPostTool()
@@ -81,6 +91,9 @@ async def test_social_post_tool_auth_failure(monkeypatch):
         endpoint="/api/posts",
         payload={"body": "hello"},
         auth_header="Bearer bad",
+        connector_name="moltbook",
+        action="connector.record.create",
+        target_resource="moltbook.posts",
     )
     assert result.ok is False
     assert result.error is not None
@@ -91,7 +104,7 @@ async def test_social_get_tool_success(monkeypatch):
     posts = [{"id": "1", "title": "Test"}, {"id": "2", "title": "Another"}]
     payload = {"ok": True, "status": 200, "body": json.dumps({"posts": posts})}
     monkeypatch.setattr(
-        "zen_claw.agent.tools.social_platform.httpx.AsyncClient",
+        "zen_claw.agent.tools.connector_sidecar.httpx.AsyncClient",
         lambda timeout: _FakeClient(_FakeResp(200, payload)),
     )
     tool = SocialPlatformGetTool()
@@ -221,7 +234,7 @@ async def test_run_once_skips_duplicate(tmp_path: Path):
 async def test_like_tool_success(monkeypatch):
     payload = {"ok": True, "status": 200, "body": json.dumps({"liked": True})}
     monkeypatch.setattr(
-        "zen_claw.agent.tools.social_platform.httpx.AsyncClient",
+        "zen_claw.agent.tools.connector_sidecar.httpx.AsyncClient",
         lambda timeout: _FakeClient(_FakeResp(200, payload)),
     )
     tool = SocialPlatformLikeTool()
@@ -229,6 +242,9 @@ async def test_like_tool_success(monkeypatch):
         base_url="https://moltbook.example.com",
         post_id="post_42",
         auth_header="Bearer token",
+        connector_name="moltbook",
+        action="connector.record.update",
+        target_resource="moltbook.posts.reactions",
     )
     assert result.ok is True
     data = json.loads(result.content)
@@ -241,6 +257,9 @@ async def test_like_tool_missing_post_id():
         base_url="https://moltbook.example.com",
         post_id="",
         auth_header="Bearer token",
+        connector_name="moltbook",
+        action="connector.record.update",
+        target_resource="moltbook.posts.reactions",
     )
     assert result.ok is False
     assert result.error is not None
@@ -250,7 +269,7 @@ async def test_like_tool_missing_post_id():
 async def test_like_tool_auth_failure(monkeypatch):
     payload = {"ok": False, "status": 401, "error": "Unauthorized"}
     monkeypatch.setattr(
-        "zen_claw.agent.tools.social_platform.httpx.AsyncClient",
+        "zen_claw.agent.tools.connector_sidecar.httpx.AsyncClient",
         lambda timeout: _FakeClient(_FakeResp(401, payload)),
     )
     tool = SocialPlatformLikeTool()
@@ -258,10 +277,54 @@ async def test_like_tool_auth_failure(monkeypatch):
         base_url="https://moltbook.example.com",
         post_id="post_99",
         auth_header="Bearer bad",
+        connector_name="moltbook",
+        action="connector.record.update",
+        target_resource="moltbook.posts.reactions",
     )
     assert result.ok is False
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.PERMISSION
+
+
+async def test_social_post_tool_hmac_sidecar_headers(monkeypatch):
+    payload = {"ok": True, "status": 201, "body": json.dumps({"id": "post_123"})}
+    fake_client = _FakeClient(_FakeResp(200, payload))
+    monkeypatch.setattr(
+        "zen_claw.agent.tools.connector_sidecar.httpx.AsyncClient",
+        lambda timeout: fake_client,
+    )
+    tool = SocialPlatformPostTool(
+        approval_mode="hmac",
+        approval_token="secret-1",
+    )
+    result = await tool.execute(
+        base_url="https://moltbook.example.com",
+        endpoint="/api/posts",
+        payload={"title": "Hello"},
+        auth_header="Bearer token",
+        connector_name="moltbook",
+        action="connector.record.create",
+        target_resource="moltbook.posts",
+        trace_id="trace-1",
+        security_context={
+            "tenant_id": "default",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "role": "operator",
+            "policy_snapshot": {"production_hardening": True},
+        },
+    )
+    assert result.ok is True
+    assert fake_client.calls
+    sent = fake_client.calls[-1]
+    assert sent["headers"]["X-Trace-Id"] == "trace-1"
+    assert "X-Approval-Signature" in sent["headers"]
+    assert "X-Gateway-Signature" in sent["headers"]
+    assert sent["content"] is not None
+    assert sent["json"] is None
 
 
 async def test_run_once_calls_like_before_reply(tmp_path: Path):

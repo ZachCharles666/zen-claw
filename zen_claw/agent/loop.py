@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from zen_claw.config.schema import (
         BrowserToolConfig,
+        ConnectorToolConfig,
         ExecToolConfig,
         ToolPolicyConfig,
         WebFetchConfig,
@@ -77,7 +78,11 @@ from zen_claw.agent.tools.sessions import (
     SessionsWriteTool,
 )
 from zen_claw.agent.tools.shell import ExecTool
-from zen_claw.agent.tools.social_platform import SocialPlatformGetTool, SocialPlatformPostTool
+from zen_claw.agent.tools.social_platform import (
+    SocialPlatformGetTool,
+    SocialPlatformLikeTool,
+    SocialPlatformPostTool,
+)
 from zen_claw.agent.tools.spawn import SpawnTool
 from zen_claw.agent.tools.tts import TextToSpeechTool
 from zen_claw.agent.tools.web import WebFetchTool, WebSearchTool
@@ -86,6 +91,12 @@ from zen_claw.bus.queue import MessageBus
 from zen_claw.errors import AgentMidTurnReloadException
 from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider, LLMResponse
+from zen_claw.security_context import (
+    build_security_context,
+    is_trusted_local_surface,
+    normalize_workspace_id,
+    security_policy_snapshot,
+)
 from zen_claw.session.manager import SessionManager
 
 
@@ -115,6 +126,7 @@ class AgentLoop:
         brave_api_key: str | None = None,
         web_search_config: "WebSearchConfig | None" = None,
         web_fetch_config: "WebFetchConfig | None" = None,
+        connector_config: "ConnectorToolConfig | None" = None,
         browser_config: "BrowserToolConfig | None" = None,
         exec_config: "ExecToolConfig | None" = None,
         tool_policy_config: "ToolPolicyConfig | None" = None,
@@ -139,9 +151,13 @@ class AgentLoop:
         skill_permissions_mode: str = "off",  # off|warn|enforce
         allowed_models: list[str] | None = None,
         audit_worker: "AuditWorker | None" = None,
+        agent_id: str = "default",
+        dev_profile: bool = False,
+        trusted_local_only: bool = False,
     ):
         from zen_claw.config.schema import (
             BrowserToolConfig,
+            ConnectorToolConfig,
             ExecToolConfig,
             ToolPolicyConfig,
             WebFetchConfig,
@@ -151,11 +167,15 @@ class AgentLoop:
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
+        self.agent_id = str(agent_id or "default").strip().lower() or "default"
+        self.dev_profile = bool(dev_profile)
+        self.trusted_local_only = bool(trusted_local_only)
         self.model = model or provider.get_default_model()
         self.max_iterations = max_iterations
         self.brave_api_key = brave_api_key
         self.web_search_config = web_search_config or WebSearchConfig()
         self.web_fetch_config = web_fetch_config or WebFetchConfig()
+        self.connector_config = connector_config or ConnectorToolConfig()
         self.browser_config = browser_config or BrowserToolConfig()
         self.exec_config = exec_config or ExecToolConfig()
         self.tool_policy_config = tool_policy_config or ToolPolicyConfig()
@@ -234,6 +254,7 @@ class AgentLoop:
             ),
             audit_worker=audit_worker,
         )
+        self.tools.set_security_policy(self.tool_policy_config)
         self.tools.set_kill_switch(
             self.tool_policy_config.kill_switch_enabled,
             reason=self.tool_policy_config.kill_switch_reason,
@@ -382,6 +403,8 @@ class AgentLoop:
                 max_results=self.web_search_config.max_results,
                 mode=self.web_search_config.mode,
                 proxy_url=self.web_search_config.proxy_url,
+                proxy_approval_mode=self.web_search_config.proxy_approval_mode,
+                proxy_approval_token=self.web_search_config.proxy_approval_token.get_secret_value(),
                 proxy_healthcheck=self.web_search_config.proxy_healthcheck,
                 proxy_fallback_to_local=self.web_search_config.proxy_fallback_to_local,
             )
@@ -390,6 +413,8 @@ class AgentLoop:
             WebFetchTool(
                 mode=self.web_fetch_config.mode,
                 proxy_url=self.web_fetch_config.proxy_url,
+                proxy_approval_mode=self.web_fetch_config.proxy_approval_mode,
+                proxy_approval_token=self.web_fetch_config.proxy_approval_token.get_secret_value(),
                 proxy_healthcheck=self.web_fetch_config.proxy_healthcheck,
                 proxy_fallback_to_local=self.web_fetch_config.proxy_fallback_to_local,
             )
@@ -398,6 +423,7 @@ class AgentLoop:
             browser_args = dict(
                 mode=self.browser_config.mode,
                 sidecar_url=self.browser_config.sidecar_url,
+                sidecar_approval_mode=self.browser_config.sidecar_approval_mode,
                 sidecar_approval_token=self.browser_config.sidecar_approval_token.get_secret_value(),
                 sidecar_healthcheck=self.browser_config.sidecar_healthcheck,
                 sidecar_fallback_to_off=self.browser_config.sidecar_fallback_to_off,
@@ -415,7 +441,13 @@ class AgentLoop:
             self.tools.register(BrowserLoadSessionTool(**browser_args))
 
         # Message tool
-        message_tool = MessageTool(send_callback=self.bus.publish_outbound)
+        message_tool = MessageTool(
+            send_callback=self.bus.publish_outbound,
+            connector_proxy_url=self.connector_config.proxy_url,
+            connector_approval_mode=self.connector_config.sidecar_approval_mode,
+            connector_approval_token=self.connector_config.sidecar_approval_token.get_secret_value(),
+            trusted_local_channels=list(self.tool_policy_config.trusted_local_channels),
+        )
         self.tools.register(message_tool)
 
         # Credential vault tools
@@ -424,7 +456,20 @@ class AgentLoop:
 
         # Social platform API tools
         self.tools.register(SocialPlatformGetTool())
-        self.tools.register(SocialPlatformPostTool())
+        self.tools.register(
+            SocialPlatformPostTool(
+                proxy_url=self.connector_config.proxy_url,
+                approval_mode=self.connector_config.sidecar_approval_mode,
+                approval_token=self.connector_config.sidecar_approval_token.get_secret_value(),
+            )
+        )
+        self.tools.register(
+            SocialPlatformLikeTool(
+                proxy_url=self.connector_config.proxy_url,
+                approval_mode=self.connector_config.sidecar_approval_mode,
+                approval_token=self.connector_config.sidecar_approval_token.get_secret_value(),
+            )
+        )
 
         # Agent cryptographic identity tools
         self.tools.register(AgentSignTool(workspace=self.workspace))
@@ -566,13 +611,21 @@ class AgentLoop:
                 continue
             manifest, manifest_errors = self.context.skills.get_skill_manifest(n)
             if manifest_errors:
-                errors.extend([f"{n}: {e}" for e in manifest_errors])
+                logger.warning(
+                    "Skill manifest unavailable under enforce mode; denying tool permissions for skill: "
+                    + f"{n}: {'; '.join(manifest_errors)}"
+                )
+                untrusted_skills.append(n)
                 continue
             perms = (manifest or {}).get("permissions")
             if not isinstance(perms, list) or not all(
                 isinstance(p, str) and p.strip() for p in perms
             ):
-                errors.append(f"{n}: permissions missing or invalid in manifest.json")
+                logger.warning(
+                    "Skill permissions missing or invalid under enforce mode; denying tool permissions for skill: "
+                    + n
+                )
+                untrusted_skills.append(n)
                 continue
             if str((manifest or {}).get("trust") or "").strip().lower() == "untrusted":
                 untrusted_skills.append(n)
@@ -830,6 +883,13 @@ class AgentLoop:
 
         if msg.channel == "cli" and not (msg.metadata or {}).get("channel_role"):
             msg.metadata["channel_role"] = "admin"
+        elif msg.metadata is not None and not msg.metadata.get("channel_role"):
+            msg.metadata["channel_role"] = "user"
+        if msg.metadata is not None:
+            msg.metadata.setdefault("sender_id", msg.sender_id)
+            msg.metadata.setdefault("workspace_id", self.workspace.name)
+            msg.metadata.setdefault("agent_profile", self.agent_id)
+            self._hydrate_identity_metadata(msg.metadata)
 
         deny_reason = self._fail_closed_identity_reason(msg.channel, msg.metadata)
         if deny_reason:
@@ -870,6 +930,16 @@ class AgentLoop:
         else:
             self.tools.clear_policy_scope("channel_role")
         self._apply_session_tool_policy(session.metadata)
+        self.tools.set_request_context(
+            self._build_request_security_context(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                metadata=msg.metadata,
+                trace_id=trace_id,
+                session_metadata=session.metadata,
+            )
+        )
 
         # Update tool contexts
         message_tool = self.tools.get("message")
@@ -1401,6 +1471,16 @@ class AgentLoop:
         self._apply_channel_tool_policy(origin_channel)
         self._apply_channel_role_tool_policy({"channel_role": "admin"})
         self._apply_session_tool_policy(session.metadata)
+        self.tools.set_request_context(
+            self._build_request_security_context(
+                channel=origin_channel,
+                sender_id=msg.sender_id,
+                chat_id=origin_chat_id,
+                metadata={"channel_role": "admin"},
+                trace_id=trace_id,
+                session_metadata=session.metadata,
+            )
+        )
 
         # Update tool contexts
         message_tool = self.tools.get("message")
@@ -1514,6 +1594,11 @@ class AgentLoop:
                 **TraceContext.child_metadata(None),
                 "session_key": session_key,
                 "channel_role": "admin",
+                "sender_id": "user",
+                "tenant_id": "local",
+                "role": "operator",
+                "workspace_id": self.workspace.name,
+                "agent_profile": self.agent_id,
             },
         )
 
@@ -1910,6 +1995,31 @@ class AgentLoop:
             bus=self.bus,
             channel=msg.channel,
             chat_id=msg.chat_id,
+            trace_id=trace_id,
+            capability="intent.one_shot_approval",
+            resource_scope={"approved_tools": list(approval_args.get("approved_tools") or [])},
+            security_context=self._build_request_security_context(
+                channel=msg.channel,
+                sender_id=msg.sender_id,
+                chat_id=msg.chat_id,
+                metadata=msg.metadata,
+                trace_id=trace_id,
+                session_metadata=session.metadata if session is not None else None,
+            ),
+            policy_snapshot_hash=str(
+                (
+                    self._build_request_security_context(
+                        channel=msg.channel,
+                        sender_id=msg.sender_id,
+                        chat_id=msg.chat_id,
+                        metadata=msg.metadata,
+                        trace_id=trace_id,
+                        session_metadata=session.metadata if session is not None else None,
+                    ).get("policy_snapshot_hash")
+                )
+                or ""
+            ),
+            decision_basis=self._build_one_shot_approval_reason(route_result, approval_args),
         )
         approval_msg = approval.format_request_message()
         if msg.channel == "cli":
@@ -2154,22 +2264,32 @@ class AgentLoop:
         Enforce hard fail-closed identity checks before planning/execution.
         """
         channel_key = (channel or "").strip().lower()
-        if channel_key in {"cli", "system"}:
+        trusted_local_channels = {
+            str(v).strip().lower()
+            for v in (self.tool_policy_config.trusted_local_channels or [])
+            if str(v).strip()
+        }
+        if is_trusted_local_surface(channel_key, trusted_local_channels):
             return None
 
         meta = metadata or {}
-        enforce_identity = self._should_enforce_identity(meta)
-        if not enforce_identity:
-            return None
-
         channel_role = str(meta.get("channel_role") or "").strip().lower()
         if channel_role not in {"admin", "user", "guest"}:
             return "missing or invalid channel_role metadata"
 
         tenant_id = str(meta.get("tenant_id") or meta.get("tid") or "").strip()
         app_role = str(meta.get("role") or "").strip().lower()
-        if bool(tenant_id) ^ bool(app_role):
-            return "incomplete tenant identity metadata (tenant_id/tid + role required together)"
+        if not tenant_id or not app_role:
+            return "missing tenant identity metadata (tenant_id/tid + role required)"
+        sender_id = str(meta.get("sender_id") or "").strip()
+        workspace_id = str(meta.get("workspace_id") or "").strip()
+        agent_profile = str(meta.get("agent_profile") or "").strip().lower()
+        if not sender_id:
+            return "missing sender_id metadata"
+        if not workspace_id:
+            return "missing workspace_id metadata"
+        if not agent_profile:
+            return "missing agent_profile metadata"
         return None
 
     @staticmethod
@@ -2177,6 +2297,68 @@ class AgentLoop:
         meta = metadata or {}
         identity_keys = {"channel_role", "tenant_id", "tid", "role"}
         return bool(meta.get("identity_verified")) or any(k in meta for k in identity_keys)
+
+    def _hydrate_identity_metadata(self, metadata: dict[str, Any]) -> None:
+        channel_role = str(metadata.get("channel_role") or "").strip().lower()
+        if channel_role in {"admin", "user", "guest"} and not str(metadata.get("role") or "").strip():
+            metadata["role"] = channel_role
+        if not str(metadata.get("tenant_id") or metadata.get("tid") or "").strip():
+            metadata["tenant_id"] = "default"
+
+    def _build_request_security_context(
+        self,
+        *,
+        channel: str,
+        sender_id: str,
+        chat_id: str,
+        metadata: dict[str, Any] | None,
+        trace_id: str,
+        session_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        meta = dict(metadata or {})
+        session_meta = session_metadata or {}
+        tenant_id = str(
+            meta.get("tenant_id") or meta.get("tid") or session_meta.get("tenant_id") or ""
+        ).strip()
+        role = str(meta.get("role") or session_meta.get("role") or "").strip().lower()
+        trusted_local_channels = {
+            str(v).strip().lower()
+            for v in (self.tool_policy_config.trusted_local_channels or [])
+            if str(v).strip()
+        }
+        return build_security_context(
+            trace_id=str(trace_id or "").strip(),
+            channel=str(channel or "").strip().lower(),
+            sender_id=str(meta.get("sender_id") or sender_id or "").strip(),
+            chat_id=str(chat_id or "").strip(),
+            tenant_id=tenant_id or "default",
+            workspace_id=str(
+                meta.get("workspace_id") or normalize_workspace_id(self.workspace) or ""
+            ).strip(),
+            agent_profile=str(meta.get("agent_profile") or self.agent_id or "").strip().lower(),
+            role=role,
+            trust_level=(
+                "trusted_local"
+                if is_trusted_local_surface(channel, trusted_local_channels)
+                else "remote_untrusted"
+            ),
+            origin_surface=str(meta.get("origin_surface") or channel or "").strip().lower(),
+            channel_role=str(meta.get("channel_role") or "").strip().lower(),
+            workspace_path=str(self.workspace),
+            dev_profile=bool(self.dev_profile),
+            trusted_local_only=bool(self.trusted_local_only),
+            policy_snapshot=security_policy_snapshot(
+                production_hardening=bool(self.tool_policy_config.production_hardening),
+                legacy_compat=bool(self.tool_policy_config.legacy_compat),
+                restrict_to_workspace=bool(self.restrict_to_workspace),
+                profile_allowed_tools=list(self.profile_allowed_tools or []),
+                profile_denied_tools=list(self.profile_denied_tools or []),
+                extra={
+                    "trusted_local_only": bool(self.trusted_local_only),
+                    "dev_profile": bool(self.dev_profile),
+                },
+            ),
+        )
 
     def _apply_intent_contract_policy(self, contract: IntentToolContract) -> None:
         self.tools.set_policy_scope(
@@ -2586,6 +2768,7 @@ class AgentLoop:
                 approval_blocked_cli = False
                 trace_summary["tool_batches"] = int(trace_summary.get("tool_batches", 0)) + 1
                 for tool_call in response.tool_calls:
+                    approved = None
                     trace_summary["tool_calls"] = int(trace_summary.get("tool_calls", 0)) + 1
                     raw_args = dict(tool_call.arguments)
                     call_args = self._maybe_rewrite_tool_args(
@@ -2623,7 +2806,24 @@ class AgentLoop:
                         approved = self.approval_gate.consume_approved(
                             session_id, tool_call.name, call_args
                         )
+                        if approved and self._audit_worker:
+                            await self._audit_worker.audit_turn(
+                                trace_id,
+                                {
+                                    "event_type": "tool.approval_consumed",
+                                    "tool": tool_call.name,
+                                    "identity": self.tools._audit_identity_summary(),
+                                    "policy_snapshot": dict(
+                                        self.tools._request_context.get("policy_snapshot") or {}
+                                    ),
+                                    "approval": {
+                                        "approval_id": approved.approval_id,
+                                        "status": approved.status.value,
+                                    },
+                                },
+                            )
                         if not approved:
+                            request_security_context = dict(self.tools._request_context)
                             approval = await self.approval_gate.request_approval(
                                 session_id=session_id,
                                 tool_name=tool_call.name,
@@ -2632,7 +2832,41 @@ class AgentLoop:
                                 bus=self.bus,
                                 channel=channel,
                                 chat_id=chat_id,
+                                trace_id=trace_id,
+                                capability=tool_call.name,
+                                resource_scope={
+                                    "tool_name": tool_call.name,
+                                    "tool_args": call_args,
+                                },
+                                security_context=request_security_context,
+                                policy_snapshot_hash=str(
+                                    request_security_context.get("policy_snapshot_hash")
+                                    or ((request_security_context.get("policy_snapshot") or {}).get("policy_snapshot_hash"))
+                                    or ""
+                                ),
+                                sidecar_target=str(
+                                    getattr(getattr(self.tools.get(tool_call.name), "sidecar_url", None), "strip", lambda: "")()
+                                    if self.tools.has(tool_call.name)
+                                    else ""
+                                ),
+                                decision_basis="Sensitive operation",
                             )
+                            if self._audit_worker:
+                                await self._audit_worker.audit_turn(
+                                    trace_id,
+                                    {
+                                        "event_type": "tool.approval_requested",
+                                        "tool": tool_call.name,
+                                        "identity": self.tools._audit_identity_summary(),
+                                        "policy_snapshot": dict(
+                                            self.tools._request_context.get("policy_snapshot") or {}
+                                        ),
+                                        "approval": {
+                                            "approval_id": approval.approval_id,
+                                            "status": approval.status.value,
+                                        },
+                                    },
+                                )
                             approval_msg = approval.format_request_message()
                             result = ToolResult.failure(
                                 ToolErrorKind.PERMISSION,
@@ -2657,6 +2891,12 @@ class AgentLoop:
                         result = await self.tools.execute(
                             tool_call.name, call_args, trace_id=trace_id
                         )
+                        if approved and self.approval_gate is not None:
+                            self.approval_gate.record_execution_finished(
+                                approved,
+                                ok=result.ok,
+                                error_code=str(result.error.code if result.error else ""),
+                            )
                     except AgentMidTurnReloadException as e:
                         logger.info(f"Mid-turn reload triggered: {e.message}")
                         if session is not None and "skill_pins" not in session.metadata:

@@ -1,5 +1,6 @@
 """Browser automation tools via sidecar transport."""
 
+import hashlib
 import json
 from typing import Any
 from urllib.parse import urlparse
@@ -9,6 +10,8 @@ import httpx
 from zen_claw.agent.tools._url_guard import is_domain_blocked
 from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
+from zen_claw.agent.tools.sidecar_approval import build_hmac_approval_headers, hmac_body_json
+from zen_claw.security_context import gateway_instance_id, stable_json_hash
 
 
 def _healthz_from_sidecar_url(url: str) -> str:
@@ -24,6 +27,7 @@ def _healthz_from_sidecar_url(url: str) -> str:
 class _BrowserSidecarBase(Tool):
     mode: str = "off"
     sidecar_url: str = "http://127.0.0.1:4500/v1/browser"
+    sidecar_approval_mode: str = "hmac"
     sidecar_healthcheck: bool = False
     sidecar_fallback_to_off: bool = False
     allowed_domains: list[str]
@@ -37,6 +41,7 @@ class _BrowserSidecarBase(Tool):
         *,
         mode: str = "off",
         sidecar_url: str = "http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode: str = "hmac",
         sidecar_approval_token: str = "",
         sidecar_healthcheck: bool = False,
         sidecar_fallback_to_off: bool = False,
@@ -47,6 +52,7 @@ class _BrowserSidecarBase(Tool):
     ):
         self.mode = mode
         self.sidecar_url = sidecar_url
+        self.sidecar_approval_mode = sidecar_approval_mode
         self.sidecar_approval_token = sidecar_approval_token
         self.sidecar_healthcheck = sidecar_healthcheck
         self.sidecar_fallback_to_off = sidecar_fallback_to_off
@@ -69,23 +75,93 @@ class _BrowserSidecarBase(Tool):
                 code="browser_disabled",
             )
 
+        security_context = dict(payload.pop("__security_context__", {}) or {})
+        policy_snapshot = dict(security_context.get("policy_snapshot") or {})
+        policy_snapshot_hash = str(
+            security_context.get("policy_snapshot_hash")
+            or policy_snapshot.get("policy_snapshot_hash")
+            or stable_json_hash(policy_snapshot)
+        )
+        missing_sec = [
+            key
+            for key in (
+                "tenant_id",
+                "workspace_id",
+                "agent_profile",
+                "channel",
+                "sender_id",
+                "chat_id",
+                "role",
+                "trust_level",
+                "origin_surface",
+            )
+            if not str(security_context.get(key) or "").strip()
+        ]
+        if missing_sec:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                f"browser sidecar requires complete security context: missing {', '.join(missing_sec)}",
+                code="browser_sidecar_security_context_missing",
+            )
+        if not policy_snapshot_hash:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "browser sidecar requires policy snapshot hash",
+                code="browser_sidecar_policy_snapshot_missing",
+            )
         effective_max_steps = (
             max(1, int(override_max_steps)) if override_max_steps is not None else self.max_steps
         )
         req = {
             "action": self.action_name,
             "payload": payload,
+            "security_context": security_context,
+            "policy_snapshot": policy_snapshot,
             "policy": {
                 "allowed_domains": self.allowed_domains,
                 "blocked_domains": self.blocked_domains,
                 "max_steps": effective_max_steps,
             },
+            "gateway_meta": {
+                "gateway_instance": str(security_context.get("gateway_instance") or gateway_instance_id()),
+                "policy_snapshot_hash": policy_snapshot_hash,
+            },
         }
+        req["gateway_meta"]["request_hash"] = stable_json_hash(req)
         headers = {"Content-Type": "application/json"}
-        if trace_id:
-            headers["X-Trace-Id"] = trace_id
-        if self.sidecar_approval_token:
-            headers["X-Approval-Token"] = self.sidecar_approval_token
+        body_bytes = hmac_body_json(req)
+        if self.sidecar_approval_mode == "hmac":
+            if not trace_id:
+                return ToolResult.failure(
+                    ToolErrorKind.PERMISSION,
+                    "browser sidecar hmac mode requires trace_id",
+                    code="browser_trace_required",
+                )
+            if not self.sidecar_approval_token:
+                return ToolResult.failure(
+                    ToolErrorKind.PERMISSION,
+                    "browser sidecar hmac mode requires approval token",
+                    code="browser_secret_missing",
+                )
+            headers.update(
+                build_hmac_approval_headers(
+                    secret=self.sidecar_approval_token,
+                    trace_id=trace_id,
+                    method="POST",
+                    path="/v1/browser",
+                    body_bytes=body_bytes,
+                    policy_snapshot=policy_snapshot,
+                    gateway_instance=str(req["gateway_meta"]["gateway_instance"]),
+                )
+            )
+        else:
+            if trace_id:
+                headers["X-Trace-Id"] = trace_id
+            if self.sidecar_approval_token:
+                headers["X-Approval-Token"] = self.sidecar_approval_token
+        headers["X-Gateway-Request-Hash"] = hashlib.sha256(body_bytes).hexdigest()
+        headers["X-Policy-Snapshot-Hash"] = policy_snapshot_hash
+        headers["X-Gateway-Instance"] = str(req["gateway_meta"]["gateway_instance"])
 
         try:
             async with httpx.AsyncClient(
@@ -95,7 +171,12 @@ class _BrowserSidecarBase(Tool):
                     health = await client.get(_healthz_from_sidecar_url(self.sidecar_url))
                     if health.status_code >= 400:
                         return self._health_error(health.status_code)
-                response = await client.post(self.sidecar_url, headers=headers, json=req)
+                response = await client.post(
+                    self.sidecar_url,
+                    headers=headers,
+                    content=body_bytes if self.sidecar_approval_mode == "hmac" else None,
+                    json=None if self.sidecar_approval_mode == "hmac" else req,
+                )
         except httpx.TimeoutException as e:
             return self._transport_error(str(e), code="browser_sidecar_timeout")
         except httpx.RequestError as e:
@@ -187,7 +268,7 @@ class BrowserOpenTool(_BrowserSidecarBase):
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
-        payload = {"url": url}
+        payload = {"url": url, "__security_context__": dict(kwargs.get("security_context") or {})}
         if sessionId:
             payload["session_id"] = sessionId
         return await self._execute_action(payload, trace_id, override_max_steps=maxSteps)
@@ -222,7 +303,7 @@ class BrowserExtractTool(_BrowserSidecarBase):
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
-        payload: dict[str, Any] = {}
+        payload: dict[str, Any] = {"__security_context__": dict(kwargs.get("security_context") or {})}
         if sessionId:
             payload["session_id"] = sessionId
         if selector:
@@ -259,7 +340,10 @@ class BrowserScreenshotTool(_BrowserSidecarBase):
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
-        payload: dict[str, Any] = {"full_page": bool(fullPage)}
+        payload: dict[str, Any] = {
+            "full_page": bool(fullPage),
+            "__security_context__": dict(kwargs.get("security_context") or {}),
+        }
         if sessionId:
             payload["session_id"] = sessionId
         return await self._execute_action(payload, trace_id, override_max_steps=maxSteps)
@@ -292,7 +376,11 @@ class BrowserClickTool(_BrowserSidecarBase):
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
-        payload: dict[str, Any] = {"session_id": sessionId, "selector": selector}
+        payload: dict[str, Any] = {
+            "session_id": sessionId,
+            "selector": selector,
+            "__security_context__": dict(kwargs.get("security_context") or {}),
+        }
         return await self._execute_action(payload, trace_id, override_max_steps=maxSteps)
 
 
@@ -332,6 +420,7 @@ class BrowserTypeTool(_BrowserSidecarBase):
             "selector": selector,
             "text": text,
             "clear": bool(clear),
+            "__security_context__": dict(kwargs.get("security_context") or {}),
         }
         return await self._execute_action(payload, trace_id, override_max_steps=maxSteps)
 
@@ -350,7 +439,10 @@ class BrowserSaveSessionTool(_BrowserSidecarBase):
 
     async def execute(self, sessionId: str, **kwargs: Any) -> ToolResult:  # noqa: N803
         trace_id = str(kwargs.get("trace_id") or "")
-        payload: dict[str, Any] = {"session_id": sessionId}
+        payload: dict[str, Any] = {
+            "session_id": sessionId,
+            "__security_context__": dict(kwargs.get("security_context") or {}),
+        }
         return await self._execute_action(payload, trace_id)
 
 
@@ -374,12 +466,15 @@ class BrowserLoadSessionTool(_BrowserSidecarBase):
         **kwargs: Any,
     ) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
-        payload: dict[str, Any] = {}
+        payload: dict[str, Any] = {"__security_context__": dict(kwargs.get("security_context") or {})}
+        has_state_reference = False
         if stateFile:
             payload["state_file"] = stateFile
+            has_state_reference = True
         if sessionId:
             payload["session_id"] = sessionId
-        if not payload:
+            has_state_reference = True
+        if not has_state_reference:
             return ToolResult.failure(
                 ToolErrorKind.PARAMETER,
                 "Either sessionId or stateFile must be provided",

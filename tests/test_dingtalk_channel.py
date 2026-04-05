@@ -11,6 +11,12 @@ from zen_claw.bus.queue import MessageBus  # noqa: E402
 from zen_claw.channels.dingtalk import DingTalkChannel  # noqa: E402
 from zen_claw.config.schema import DingTalkConfig  # noqa: E402
 
+_AUTHORIZED_META = {
+    "trace_id": "trace-auth-1",
+    "outbound_dispatch_authorized": True,
+    "outbound_dispatch_mode": "manager_local_dispatch",
+}
+
 
 @pytest.fixture
 def bus():
@@ -100,6 +106,7 @@ async def test_dingtalk_send_with_media_text(config, bus):
             channel="dingtalk",
             content="Look at this",
             media=["media://local/img_name.jpg"],
+            metadata=dict(_AUTHORIZED_META),
         )
 
         await channel.send(msg)

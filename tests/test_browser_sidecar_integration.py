@@ -18,6 +18,7 @@ from zen_claw.agent.tools.browser import (
     BrowserScreenshotTool,
     BrowserTypeTool,
 )
+from zen_claw.security_context import build_security_context
 
 
 def _find_free_port() -> int:
@@ -93,6 +94,22 @@ def _start_sidecar(
     return proc, sidecar_url
 
 
+def _security_context(trace_id: str) -> dict:
+    return build_security_context(
+        trace_id=trace_id,
+        channel="cli",
+        sender_id="tester",
+        chat_id="direct",
+        tenant_id="default",
+        workspace_id="workspace",
+        agent_profile="default",
+        role="admin",
+        trust_level="trusted_local",
+        origin_surface="cli",
+        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+    )
+
+
 @pytest.mark.asyncio
 async def test_browser_sidecar_e2e_open_extract_screenshot(tmp_path: Path) -> None:
     sidecar_dir = Path("browser/sidecar")
@@ -121,10 +138,15 @@ async def test_browser_sidecar_e2e_open_extract_screenshot(tmp_path: Path) -> No
         open_tool = BrowserOpenTool(
             mode="sidecar",
             sidecar_url=sidecar_url,
+            sidecar_approval_mode="token",
             sidecar_healthcheck=True,
             allowed_domains=["127.0.0.1", "localhost"],
         )
-        opened = await open_tool.execute(url=target_url)
+        opened = await open_tool.execute(
+            url=target_url,
+            trace_id="trace-browser-e2e-open",
+            security_context=_security_context("trace-browser-e2e-open"),
+        )
         if not opened.ok and opened.error and _is_env_sidecar_unhealthy(opened.error.code):
             pytest.skip("browser sidecar health is unstable in current environment")
         if not opened.ok and opened.error and _is_env_browser_launch_blocked(opened.error.message):
@@ -137,10 +159,16 @@ async def test_browser_sidecar_e2e_open_extract_screenshot(tmp_path: Path) -> No
         extract_tool = BrowserExtractTool(
             mode="sidecar",
             sidecar_url=sidecar_url,
+            sidecar_approval_mode="token",
             sidecar_healthcheck=True,
             allowed_domains=["127.0.0.1", "localhost"],
         )
-        extracted = await extract_tool.execute(sessionId=session_id, selector="#title")
+        extracted = await extract_tool.execute(
+            sessionId=session_id,
+            selector="#title",
+            trace_id="trace-browser-e2e-extract",
+            security_context=_security_context("trace-browser-e2e-extract"),
+        )
         assert extracted.ok is True
         extracted_data = json.loads(extracted.content)
         assert "Nano Claw Browser E2E" in extracted_data.get("text", "")
@@ -148,10 +176,16 @@ async def test_browser_sidecar_e2e_open_extract_screenshot(tmp_path: Path) -> No
         screenshot_tool = BrowserScreenshotTool(
             mode="sidecar",
             sidecar_url=sidecar_url,
+            sidecar_approval_mode="token",
             sidecar_healthcheck=True,
             allowed_domains=["127.0.0.1", "localhost"],
         )
-        shot = await screenshot_tool.execute(sessionId=session_id, fullPage=True)
+        shot = await screenshot_tool.execute(
+            sessionId=session_id,
+            fullPage=True,
+            trace_id="trace-browser-e2e-shot",
+            security_context=_security_context("trace-browser-e2e-shot"),
+        )
         assert shot.ok is True
         shot_data = json.loads(shot.content)
         image_b64 = str(shot_data.get("image_base64") or "")
@@ -161,23 +195,40 @@ async def test_browser_sidecar_e2e_open_extract_screenshot(tmp_path: Path) -> No
         type_tool = BrowserTypeTool(
             mode="sidecar",
             sidecar_url=sidecar_url,
+            sidecar_approval_mode="token",
             sidecar_healthcheck=True,
             allowed_domains=["127.0.0.1", "localhost"],
         )
         typed = await type_tool.execute(
-            sessionId=session_id, selector="#q", text="zen-claw", clear=True
+            sessionId=session_id,
+            selector="#q",
+            text="zen-claw",
+            clear=True,
+            trace_id="trace-browser-e2e-type",
+            security_context=_security_context("trace-browser-e2e-type"),
         )
         assert typed.ok is True
 
         click_tool = BrowserClickTool(
             mode="sidecar",
             sidecar_url=sidecar_url,
+            sidecar_approval_mode="token",
             sidecar_healthcheck=True,
             allowed_domains=["127.0.0.1", "localhost"],
         )
-        clicked = await click_tool.execute(sessionId=session_id, selector="#btn")
+        clicked = await click_tool.execute(
+            sessionId=session_id,
+            selector="#btn",
+            trace_id="trace-browser-e2e-click",
+            security_context=_security_context("trace-browser-e2e-click"),
+        )
         assert clicked.ok is True
-        extracted2 = await extract_tool.execute(sessionId=session_id, selector="#title")
+        extracted2 = await extract_tool.execute(
+            sessionId=session_id,
+            selector="#title",
+            trace_id="trace-browser-e2e-extract-2",
+            security_context=_security_context("trace-browser-e2e-extract-2"),
+        )
         assert extracted2.ok is True
         assert "Clicked" in json.loads(extracted2.content).get("text", "")
     finally:
@@ -206,11 +257,16 @@ async def test_browser_sidecar_e2e_domain_denied() -> None:
         open_tool = BrowserOpenTool(
             mode="sidecar",
             sidecar_url=sidecar_url,
+            sidecar_approval_mode="token",
             sidecar_healthcheck=True,
             allowed_domains=["example.com"],
             blocked_domains=["example.com"],
         )
-        denied = await open_tool.execute(url="http://example.com/")
+        denied = await open_tool.execute(
+            url="http://example.com/",
+            trace_id="trace-browser-denied",
+            security_context=_security_context("trace-browser-denied"),
+        )
         if not denied.ok and denied.error and _is_env_sidecar_unhealthy(denied.error.code):
             pytest.skip("browser sidecar health is unstable in current environment")
         assert denied.ok is False
@@ -246,11 +302,16 @@ async def test_browser_sidecar_e2e_open_timeout() -> None:
         open_tool = BrowserOpenTool(
             mode="sidecar",
             sidecar_url=sidecar_url,
+            sidecar_approval_mode="token",
             sidecar_healthcheck=True,
             allowed_domains=["127.0.0.1", "localhost"],
             timeout_sec=8,
         )
-        timeout_result = await open_tool.execute(url=f"http://127.0.0.1:{page_port}/slow")
+        timeout_result = await open_tool.execute(
+            url=f"http://127.0.0.1:{page_port}/slow",
+            trace_id="trace-browser-timeout",
+            security_context=_security_context("trace-browser-timeout"),
+        )
         if (
             not timeout_result.ok
             and timeout_result.error

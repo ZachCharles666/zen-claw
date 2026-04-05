@@ -1,5 +1,6 @@
 """Web tools: web_search and web_fetch."""
 
+import hashlib
 import html
 import ipaddress
 import json
@@ -13,6 +14,11 @@ import httpx
 
 from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
+from zen_claw.agent.tools.sidecar_approval import build_hmac_approval_headers, hmac_body_json
+from zen_claw.security_context import (
+    gateway_instance_id,
+    stable_json_hash,
+)
 
 # Shared constants
 USER_AGENT = "zen-claw/1.0 (+https://github.com/ZachCharles666/zen-claw; local acceptance testing)"
@@ -128,6 +134,8 @@ class WebSearchTool(Tool):
         max_results: int = 5,
         mode: str = "local",
         proxy_url: str = "http://127.0.0.1:4499/v1/search",
+        proxy_approval_mode: str = "hmac",
+        proxy_approval_token: str = "",
         proxy_healthcheck: bool = False,
         proxy_fallback_to_local: bool = False,
     ):
@@ -135,13 +143,21 @@ class WebSearchTool(Tool):
         self.max_results = max_results
         self.mode = mode
         self.proxy_url = proxy_url
+        self.proxy_approval_mode = proxy_approval_mode
+        self.proxy_approval_token = proxy_approval_token
         self.proxy_healthcheck = proxy_healthcheck
         self.proxy_fallback_to_local = proxy_fallback_to_local
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> ToolResult:
         trace_id = str(kwargs.get("trace_id") or "")
+        security_context = dict(kwargs.get("security_context") or {})
         if self.mode == "proxy":
-            return await self._search_via_proxy(query=query, count=count, trace_id=trace_id)
+            return await self._search_via_proxy(
+                query=query,
+                count=count,
+                trace_id=trace_id,
+                security_context=security_context,
+            )
         return await self._search_local(query=query, count=count)
 
     async def _search_local(self, query: str, count: int | None = None) -> ToolResult:
@@ -192,16 +208,91 @@ class WebSearchTool(Tool):
                 code="web_search_failed",
             )
 
-    async def _search_via_proxy(self, query: str, count: int | None, trace_id: str) -> ToolResult:
+    async def _search_via_proxy(
+        self,
+        query: str,
+        count: int | None,
+        trace_id: str,
+        security_context: dict[str, Any],
+    ) -> ToolResult:
+        missing_sec = [
+            key
+            for key in (
+                "tenant_id",
+                "workspace_id",
+                "agent_profile",
+                "channel",
+                "sender_id",
+                "chat_id",
+                "role",
+                "trust_level",
+                "origin_surface",
+            )
+            if not str(security_context.get(key) or "").strip()
+        ]
+        if missing_sec:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                f"proxy search requires complete security context: missing {', '.join(missing_sec)}",
+                code="web_search_proxy_security_context_missing",
+            )
+        policy_snapshot = dict(security_context.get("policy_snapshot") or {})
+        policy_snapshot_hash = str(
+            security_context.get("policy_snapshot_hash")
+            or policy_snapshot.get("policy_snapshot_hash")
+            or stable_json_hash(policy_snapshot)
+        )
+        if not trace_id:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "proxy search requires trace_id",
+                code="web_search_proxy_trace_required",
+            )
+        if not policy_snapshot_hash:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "proxy search requires policy snapshot hash",
+                code="web_search_proxy_policy_snapshot_missing",
+            )
         headers = {"Content-Type": "application/json"}
-        if trace_id:
-            headers["X-Trace-Id"] = trace_id
-
         payload = {
             "query": query,
             "count": min(max(count or self.max_results, 1), 10),
             "api_key": self.api_key,
+            "security_context": security_context,
+            "policy_snapshot": policy_snapshot,
+            "gateway_meta": {
+                "gateway_instance": str(security_context.get("gateway_instance") or gateway_instance_id()),
+                "policy_snapshot_hash": policy_snapshot_hash,
+            },
         }
+        payload["gateway_meta"]["request_hash"] = stable_json_hash(payload)
+        body_bytes = hmac_body_json(payload)
+        if self.proxy_approval_mode == "hmac":
+            if not self.proxy_approval_token:
+                return ToolResult.failure(
+                    ToolErrorKind.PERMISSION,
+                    "proxy search hmac mode requires approval token",
+                    code="web_search_proxy_secret_missing",
+                )
+            headers.update(
+                build_hmac_approval_headers(
+                    secret=self.proxy_approval_token,
+                    trace_id=trace_id,
+                    method="POST",
+                    path="/v1/search",
+                    body_bytes=body_bytes,
+                    policy_snapshot=policy_snapshot,
+                    gateway_instance=str(payload["gateway_meta"]["gateway_instance"]),
+                )
+            )
+        else:
+            headers["X-Trace-Id"] = trace_id
+            if self.proxy_approval_token:
+                headers["X-Approval-Token"] = self.proxy_approval_token
+        headers["X-Gateway-Request-Hash"] = hashlib.sha256(body_bytes).hexdigest()
+        headers["X-Policy-Snapshot-Hash"] = policy_snapshot_hash
+        headers["X-Gateway-Instance"] = str(payload["gateway_meta"]["gateway_instance"])
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -218,7 +309,12 @@ class WebSearchTool(Tool):
                             code="web_search_proxy_unhealthy",
                         )
 
-                response = await client.post(self.proxy_url, headers=headers, json=payload)
+                response = await client.post(
+                    self.proxy_url,
+                    headers=headers,
+                    content=body_bytes if self.proxy_approval_mode == "hmac" else None,
+                    json=None if self.proxy_approval_mode == "hmac" else payload,
+                )
         except httpx.TimeoutException as e:
             if self.proxy_fallback_to_local:
                 return await self._search_local(query=query, count=count)
@@ -285,12 +381,16 @@ class WebFetchTool(Tool):
         max_chars: int = 50000,
         mode: str = "local",
         proxy_url: str = "http://127.0.0.1:4499/v1/fetch",
+        proxy_approval_mode: str = "hmac",
+        proxy_approval_token: str = "",
         proxy_healthcheck: bool = False,
         proxy_fallback_to_local: bool = False,
     ):
         self.max_chars = max_chars
         self.mode = mode
         self.proxy_url = proxy_url
+        self.proxy_approval_mode = proxy_approval_mode
+        self.proxy_approval_token = proxy_approval_token
         self.proxy_healthcheck = proxy_healthcheck
         self.proxy_fallback_to_local = proxy_fallback_to_local
 
@@ -303,6 +403,7 @@ class WebFetchTool(Tool):
     ) -> ToolResult:
         max_chars = maxChars or self.max_chars
         trace_id = str(kwargs.get("trace_id") or "")
+        security_context = dict(kwargs.get("security_context") or {})
 
         # Validate URL before fetching
         is_valid, error_msg = _validate_url(url)
@@ -319,6 +420,7 @@ class WebFetchTool(Tool):
                 extract_mode=extractMode,
                 max_chars=max_chars,
                 trace_id=trace_id,
+                security_context=security_context,
             )
 
         return await self._fetch_local(url=url, extract_mode=extractMode, max_chars=max_chars)
@@ -409,15 +511,86 @@ class WebFetchTool(Tool):
         extract_mode: str,
         max_chars: int,
         trace_id: str,
+        security_context: dict[str, Any],
     ) -> ToolResult:
+        missing_sec = [
+            key
+            for key in (
+                "tenant_id",
+                "workspace_id",
+                "agent_profile",
+                "channel",
+                "sender_id",
+                "chat_id",
+                "role",
+                "trust_level",
+                "origin_surface",
+            )
+            if not str(security_context.get(key) or "").strip()
+        ]
+        if missing_sec:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                f"proxy fetch requires complete security context: missing {', '.join(missing_sec)}",
+                code="web_fetch_proxy_security_context_missing",
+            )
+        policy_snapshot = dict(security_context.get("policy_snapshot") or {})
+        policy_snapshot_hash = str(
+            security_context.get("policy_snapshot_hash")
+            or policy_snapshot.get("policy_snapshot_hash")
+            or stable_json_hash(policy_snapshot)
+        )
+        if not trace_id:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "proxy fetch requires trace_id",
+                code="web_fetch_proxy_trace_required",
+            )
+        if not policy_snapshot_hash:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "proxy fetch requires policy snapshot hash",
+                code="web_fetch_proxy_policy_snapshot_missing",
+            )
         headers = {"Content-Type": "application/json"}
-        if trace_id:
-            headers["X-Trace-Id"] = trace_id
 
         payload = {
             "url": url,
             "max_bytes": max_chars,
+            "security_context": security_context,
+            "policy_snapshot": policy_snapshot,
+            "gateway_meta": {
+                "gateway_instance": str(security_context.get("gateway_instance") or gateway_instance_id()),
+                "policy_snapshot_hash": policy_snapshot_hash,
+            },
         }
+        payload["gateway_meta"]["request_hash"] = stable_json_hash(payload)
+        body_bytes = hmac_body_json(payload)
+        if self.proxy_approval_mode == "hmac":
+            if not self.proxy_approval_token:
+                return ToolResult.failure(
+                    ToolErrorKind.PERMISSION,
+                    "proxy fetch hmac mode requires approval token",
+                    code="web_fetch_proxy_secret_missing",
+                )
+            headers.update(
+                build_hmac_approval_headers(
+                    secret=self.proxy_approval_token,
+                    trace_id=trace_id,
+                    method="POST",
+                    path="/v1/fetch",
+                    body_bytes=body_bytes,
+                    policy_snapshot=policy_snapshot,
+                    gateway_instance=str(payload["gateway_meta"]["gateway_instance"]),
+                )
+            )
+        else:
+            headers["X-Trace-Id"] = trace_id
+            if self.proxy_approval_token:
+                headers["X-Approval-Token"] = self.proxy_approval_token
+        headers["X-Gateway-Request-Hash"] = hashlib.sha256(body_bytes).hexdigest()
+        headers["X-Policy-Snapshot-Hash"] = policy_snapshot_hash
+        headers["X-Gateway-Instance"] = str(payload["gateway_meta"]["gateway_instance"])
 
         try:
             async with httpx.AsyncClient(timeout=35.0) as client:
@@ -435,7 +608,12 @@ class WebFetchTool(Tool):
                             code="web_fetch_proxy_unhealthy",
                         )
 
-                response = await client.post(self.proxy_url, headers=headers, json=payload)
+                response = await client.post(
+                    self.proxy_url,
+                    headers=headers,
+                    content=body_bytes if self.proxy_approval_mode == "hmac" else None,
+                    json=None if self.proxy_approval_mode == "hmac" else payload,
+                )
         except httpx.TimeoutException as e:
             if self.proxy_fallback_to_local:
                 return await self._fetch_local(

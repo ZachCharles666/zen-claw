@@ -53,20 +53,26 @@ class SlackChannel(BaseChannel):
         self._client = None
 
     async def send(self, msg: OutboundMessage) -> None:
+        trace_id, dispatch_mode = await self._authorize_outbound_send(msg)
         if self._client is None:
             logger.warning("Slack send skipped: client unavailable")
             return
-        try:
-            blocks = self._resolve_blocks(msg)
-            payload: dict[str, Any] = {"channel": msg.chat_id, "text": msg.content}
-            if blocks:
-                payload["blocks"] = blocks
-            if msg.reply_to:
-                payload["thread_ts"] = msg.reply_to
-            await self._client.chat_postMessage(**payload)
-            await self._upload_files(msg)
-        except Exception as e:
-            logger.warning(f"Slack send failed: {e}")
+        with self._allow_outbound_helpers(
+            trace_id=trace_id,
+            dispatch_mode=dispatch_mode,
+            send_path="send",
+        ):
+            try:
+                blocks = self._resolve_blocks(msg)
+                payload: dict[str, Any] = {"channel": msg.chat_id, "text": msg.content}
+                if blocks:
+                    payload["blocks"] = blocks
+                if msg.reply_to:
+                    payload["thread_ts"] = msg.reply_to
+                await self._client.chat_postMessage(**payload)
+                await self._upload_files(msg)
+            except Exception as e:
+                logger.warning(f"Slack send failed: {e}")
 
     async def handle_http_event(self, body: bytes, headers: dict[str, str]) -> dict[str, Any]:
         """Handle Slack Events API callback payload."""
@@ -146,6 +152,11 @@ class SlackChannel(BaseChannel):
         ]
 
     async def _upload_files(self, msg: OutboundMessage) -> None:
+        await self._assert_outbound_helper_allowed(
+            helper_name="_upload_files",
+            trace_id=msg.trace_id,
+            msg=msg,
+        )
         if self._client is None or not msg.media:
             return
         for media in msg.media[:4]:

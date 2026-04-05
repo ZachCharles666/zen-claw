@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -2347,6 +2348,170 @@ def test_ops_summary_api_json_and_csv(client, valid_key, monkeypatch, tmp_path: 
     assert filtered_body["filters"]["target"] == "email_check"
     assert filtered_body["returned"] == 1
     assert filtered_body["recent_activity"][0]["target"] == "email_check"
+
+
+def test_security_audit_api_and_ops_summary_security_metrics(client, valid_key, tmp_path, monkeypatch):
+    cfg = Config()
+    data_dir = tmp_path
+    (data_dir / "audit_logs").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes").mkdir(parents=True, exist_ok=True)
+    (data_dir / "cron").mkdir(parents=True, exist_ok=True)
+    (data_dir / "channels").mkdir(parents=True, exist_ok=True)
+    (data_dir / "nodes" / "state.json").write_text(
+        '{"version":1,"nodes":{},"tasks":[],"approval_events":[]}',
+        encoding="utf-8",
+    )
+    audit_path = data_dir / "audit_logs" / f"{datetime.now(tz=UTC).strftime('%Y-%m-%d')}.jsonl"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "ts": "2026-04-05T00:00:00+00:00",
+                "trace_id": "trace-security-1",
+                "prev_hash": "",
+                "event_type": "tool.executed",
+                "tool": "social_platform_post",
+                "capability": "connector.record.create",
+                "resource_scope": {"connector_name": "moltbook", "target_resource": "moltbook.posts"},
+                "policy_snapshot_hash": "policy-1",
+                "request_hash": "req-1",
+                "gateway_instance": "gw-1",
+                "sidecar_target": "http://127.0.0.1:4499/v1/fetch",
+                "identity": {
+                    "channel": "cli",
+                    "sender_id": "user-1",
+                    "chat_id": "chat-1",
+                    "tenant_id": "default",
+                    "workspace_id": "ws-1",
+                    "agent_profile": "ops",
+                    "role": "operator",
+                    "trust_level": "trusted_local",
+                },
+                "ok": True,
+                "hash": "h1",
+                "signature": "",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "ts": "2026-04-05T00:01:00+00:00",
+                "trace_id": "trace-security-2",
+                "prev_hash": "h1",
+                "event_type": "approval.approved",
+                "approval": {
+                    "approval_id": "APR-9",
+                    "capability": "exec.run",
+                    "request_hash": "req-2",
+                    "policy_snapshot_hash": "policy-2",
+                    "actor": "ops_reviewer",
+                },
+                "identity": {
+                    "channel": "webchat",
+                    "sender_id": "user-2",
+                    "chat_id": "chat-2",
+                    "tenant_id": "default",
+                    "workspace_id": "ws-2",
+                    "agent_profile": "default",
+                    "role": "operator",
+                    "trust_level": "remote_untrusted",
+                    "gateway_instance": "gw-2",
+                },
+                "resource_scope": {"working_dir": "E:/nano-claw-public"},
+                "hash": "h2",
+                "signature": "",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "ts": "2026-04-05T00:02:00+00:00",
+                "trace_id": "trace-security-3",
+                "prev_hash": "h2",
+                "event_type": "message.outbound.direct_blocked",
+                "action": "connector.message.send",
+                "channel": "discord",
+                "identity": {
+                    "channel": "discord",
+                    "sender_id": "system",
+                    "chat_id": "chat-3",
+                    "tenant_id": "default",
+                    "workspace_id": "ws-3",
+                    "agent_profile": "default",
+                    "role": "operator",
+                    "trust_level": "remote_untrusted",
+                },
+                "error_code": "external_channel_direct_send_blocked",
+                "hash": "h3",
+                "signature": "",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("zen_claw.config.loader.load_config", lambda path=None: cfg)
+    monkeypatch.setattr("zen_claw.config.loader.get_data_dir", lambda: data_dir)
+    monkeypatch.setattr(
+        "zen_claw.runtime.sidecar_supervisor.collect_sidecar_status", lambda _cfg: []
+    )
+
+    resp = client.get(
+        "/api/v1/security/audit?capability=exec.run&decision_id=APR-9",
+        headers={"X-API-Key": valid_key},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["returned"] == 1
+    assert body["filters"]["capability"] == "exec.run"
+    assert body["filters"]["decision_id"] == "APR-9"
+    assert body["rows"][0]["decision_id"] == "APR-9"
+    assert body["rows"][0]["gateway_instance"] == "gw-2"
+    assert body["rows"][0]["trust_level"] == "remote_untrusted"
+    assert body["rows"][0]["policy_snapshot_hash"] == "policy-2"
+    assert body["rows"][0]["request_hash"] == "req-2"
+    assert body["rows"][0]["resource_scope"]["working_dir"] == "E:/nano-claw-public"
+
+    csv_resp = client.get(
+        "/api/v1/security/audit?format=csv&trace_id=trace-security-2",
+        headers={"X-API-Key": valid_key},
+    )
+    assert csv_resp.status_code == 200
+    assert csv_resp.headers["content-type"].startswith("text/csv")
+    assert "security-audit.csv" in csv_resp.headers["content-disposition"]
+    assert (
+        "ts,event_type,capability,trace_id,tenant_id,workspace_id,agent_profile,channel,trust_level,gateway_instance,policy_snapshot_hash,request_hash,decision_id,tool,error_code,ok,sidecar_target,resource_scope"
+        in csv_resp.text
+    )
+    assert "trace-security-2" in csv_resp.text
+    assert "APR-9" in csv_resp.text
+
+    ops_resp = client.get("/api/v1/ops/summary", headers={"X-API-Key": valid_key})
+    assert ops_resp.status_code == 200
+    ops_body = ops_resp.json()
+    assert any(
+        row["surface"] == "security" and row["metric"] == "recent_events" and row["value"] == 3
+        for row in ops_body["rows"]
+    )
+    assert any(
+        row["surface"] == "security" and row["metric"] == "approval_events" and row["value"] == 1
+        for row in ops_body["rows"]
+    )
+    assert any(
+        row["surface"] == "security" and row["metric"] == "missing_gateway_instance" and row["value"] == 1
+        for row in ops_body["rows"]
+    )
+    assert any(
+        row["surface"] == "security" and row["metric"] == "untrusted_events" and row["value"] == 2
+        for row in ops_body["rows"]
+    )
+    assert any(
+        section["key"] == "security_missing_context" for section in ops_body["attention_sections"]
+    )
+    assert any(
+        section["key"] == "security_approval_activity" for section in ops_body["attention_sections"]
+    )
+    assert not any(row["surface"] == "security" for row in ops_body["recent_activity"])
 
 
 def test_ops_apply_pending_acknowledges_agent_and_channel(client, valid_key, tmp_path, monkeypatch):

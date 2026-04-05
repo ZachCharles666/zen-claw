@@ -1,6 +1,7 @@
 """Shell execution tool."""
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -13,6 +14,7 @@ import httpx
 from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.agent.tools.sidecar_approval import build_hmac_approval_headers, hmac_body_json
+from zen_claw.security_context import gateway_instance_id, stable_json_hash
 
 
 class ExecTool(Tool):
@@ -84,6 +86,7 @@ class ExecTool(Tool):
     ) -> ToolResult:
         cwd = working_dir or self.working_dir or os.getcwd()
         trace_id = str(kwargs.get("trace_id") or "")
+        security_context = dict(kwargs.get("security_context") or {})
         guard = self._guard_command(command, cwd)
         if guard:
             code, message = guard
@@ -91,7 +94,11 @@ class ExecTool(Tool):
 
         if self.mode == "sidecar":
             return await self._execute_via_sidecar(
-                command=command, cwd=cwd, env=env, trace_id=trace_id
+                command=command,
+                cwd=cwd,
+                env=env,
+                trace_id=trace_id,
+                security_context=security_context,
             )
 
         return await self._execute_local(command=command, cwd=cwd, env=env)
@@ -157,15 +164,61 @@ class ExecTool(Tool):
             )
 
     async def _execute_via_sidecar(
-        self, command: str, cwd: str, env: dict[str, str] | None = None, trace_id: str = ""
+        self,
+        command: str,
+        cwd: str,
+        env: dict[str, str] | None = None,
+        trace_id: str = "",
+        security_context: dict[str, Any] | None = None,
     ) -> ToolResult:
+        sec = dict(security_context or {})
+        policy_snapshot = dict(sec.get("policy_snapshot") or {})
+        policy_snapshot_hash = str(
+            sec.get("policy_snapshot_hash")
+            or policy_snapshot.get("policy_snapshot_hash")
+            or stable_json_hash(policy_snapshot)
+        )
+        missing_sec = [
+            key
+            for key in (
+                "tenant_id",
+                "workspace_id",
+                "agent_profile",
+                "channel",
+                "sender_id",
+                "chat_id",
+                "role",
+                "trust_level",
+                "origin_surface",
+            )
+            if not str(sec.get(key) or "").strip()
+        ]
+        if missing_sec:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                f"exec sidecar requires complete security context: missing {', '.join(missing_sec)}",
+                code="exec_sidecar_security_context_missing",
+            )
+        if not policy_snapshot_hash:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "exec sidecar requires policy snapshot hash",
+                code="exec_sidecar_policy_snapshot_missing",
+            )
         payload = {
             "command": command,
             "working_dir": cwd,
             "timeout_seconds": self.timeout,
+            "security_context": sec,
+            "policy_snapshot": policy_snapshot,
         }
         if env is not None:
             payload["env"] = env
+        payload["gateway_meta"] = {
+            "gateway_instance": str(sec.get("gateway_instance") or gateway_instance_id()),
+            "policy_snapshot_hash": policy_snapshot_hash,
+        }
+        payload["gateway_meta"]["request_hash"] = stable_json_hash(payload)
         body_bytes = hmac_body_json(payload)
         headers = {"Content-Type": "application/json"}
         if self.sidecar_approval_mode == "hmac":
@@ -188,6 +241,8 @@ class ExecTool(Tool):
                     method="POST",
                     path="/v1/exec",
                     body_bytes=body_bytes,
+                    policy_snapshot=policy_snapshot,
+                    gateway_instance=str(payload["gateway_meta"]["gateway_instance"]),
                 )
             )
         else:
@@ -195,6 +250,9 @@ class ExecTool(Tool):
                 headers["X-Approval-Token"] = self.sidecar_approval_token
             if trace_id:
                 headers["X-Trace-Id"] = trace_id
+        headers["X-Gateway-Request-Hash"] = hashlib.sha256(body_bytes).hexdigest()
+        headers["X-Policy-Snapshot-Hash"] = policy_snapshot_hash
+        headers["X-Gateway-Instance"] = str(payload["gateway_meta"]["gateway_instance"])
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout + 5) as client:
