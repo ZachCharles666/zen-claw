@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,6 +25,8 @@ type cfg struct {
 	TimeoutSec     int
 	MaxRedirects   int
 	SearchBaseURL  string
+	ApprovalToken  string
+	ApprovalSecret string
 }
 
 type fetchRequest struct {
@@ -106,6 +111,8 @@ func loadCfg() cfg {
 		TimeoutSec:     getenvInt("NET_PROXY_TIMEOUT_SEC", 20),
 		MaxRedirects:   getenvInt("NET_PROXY_MAX_REDIRECTS", 5),
 		SearchBaseURL:  getenv("NET_PROXY_SEARCH_BASE_URL", "https://api.search.brave.com/res/v1/web/search"),
+		ApprovalToken:  os.Getenv("NET_PROXY_APPROVAL_TOKEN"),
+		ApprovalSecret: os.Getenv("NET_PROXY_APPROVAL_SECRET"),
 	}
 }
 
@@ -134,6 +141,14 @@ func handleFetch(w http.ResponseWriter, r *http.Request, c cfg) {
 			OK:        false,
 			ErrorCode: "invalid_body",
 			Error:     err.Error(),
+		})
+		return
+	}
+	if !checkApproval(r, c, traceID, "POST", "/v1/fetch", bodyBytes) {
+		writeJSON(w, http.StatusForbidden, fetchResponse{
+			OK:        false,
+			ErrorCode: "approval_required",
+			Error:     "missing or invalid proxy approval",
 		})
 		return
 	}
@@ -188,6 +203,22 @@ func handleFetch(w http.ResponseWriter, r *http.Request, c cfg) {
 		return
 	}
 	host := strings.ToLower(target.Hostname())
+	if len(c.AllowedDomains) == 0 {
+		writeJSON(w, http.StatusForbidden, fetchResponse{
+			OK:        false,
+			ErrorCode: "domain_allowlist_required",
+			Error:     "proxy allowlist is empty",
+		})
+		logAudit(auditPayload{
+			Event:       "net.fetch.denied",
+			TraceID:     traceID,
+			PolicyCode:  "domain_allowlist_required",
+			PolicyScope: "net_proxy",
+			ErrorKind:   "permission",
+			Message:     "proxy allowlist is empty",
+		})
+		return
+	}
 	if denied(host, c.DeniedDomains) {
 		writeJSON(w, http.StatusForbidden, fetchResponse{
 			OK:        false,
@@ -236,7 +267,7 @@ func handleFetch(w http.ResponseWriter, r *http.Request, c cfg) {
 			if denied(h, c.DeniedDomains) {
 				return fmt.Errorf("redirect target denied")
 			}
-			if len(c.AllowedDomains) > 0 && !allowed(h, c.AllowedDomains) {
+			if len(c.AllowedDomains) == 0 || !allowed(h, c.AllowedDomains) {
 				return fmt.Errorf("redirect target not allowlisted")
 			}
 			return nil
@@ -330,6 +361,14 @@ func handleSearch(w http.ResponseWriter, r *http.Request, c cfg) {
 		})
 		return
 	}
+	if !checkApproval(r, c, traceID, "POST", "/v1/search", bodyBytes) {
+		writeJSONSearch(w, http.StatusForbidden, searchResponse{
+			OK:        false,
+			ErrorCode: "approval_required",
+			Error:     "missing or invalid proxy approval",
+		})
+		return
+	}
 	var req searchRequest
 	if err := json.Unmarshal(bodyBytes, &req); err != nil {
 		writeJSONSearch(w, http.StatusBadRequest, searchResponse{
@@ -388,6 +427,22 @@ func handleSearch(w http.ResponseWriter, r *http.Request, c cfg) {
 	}
 
 	host := "api.search.brave.com"
+	if len(c.AllowedDomains) == 0 {
+		writeJSONSearch(w, http.StatusForbidden, searchResponse{
+			OK:        false,
+			ErrorCode: "domain_allowlist_required",
+			Error:     "proxy allowlist is empty",
+		})
+		logAudit(auditPayload{
+			Event:       "net.search.denied",
+			TraceID:     traceID,
+			PolicyCode:  "domain_allowlist_required",
+			PolicyScope: "net_proxy",
+			ErrorKind:   "permission",
+			Message:     "proxy allowlist is empty",
+		})
+		return
+	}
 	if denied(host, c.DeniedDomains) {
 		writeJSONSearch(w, http.StatusForbidden, searchResponse{
 			OK:        false,
@@ -562,6 +617,83 @@ func denied(host string, deny map[string]struct{}) bool {
 	return ok
 }
 
+func checkApproval(r *http.Request, c cfg, traceID, method, path string, bodyBytes []byte) bool {
+	if c.ApprovalSecret != "" {
+		return checkHMACApproval(r, c.ApprovalSecret, traceID, method, path, bodyBytes)
+	}
+	headerToken := r.Header.Get("X-Approval-Token")
+	if c.ApprovalToken == "" {
+		return true
+	}
+	return headerToken != "" && subtle.ConstantTimeCompare([]byte(headerToken), []byte(c.ApprovalToken)) == 1
+}
+
+func checkHMACApproval(r *http.Request, secret, traceID, method, path string, bodyBytes []byte) bool {
+	traceID = strings.TrimSpace(traceID)
+	if traceID == "" {
+		return false
+	}
+	tsStr := strings.TrimSpace(r.Header.Get("X-Gateway-Timestamp"))
+	if tsStr == "" {
+		tsStr = strings.TrimSpace(r.Header.Get("X-Approval-Timestamp"))
+	}
+	nonce := strings.TrimSpace(r.Header.Get("X-Gateway-Nonce"))
+	requestHash := strings.TrimSpace(r.Header.Get("X-Gateway-Request-Hash"))
+	gatewayInstance := strings.TrimSpace(r.Header.Get("X-Gateway-Instance"))
+	policySnapshotHash := strings.TrimSpace(r.Header.Get("X-Policy-Snapshot-Hash"))
+	sigHex := strings.TrimSpace(r.Header.Get("X-Gateway-Signature"))
+	if sigHex == "" {
+		sigHex = strings.TrimSpace(r.Header.Get("X-Approval-Signature"))
+	}
+	if tsStr == "" || sigHex == "" {
+		return false
+	}
+	ts, err := strconv.ParseInt(tsStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	now := time.Now().Unix()
+	if ts < now-120 || ts > now+120 {
+		return false
+	}
+	bodyHash := sha256.Sum256(bodyBytes)
+	computedHash := fmt.Sprintf("%x", bodyHash[:])
+	if requestHash != "" && !strings.EqualFold(requestHash, computedHash) {
+		return false
+	}
+	var canonical string
+	if nonce != "" || gatewayInstance != "" || policySnapshotHash != "" {
+		canonical = strings.Join(
+			[]string{
+				traceID,
+				tsStr,
+				nonce,
+				strings.ToUpper(strings.TrimSpace(method)),
+				strings.TrimSpace(path),
+				computedHash,
+				gatewayInstance,
+				policySnapshotHash,
+			},
+			"\n",
+		)
+	} else {
+		canonical = strings.Join(
+			[]string{
+				traceID,
+				tsStr,
+				strings.ToUpper(strings.TrimSpace(method)),
+				strings.TrimSpace(path),
+				computedHash,
+			},
+			"\n",
+		)
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(canonical))
+	expected := fmt.Sprintf("%x", mac.Sum(nil))
+	return hmac.Equal([]byte(expected), []byte(sigHex))
+}
+
 func allowed(host string, allow map[string]struct{}) bool {
 	_, ok := allow[host]
 	return ok
@@ -625,4 +757,3 @@ func readBodyBytes(r *http.Request, maxBytes int64) ([]byte, error) {
 	}
 	return b, nil
 }
-

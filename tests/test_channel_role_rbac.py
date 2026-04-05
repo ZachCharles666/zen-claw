@@ -23,6 +23,8 @@ def _build_loop(tmp_path: Path, monkeypatch) -> AgentLoop:
     policy = ToolPolicyConfig()
     policy.default_deny_tools = []
     policy.agent.allow = ["*"]
+    policy.exec_allowed_working_dirs = [str(tmp_path)]
+    policy.exec_allowed_command_prefixes = ["echo"]
     return AgentLoop(
         bus=MessageBus(),
         provider=_DummyProvider(),
@@ -58,4 +60,5 @@ async def test_channel_role_admin_clears_role_scope(tmp_path: Path, monkeypatch)
     result = await loop.tools.execute("exec", {})
     assert result.ok is False
     assert result.error is not None
-    assert result.error.code == "invalid_parameters"
+    assert result.error.code == "resource_scope_exec_prefix"
+    assert result.meta.get("policy_scope") == "resource"

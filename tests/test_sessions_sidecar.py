@@ -15,8 +15,26 @@ from zen_claw.agent.tools.sessions import (
     SessionsWriteTool,
 )
 from zen_claw.bus.queue import MessageBus
-from zen_claw.config.schema import ExecToolConfig
+from zen_claw.config.schema import ExecToolConfig, ToolPolicyConfig
 from zen_claw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from zen_claw.security_context import build_security_context
+
+
+def _security_context(trace_id: str = "trace-sessions-test") -> dict:
+    return build_security_context(
+        trace_id=trace_id,
+        channel="cli",
+        sender_id="tester",
+        chat_id="direct",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        agent_profile="default",
+        role="operator",
+        trust_level="trusted_local",
+        origin_surface="cli",
+        workspace_path="E:/nano-claw-public",
+        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+    )
 
 
 class _FakeResponse:
@@ -67,6 +85,16 @@ class _FakeClient:
             assert len(content) > 0
         return self._post_response
 
+    async def request(self, method: str, url: str, **kwargs) -> _FakeResponse:
+        if method.upper() == "GET":
+            return await self.get(url, headers=kwargs.get("headers"), params=kwargs.get("params"))
+        return await self.post(
+            url,
+            headers=kwargs.get("headers"),
+            json=kwargs.get("json"),
+            content=kwargs.get("content"),
+        )
+
 
 async def test_sessions_spawn_sidecar_success(monkeypatch) -> None:
     monkeypatch.setattr(
@@ -76,7 +104,11 @@ async def test_sessions_spawn_sidecar_success(monkeypatch) -> None:
         ),
     )
     tool = SessionsSpawnTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(command="echo hi")
+    result = await tool.execute(
+        command="echo hi",
+        trace_id="trace-spawn",
+        security_context=_security_context("trace-spawn"),
+    )
     assert result.ok is True
     assert result.meta.get("session_id") == "s-1"
 
@@ -100,7 +132,12 @@ async def test_sessions_spawn_includes_pty_payload(monkeypatch) -> None:
         lambda timeout: _CaptureClient(),
     )
     tool = SessionsSpawnTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(command="python -i", pty=True)
+    result = await tool.execute(
+        command="python -i",
+        pty=True,
+        trace_id="trace-pty",
+        security_context=_security_context("trace-pty"),
+    )
     assert result.ok is True
     assert isinstance(observed.get("json"), dict)
     assert observed["json"].get("pty") is True
@@ -122,7 +159,7 @@ async def test_sessions_list_sidecar_success(monkeypatch) -> None:
         ),
     )
     tool = SessionsListTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute()
+    result = await tool.execute(trace_id="trace-list", security_context=_security_context("trace-list"))
     assert result.ok is True
     assert "s-1" in result.content
 
@@ -138,7 +175,11 @@ async def test_sessions_kill_not_found_returns_parameter_error(monkeypatch) -> N
         ),
     )
     tool = SessionsKillTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(session_id="s-missing")
+    result = await tool.execute(
+        session_id="s-missing",
+        trace_id="trace-kill",
+        security_context=_security_context("trace-kill"),
+    )
     assert result.ok is False
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.PARAMETER
@@ -163,7 +204,13 @@ async def test_sessions_read_success(monkeypatch) -> None:
         ),
     )
     tool = SessionsReadTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(session_id="s-1", cursor=0, max_bytes=128)
+    result = await tool.execute(
+        session_id="s-1",
+        cursor=0,
+        max_bytes=128,
+        trace_id="trace-read",
+        security_context=_security_context("trace-read"),
+    )
     assert result.ok is True
     assert result.meta.get("next_cursor") == 6
     assert result.meta.get("chunk") == "hello\n"
@@ -185,7 +232,12 @@ async def test_sessions_write_success(monkeypatch) -> None:
         ),
     )
     tool = SessionsWriteTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(session_id="s-1", input="hello")
+    result = await tool.execute(
+        session_id="s-1",
+        input="hello",
+        trace_id="trace-write",
+        security_context=_security_context("trace-write"),
+    )
     assert result.ok is True
     assert result.meta.get("written_bytes") == 5
 
@@ -207,7 +259,12 @@ async def test_sessions_signal_success(monkeypatch) -> None:
         ),
     )
     tool = SessionsSignalTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(session_id="s-1", signal="interrupt")
+    result = await tool.execute(
+        session_id="s-1",
+        signal="interrupt",
+        trace_id="trace-signal",
+        security_context=_security_context("trace-signal"),
+    )
     assert result.ok is True
     assert result.meta.get("delivered") is True
 
@@ -230,7 +287,13 @@ async def test_sessions_resize_success(monkeypatch) -> None:
         ),
     )
     tool = SessionsResizeTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(session_id="s-1", rows=40, cols=120)
+    result = await tool.execute(
+        session_id="s-1",
+        rows=40,
+        cols=120,
+        trace_id="trace-resize",
+        security_context=_security_context("trace-resize"),
+    )
     assert result.ok is True
     assert result.meta.get("applied") is True
 
@@ -244,7 +307,10 @@ async def test_sessions_tools_healthcheck_failure(monkeypatch) -> None:
         sidecar_exec_url="http://127.0.0.1:4488/v1/exec",
         sidecar_healthcheck=True,
     )
-    result = await tool.execute()
+    result = await tool.execute(
+        trace_id="trace-health",
+        security_context=_security_context("trace-health"),
+    )
     assert result.ok is False
     assert result.error is not None
     assert result.error.code == "sessions_sidecar_unhealthy"
@@ -256,7 +322,11 @@ async def test_sessions_tools_unreachable_returns_retryable(monkeypatch) -> None
         lambda timeout: _FakeClient(exc=httpx.RequestError("down")),
     )
     tool = SessionsSpawnTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(command="echo hi")
+    result = await tool.execute(
+        command="echo hi",
+        trace_id="trace-down",
+        security_context=_security_context("trace-down"),
+    )
     assert result.ok is False
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.RETRYABLE
@@ -278,7 +348,10 @@ async def test_sessions_tools_pass_trace_id_header(monkeypatch) -> None:
         lambda timeout: _HeaderClient(),
     )
     tool = SessionsListTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(trace_id="trace-abc")
+    result = await tool.execute(
+        trace_id="trace-abc",
+        security_context=_security_context("trace-abc"),
+    )
     assert result.ok is True
     assert observed.get("trace") == "trace-abc"
 
@@ -294,7 +367,11 @@ async def test_sessions_spawn_permission_error_kind(monkeypatch) -> None:
         ),
     )
     tool = SessionsSpawnTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
-    result = await tool.execute(command="echo hi")
+    result = await tool.execute(
+        command="echo hi",
+        trace_id="trace-perm",
+        security_context=_security_context("trace-perm"),
+    )
     assert result.ok is False
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.PERMISSION
@@ -324,7 +401,10 @@ async def test_sessions_list_hmac_adds_signature_headers(monkeypatch) -> None:
         sidecar_approval_mode="hmac",
         sidecar_approval_token="secret",
     )
-    result = await tool.execute(trace_id="trace-abc")
+    result = await tool.execute(
+        trace_id="trace-abc",
+        security_context=_security_context("trace-abc"),
+    )
     assert result.ok is True
     assert observed.get("trace") == "trace-abc"
     assert observed.get("sig")
@@ -364,7 +444,11 @@ async def test_sessions_read_hmac_adds_signature_headers(monkeypatch) -> None:
         sidecar_approval_mode="hmac",
         sidecar_approval_token="secret",
     )
-    result = await tool.execute(session_id="s-1", trace_id="trace-abc")
+    result = await tool.execute(
+        session_id="s-1",
+        trace_id="trace-abc",
+        security_context=_security_context("trace-abc"),
+    )
     assert result.ok is True
     assert observed.get("trace") == "trace-abc"
     assert observed.get("sig")
@@ -402,7 +486,12 @@ async def test_sessions_write_hmac_adds_signature_headers(monkeypatch) -> None:
         sidecar_approval_mode="hmac",
         sidecar_approval_token="secret",
     )
-    result = await tool.execute(session_id="s-1", input="status", trace_id="trace-abc")
+    result = await tool.execute(
+        session_id="s-1",
+        input="status",
+        trace_id="trace-abc",
+        security_context=_security_context("trace-abc"),
+    )
     assert result.ok is True
     assert observed.get("trace") == "trace-abc"
     assert observed.get("sig")
@@ -447,7 +536,12 @@ async def test_sessions_signal_hmac_adds_signature_headers(monkeypatch) -> None:
         sidecar_approval_mode="hmac",
         sidecar_approval_token="secret",
     )
-    result = await tool.execute(session_id="s-1", signal="interrupt", trace_id="trace-abc")
+    result = await tool.execute(
+        session_id="s-1",
+        signal="interrupt",
+        trace_id="trace-abc",
+        security_context=_security_context("trace-abc"),
+    )
     assert result.ok is True
     assert observed.get("trace") == "trace-abc"
     assert observed.get("sig")
@@ -509,6 +603,33 @@ def test_agent_loop_sidecar_sessions_spawn_write_read_workflow(tmp_path, monkeyp
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
+        async def request(self, method, url, headers=None, json=None, content=None):
+            method = str(method).upper()
+            if method == "GET":
+                payload = {}
+                if isinstance(json, dict):
+                    payload = json
+                elif content:
+                    payload = dict(jsonlib.loads(content.decode("utf-8")))
+                requests_seen.append(("GET", url, payload))
+                if url.endswith("/v1/sessions/s-42/read"):
+                    return _FakeResponse(
+                        200,
+                        {
+                            "ok": True,
+                            "session_id": "s-42",
+                            "status": "running",
+                            "chunk": "ready\n",
+                            "next_cursor": 6,
+                            "truncated": False,
+                        },
+                    )
+                return _FakeResponse(
+                    404,
+                    {"ok": False, "error_code": "session_not_found", "error_message": "missing"},
+                )
+            return await self.post(url, headers=headers, json=json, content=content)
+
         async def post(self, url, headers=None, json=None, content=None):
             payload = json if isinstance(json, dict) else {}
             if not payload and content:
@@ -522,24 +643,6 @@ def test_agent_loop_sidecar_sessions_spawn_write_read_workflow(tmp_path, monkeyp
                 )
             return _FakeResponse(
                 404, {"ok": False, "error_code": "route_not_found", "error_message": "missing"}
-            )
-
-        async def get(self, url, headers=None, params=None):
-            requests_seen.append(("GET", url, params or {}))
-            if url.endswith("/v1/sessions/s-42/read"):
-                return _FakeResponse(
-                    200,
-                    {
-                        "ok": True,
-                        "session_id": "s-42",
-                        "status": "running",
-                        "chunk": "ready\n",
-                        "next_cursor": 6,
-                        "truncated": False,
-                    },
-                )
-            return _FakeResponse(
-                404, {"ok": False, "error_code": "session_not_found", "error_message": "missing"}
             )
 
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _NoopSessionManager)
@@ -587,7 +690,12 @@ def test_agent_loop_sidecar_sessions_spawn_write_read_workflow(tmp_path, monkeyp
         bus=MessageBus(),
         provider=provider,
         workspace=tmp_path,
-        exec_config=ExecToolConfig(mode="sidecar"),
+        exec_config=ExecToolConfig(mode="sidecar", sidecar_approval_mode="token"),
+        tool_policy_config=ToolPolicyConfig(
+            exec_allowed_working_dirs=[str(tmp_path)],
+            exec_allowed_command_prefixes=["cat"],
+            sessions_allowed_session_ops=["read", "write"],
+        ),
         enable_planning=False,
         max_reflections=1,
         max_iterations=6,

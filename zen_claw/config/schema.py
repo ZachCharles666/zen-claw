@@ -123,7 +123,7 @@ class WebhookTriggerConfig(BaseModel):
     ip_allowlist: list[str] = Field(default_factory=list)
     timestamp_tolerance_sec: int = 300
     nonce_ttl_sec: int = 600
-    allow_unsigned_from_allowlist: bool = True
+    allow_unsigned_from_allowlist: bool = False
     cron_target_url: str = ""
     cron_target_timeout_sec: int = 10
     agent_profile: str = "default"
@@ -242,7 +242,7 @@ class AgentDefaults(BaseModel):
     enable_planning: bool = True
     max_reflections: int = 1
     auto_parameter_rewrite: bool = False
-    skill_permissions_mode: Literal["off", "warn", "enforce"] = "off"
+    skill_permissions_mode: Literal["off", "warn", "enforce"] = "enforce"
     max_tokens: int = 8192
     compression_trigger_ratio: float = 0.8
     compression_hysteresis_ratio: float = 0.5
@@ -287,6 +287,9 @@ class AgentProfileConfig(BaseModel):
     allowed_models: list[str] | None = None
     token_budget_daily: int | None = None  # Override defaults.token_budget_daily
     on_complete_webhook: str = ""  # POST to this URL when agent task completes
+    dev_profile: bool = False
+    trusted_local_only: bool = False
+    allowed_channels: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _normalize_routing_keywords(self) -> "AgentProfileConfig":
@@ -301,6 +304,7 @@ class AgentProfileConfig(BaseModel):
         self.routing_keywords = normalized
         self.allowed_tools = ToolPolicyLayerConfig._normalize_tool_list(self.allowed_tools)
         self.denied_tools = ToolPolicyLayerConfig._normalize_tool_list(self.denied_tools)
+        self.allowed_channels = ToolPolicyConfig._normalize_channel_list(self.allowed_channels)
         return self
 
 
@@ -436,8 +440,10 @@ class WebSearchConfig(BaseModel):
 
     api_key: str = ""  # Brave Search API key
     max_results: int = 5
-    mode: Literal["local", "proxy"] = "local"
+    mode: Literal["local", "proxy"] = "proxy"
     proxy_url: str = "http://127.0.0.1:4499/v1/search"
+    proxy_approval_mode: Literal["token", "hmac"] = "hmac"
+    proxy_approval_token: SecretStr = SecretStr("")
     proxy_healthcheck: bool = False
     proxy_fallback_to_local: bool = False
 
@@ -445,10 +451,22 @@ class WebSearchConfig(BaseModel):
 class WebFetchConfig(BaseModel):
     """Web fetch tool configuration."""
 
-    mode: Literal["local", "proxy"] = "local"
+    mode: Literal["local", "proxy"] = "proxy"
     proxy_url: str = "http://127.0.0.1:4499/v1/fetch"
+    proxy_approval_mode: Literal["token", "hmac"] = "hmac"
+    proxy_approval_token: SecretStr = SecretStr("")
     proxy_healthcheck: bool = False
     proxy_fallback_to_local: bool = False
+
+
+class ConnectorToolConfig(BaseModel):
+    """Connector write sidecar configuration."""
+
+    mode: Literal["proxy"] = "proxy"
+    proxy_url: str = "http://127.0.0.1:4499/v1/fetch"
+    sidecar_approval_mode: Literal["token", "hmac"] = "hmac"
+    sidecar_approval_token: SecretStr = SecretStr("")
+    proxy_healthcheck: bool = False
 
 
 class WebToolsConfig(BaseModel):
@@ -542,6 +560,7 @@ class BrowserToolConfig(BaseModel):
 
     mode: Literal["off", "sidecar"] = "off"
     sidecar_url: str = "http://127.0.0.1:4500/v1/browser"
+    sidecar_approval_mode: Literal["token", "hmac"] = "hmac"
     sidecar_approval_token: SecretStr = SecretStr("")
     sidecar_healthcheck: bool = False
     sidecar_fallback_to_off: bool = False
@@ -555,9 +574,9 @@ class ExecToolConfig(BaseModel):
     """Shell exec tool configuration."""
 
     timeout: int = 60
-    mode: Literal["local", "sidecar"] = "local"
+    mode: Literal["local", "sidecar"] = "sidecar"
     sidecar_url: str = "http://127.0.0.1:4488/v1/exec"
-    sidecar_approval_mode: Literal["token", "hmac"] = "token"
+    sidecar_approval_mode: Literal["token", "hmac"] = "hmac"
     sidecar_approval_token: SecretStr = SecretStr("")
     sidecar_fallback_to_local: bool = False
     sidecar_healthcheck: bool = False
@@ -595,7 +614,9 @@ class ToolPolicyLayerConfig(BaseModel):
 class ToolPolicyConfig(BaseModel):
     """Tool policy configuration."""
 
-    default_deny_tools: list[str] = Field(default_factory=lambda: ["exec", "spawn"])
+    default_deny_tools: list[str] = Field(
+        default_factory=lambda: ["exec", "spawn", "sessions_spawn", "sessions_write", "sessions_signal"]
+    )
     kill_switch_enabled: bool = False
     kill_switch_reason: str = ""
     allow_subagent_sensitive_tools: bool = False
@@ -605,7 +626,27 @@ class ToolPolicyConfig(BaseModel):
     cron_allowed_actions_by_channel: dict[str, list[str]] = Field(default_factory=dict)
     cron_require_remove_confirmation: bool = False
     channel_policies: dict[str, ToolPolicyLayerConfig] = Field(default_factory=dict)
-    production_hardening: bool = False
+    production_hardening: bool = True
+    legacy_compat: bool = False
+    trusted_local_channels: list[str] = Field(default_factory=lambda: ["cli", "system"])
+    filesystem_allowed_subpaths: list[str] = Field(default_factory=list)
+    exec_allowed_working_dirs: list[str] = Field(default_factory=list)
+    exec_allowed_command_prefixes: list[str] = Field(default_factory=list)
+    sessions_allowed_working_dirs: list[str] = Field(default_factory=list)
+    sessions_allowed_command_prefixes: list[str] = Field(default_factory=list)
+    sessions_allowed_session_ops: list[str] = Field(default_factory=list)
+    sessions_max_ttl_sec: int = 1800
+    fetch_allowed_domains: list[str] = Field(default_factory=list)
+    search_allowed_domains: list[str] = Field(default_factory=list)
+    browser_allowed_domains: list[str] = Field(default_factory=list)
+    message_allowed_channels: list[str] = Field(default_factory=list)
+    knowledge_allowed_tenants: list[str] = Field(default_factory=list)
+    knowledge_allowed_notebooks: list[str] = Field(default_factory=list)
+    connector_allowed_names: list[str] = Field(default_factory=list)
+    connector_allowed_actions: list[str] = Field(default_factory=list)
+    connector_allowed_target_resources: list[str] = Field(default_factory=list)
+    connector_allowed_tenants: list[str] = Field(default_factory=list)
+    connector_allowed_workspaces: list[str] = Field(default_factory=list)
     agent: ToolPolicyLayerConfig = Field(default_factory=lambda: ToolPolicyLayerConfig(allow=["*"]))
     subagent: ToolPolicyLayerConfig = Field(
         default_factory=lambda: ToolPolicyLayerConfig(
@@ -632,6 +673,40 @@ class ToolPolicyConfig(BaseModel):
         )
         self.kill_switch_reason = (self.kill_switch_reason or "").strip()
         self.cron_allowed_channels = self._normalize_channel_list(self.cron_allowed_channels)
+        self.trusted_local_channels = self._normalize_channel_list(self.trusted_local_channels)
+        self.filesystem_allowed_subpaths = self._normalize_path_list(self.filesystem_allowed_subpaths)
+        self.exec_allowed_working_dirs = self._normalize_path_list(self.exec_allowed_working_dirs)
+        self.exec_allowed_command_prefixes = self._normalize_prefix_list(
+            self.exec_allowed_command_prefixes
+        )
+        self.sessions_allowed_working_dirs = self._normalize_path_list(
+            self.sessions_allowed_working_dirs
+        )
+        self.sessions_allowed_command_prefixes = self._normalize_prefix_list(
+            self.sessions_allowed_command_prefixes
+        )
+        self.sessions_allowed_session_ops = self._normalize_name_list(
+            self.sessions_allowed_session_ops
+        )
+        if self.sessions_max_ttl_sec <= 0:
+            self.sessions_max_ttl_sec = 1
+        self.fetch_allowed_domains = self._normalize_domain_list(self.fetch_allowed_domains)
+        self.search_allowed_domains = self._normalize_domain_list(self.search_allowed_domains)
+        self.browser_allowed_domains = self._normalize_domain_list(self.browser_allowed_domains)
+        self.message_allowed_channels = self._normalize_channel_list(self.message_allowed_channels)
+        self.knowledge_allowed_tenants = self._normalize_name_list(self.knowledge_allowed_tenants)
+        self.knowledge_allowed_notebooks = self._normalize_name_list(
+            self.knowledge_allowed_notebooks
+        )
+        self.connector_allowed_names = self._normalize_name_list(self.connector_allowed_names)
+        self.connector_allowed_actions = self._normalize_name_list(self.connector_allowed_actions)
+        self.connector_allowed_target_resources = self._normalize_name_list(
+            self.connector_allowed_target_resources
+        )
+        self.connector_allowed_tenants = self._normalize_name_list(self.connector_allowed_tenants)
+        self.connector_allowed_workspaces = self._normalize_name_list(
+            self.connector_allowed_workspaces
+        )
         normalized_actions: dict[str, list[str]] = {}
         for key, actions in self.cron_allowed_actions_by_channel.items():
             k = key.strip().lower().lstrip("_")
@@ -677,6 +752,62 @@ class ToolPolicyConfig(BaseModel):
         return out
 
     @staticmethod
+    def _normalize_domain_list(values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for v in values:
+            token = str(v or "").strip().lower()
+            if token.startswith("http://"):
+                token = token[len("http://") :]
+            if token.startswith("https://"):
+                token = token[len("https://") :]
+            token = token.strip("/ ")
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            out.append(token)
+        return out
+
+    @staticmethod
+    def _normalize_path_list(values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for v in values:
+            token = str(v or "").strip()
+            if not token:
+                continue
+            normalized = token.replace("/", "\\").rstrip("\\").lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(token)
+        return out
+
+    @staticmethod
+    def _normalize_prefix_list(values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for v in values:
+            token = " ".join(str(v or "").strip().lower().split())
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            out.append(token)
+        return out
+
+    @staticmethod
+    def _normalize_name_list(values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for v in values:
+            token = str(v or "").strip().lower()
+            if not token or token in seen:
+                continue
+            seen.add(token)
+            out.append(token)
+        return out
+
+    @staticmethod
     def _merge_policy_list(a: list[str] | None, b: list[str] | None) -> list[str] | None:
         if a is None and b is None:
             return None
@@ -698,6 +829,7 @@ class NetworkToolsConfig(BaseModel):
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
     fetch: WebFetchConfig = Field(default_factory=WebFetchConfig)
+    connector: ConnectorToolConfig = Field(default_factory=ConnectorToolConfig)
     browser: BrowserToolConfig = Field(default_factory=BrowserToolConfig)
 
 
@@ -759,8 +891,31 @@ class ToolsConfig(BaseModel):
         # Prevent disabling subagent hard guardrail.
         if self.policy.allow_subagent_sensitive_tools:
             raise ValueError("production_hardening forbids allowSubagentSensitiveTools=true")
+        if self.policy.legacy_compat:
+            raise ValueError("production_hardening forbids legacy_compat=true")
+        if self.network.exec.sidecar_approval_mode != "hmac":
+            raise ValueError("production_hardening requires tools.network.exec.sidecar_approval_mode=hmac")
+        if self.network.search.proxy_approval_mode != "hmac":
+            raise ValueError(
+                "production_hardening requires tools.network.search.proxy_approval_mode=hmac"
+            )
+        if self.network.fetch.proxy_approval_mode != "hmac":
+            raise ValueError(
+                "production_hardening requires tools.network.fetch.proxy_approval_mode=hmac"
+            )
+        if self.network.browser.sidecar_approval_mode != "hmac":
+            raise ValueError(
+                "production_hardening requires tools.network.browser.sidecar_approval_mode=hmac"
+            )
+        if self.network.connector.sidecar_approval_mode != "hmac":
+            raise ValueError(
+                "production_hardening requires tools.network.connector.sidecar_approval_mode=hmac"
+            )
 
         # Disable all local fallback paths in strict mode.
+        self.network.exec.mode = "sidecar"
+        self.network.search.mode = "proxy"
+        self.network.fetch.mode = "proxy"
         self.network.exec.sidecar_fallback_to_local = False
         self.network.search.proxy_fallback_to_local = False
         self.network.fetch.proxy_fallback_to_local = False

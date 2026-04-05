@@ -8,6 +8,14 @@
 
 ## Index
 
+### 2026-04
+
+- `Dashboard Frontend — Security Audit Panel`
+- `Dashboard / Audit API — Security Query Surface`
+- `Zero-Trust Agent Gateway — Alpha Baseline`
+- `Zero-Trust Agent Gateway — Connector Write Isolation`
+- `Zero-Trust Agent Gateway — Fail-Closed Convergence`
+
 ### 2026-03
 
 - `GitHub Actions — CI Token-Reduction Redesign`
@@ -94,6 +102,241 @@
 - `Dashboard/API — Skill Preflight Detail Surface`
 - `Dashboard/API — Skill Export Surface`
 - `Dashboard — Operations Summary Surface`
+
+## 2026-04-05
+
+### Dashboard Frontend — Security Audit Panel
+
+- What changed:
+  - upgraded the dashboard `Security` card from a static status summary into a compact security audit panel with snapshot-driven coverage summaries, recent security events, recent approval activity, and a live results table
+  - added frontend state and sticky-filter auto-refresh for security audit queries so the card reuses the current `GET /api/v1/security/audit` filters across dashboard ticks without clearing user inputs
+  - added card-local actions for `Load`, `Export CSV`, and `Export JSON`, all reusing the existing management API key flow instead of introducing a new auth path
+- Key files touched:
+  - `zen_claw/dashboard/server.py`
+  - `tests/test_dashboard_server.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
+  - result: `1511 passed, 41 skipped`
+- Follow-up impact:
+  - operators can now use the dashboard itself to inspect capability/policy/approval traces without leaving the UI or manually calling the security audit API
+
+### Dashboard / Audit API — Security Query Surface
+
+- What changed:
+  - added a normalized same-day security audit query layer on top of `audit_logs/*.jsonl`, covering tool, approval, capability, and outbound security events with stable fields for `capability`, `resource_scope`, `policy_snapshot_hash`, `request_hash`, `decision_id`, `gateway_instance`, and `trust_level`
+  - extended dashboard security snapshot summaries with recent security audit events, recent approval-chain events, and query coverage counters while keeping existing connector/channel security summaries compatible
+  - added `GET /api/v1/security/audit` with filtering, pagination, and CSV export for the normalized security audit rows
+  - extended `/api/v1/ops/summary` with `surface=security` metrics and security-specific attention sections without mixing security audit rows into control-plane `recent_activity`
+- Key files touched:
+  - `zen_claw/dashboard/server.py`
+  - `tests/test_dashboard_snapshot.py`
+  - `tests/test_api_gateway.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
+  - result: `1511 passed, 41 skipped`
+- Follow-up impact:
+  - dashboard/API consumers can now query the same-day security audit stream directly instead of inferring capability/policy state from fragmented snapshot sections
+  - older audit rows remain readable on a best-effort basis; missing fields surface through the new coverage counters and `security_missing_context` attention section
+
+### Zero-Trust Agent Gateway — Alpha Baseline
+
+- What changed:
+  - switched default runtime posture to hardened mode:
+    - `production_hardening=true`
+    - `skill_permissions_mode=enforce`
+    - high-risk tool backends default to `sidecar` / `proxy`
+    - local fallback paths are disabled under hardening
+  - added `dev_profile`, `trusted_local_only`, and `allowed_channels` to agent profiles and enforced channel-aware routing for local-only profiles
+  - made non-system ingress build a complete request identity context, including conservative mapping for `channel_role`, `role`, and default tenant, then fail closed when identity cannot be completed
+  - added resource-scoped policy enforcement in tool execution for filesystem paths, exec workdirs/prefixes, network domains, message target channels, and knowledge tenant/notebook access
+  - attached identity and policy snapshots to tool audit events, added chained hash + HMAC signatures to audit records, and added audit-log verification
+  - exposed minimal dashboard security visibility for hardened state, local fallback risk, trusted local channels, dev profiles, and audit-chain health
+  - preferred workspace-local agent-route storage over shared global data-dir storage to avoid readonly route-store failures in isolated runs
+  - updated regression coverage for router gating, profile resolution, resource-scope policy denial, dashboard security snapshot, hardened identity mapping, and hardened config defaults
+- Key files touched:
+
+### Zero-Trust Agent Gateway — Unified Security Context Convergence
+
+- What changed:
+  - introduced a unified `SecurityContext` builder and policy snapshot hashing so inbound channels, outbound adapters, agent loop requests, connector writes, browser/web tools, and exec sidecars all carry the same identity and boundary fields
+  - hardened high-risk sidecar/proxy calls to fail closed when `trace_id`, policy snapshot hash, or complete request identity is missing; removed implicit `webchat` local-trust inheritance from default trusted-local surfaces
+  - upgraded sidecar approval transport to gateway-style signed headers with timestamp, nonce, request hash, gateway instance, and policy snapshot hash while keeping legacy headers for compatibility
+  - converged agent approvals onto immutable audit-chain events for `approval.requested`, decision, expiration, execution start, and execution finish with request hash and policy snapshot linkage
+  - updated crawler/social/channel integrations and regression tests so direct tool callers synthesize a complete local `SecurityContext` instead of bypassing the gateway model
+- Key files touched:
+  - `zen_claw/security_context.py`
+  - `zen_claw/agent/loop.py`
+  - `zen_claw/agent/approval_gate.py`
+  - `zen_claw/agent/tools/shell.py`
+  - `zen_claw/agent/tools/web.py`
+  - `zen_claw/agent/tools/browser.py`
+  - `zen_claw/agent/tools/connector_sidecar.py`
+  - `zen_claw/agent/tools/social_platform.py`
+  - `zen_claw/channels/base.py`
+  - `zen_claw/channels/outbound_adapter.py`
+  - `zen_claw/config/schema.py`
+  - `go/sec-execd/main.go`
+  - `go/net-proxy/main.go`
+  - `browser/sidecar/server.js`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
+  - result: `1509 passed, 41 skipped`
+- Follow-up impact:
+  - sidecar-backed write/session/browser/web callers now need either a loop-provided request context or a synthesized `SecurityContext`; tests and future direct-call integrations should set this explicitly when not going through `AgentLoop`
+
+### Zero-Trust Agent Gateway — External Channel Guardrails
+
+- What changed:
+  - added a shared external outbound guardrail in `zen_claw/channels/base.py` so hardened external channels now reject direct `send(...)` calls unless they carry manager-injected authorization metadata or explicit `legacy_compat`
+  - made `ChannelManager` inject outbound authorization metadata for trusted-local dispatches, turning `legacy_compat` into a real behavioral switch instead of a status-only field
+  - applied the guardrail to external channel send paths and helper paths across `telegram`, `slack`, `discord`, `signal`, `matrix`, `wecom`, `wechat_mp`, `dingtalk`, `whatsapp`, and `feishu`
+  - added audit events for `message.outbound.direct_blocked`, `message.outbound.legacy_allowed`, and `message.outbound.helper_blocked`
+  - extended dashboard security snapshot with guardrail coverage, legacy direct-send exposure, and recent guardrail events
+  - updated channel regressions to distinguish authorized manager dispatch from blocked direct-send behavior and added focused legacy/helper-block coverage
+- Key files touched:
+  - `zen_claw/channels/base.py`
+  - `zen_claw/channels/manager.py`
+  - `zen_claw/channels/telegram.py`
+  - `zen_claw/channels/slack.py`
+  - `zen_claw/channels/discord.py`
+  - `zen_claw/channels/signal.py`
+  - `zen_claw/channels/matrix.py`
+  - `zen_claw/channels/wecom.py`
+  - `zen_claw/channels/wechat_mp.py`
+  - `zen_claw/channels/dingtalk.py`
+  - `zen_claw/channels/whatsapp.py`
+  - `zen_claw/channels/feishu.py`
+  - `zen_claw/dashboard/server.py`
+  - `tests/test_external_channel_guardrails.py`
+  - `tests/test_telegram_channel.py`
+  - `tests/test_slack_channel.py`
+  - `tests/test_signal_channel.py`
+  - `tests/test_matrix_channel.py`
+  - `tests/test_discord_channel.py`
+  - `tests/test_dingtalk_channel.py`
+  - `tests/test_dashboard_snapshot.py`
+- Verification evidence:
+  - `E:\\nano-claw-public\\.venv\\Scripts\\python.exe -m ruff check .`
+  - `All checks passed!`
+  - `E:\\nano-claw-public\\.venv\\Scripts\\python.exe -m pytest -q`
+  - `1507 passed, 41 skipped in 156.97s (0:02:36)`
+
+### Zero-Trust Agent Gateway — Unified Capability Policy
+
+- What changed:
+  - added a shared capability evaluator in `zen_claw/agent/tools/capability_policy.py` to normalize resource-scoped authorization across filesystem, exec, network, message, knowledge, and connector capabilities
+  - replaced `ToolRegistry`'s inline resource-policy branching with capability request extraction plus shared evaluator dispatch, while preserving current fail-closed codes and adding `capability` / `matched_scope` metadata to denial results and audit events
+
+### Zero-Trust Agent Gateway — Fail-Closed Convergence
+
+- What changed:
+  - removed hardened outbound compatibility bypasses so external channel sends/helpers now require authorized dispatch metadata and no longer fall back to `compat_unhardened` or `legacy_compat_direct`
+  - tightened `production_hardening` into true deny-by-default semantics for filesystem, exec, knowledge, and `sessions_*`, and added explicit session policy fields for working dirs, command prefixes, allowed ops, and TTL
+  - promoted `sessions_*` to first-class zero-trust execution by attaching full `security_context`, `policy_snapshot`, `policy_snapshot_hash`, `gateway_meta`, and owner-bound enforcement to sidecar requests and `sec-execd` session records
+  - changed proxy/sidecar allowlist semantics to fail closed when no domains are configured and required HMAC approval modes for production exec/search/fetch/browser/connector sidecars
+  - extended regression coverage for hardening config, capability policy denial order, session request envelopes, browser/web proxy behavior, RBAC interactions, and direct external-channel blocking
+- Key files touched:
+  - `zen_claw/config/schema.py`
+  - `zen_claw/agent/tools/capability_policy.py`
+  - `zen_claw/agent/tools/sessions.py`
+  - `zen_claw/channels/base.py`
+  - `go/sec-execd/main.go`
+  - `go/net-proxy/main.go`
+  - `browser/sidecar/server.js`
+  - `tests/test_sessions_sidecar.py`
+  - `tests/test_tool_policy_engine.py`
+  - `tests/test_external_channel_guardrails.py`
+  - `tests/test_production_hardening_config.py`
+  - `tests/test_channel_role_rbac.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .`
+  - `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
+  - `1519 passed, 41 skipped in 153.87s (0:02:33)`
+- Follow-up impact:
+  - production profiles now require explicit resource allowlists and HMAC-configured sidecars for high-risk capabilities; direct callers of session/browser/web sidecars must supply a complete security envelope or they will be rejected before execution
+  - switched `ChannelOutboundAdapter` connector allowlist checks to the same shared evaluator instead of maintaining a second connector-specific policy implementation
+  - added optional capability-policy enforcement for sidecar-backed webhook dispatch, without changing existing public config shape
+  - extended dashboard security snapshot with capability families, sensitive capability profile summaries, recent capability events, and a stable flag that old tool-name policy paths are no longer active
+  - updated capability regression coverage for shared evaluator behavior, registry denial metadata, and dashboard capability visibility
+- Key files touched:
+  - `zen_claw/agent/tools/capability_policy.py`
+  - `zen_claw/agent/tools/registry.py`
+  - `zen_claw/channels/outbound_adapter.py`
+  - `zen_claw/channels/manager.py`
+  - `zen_claw/webhooks/outbound.py`
+  - `zen_claw/dashboard/server.py`
+  - `tests/test_tool_policy_engine.py`
+  - `tests/test_dashboard_snapshot.py`
+- Verification evidence:
+  - `E:\\nano-claw-public\\.venv\\Scripts\\python.exe -m ruff check .`
+  - `All checks passed!`
+  - `E:\\nano-claw-public\\.venv\\Scripts\\python.exe -m pytest -q`
+  - `1509 passed, 41 skipped in 150.02s (0:02:30)`
+  - `zen_claw/config/schema.py`
+  - `zen_claw/agent/pool.py`
+  - `zen_claw/agent/router.py`
+  - `zen_claw/agent/loop.py`
+  - `zen_claw/agent/tools/registry.py`
+  - `zen_claw/observability/audit.py`
+  - `zen_claw/dashboard/server.py`
+  - `zen_claw/channels/manager.py`
+  - `tests/test_agent_router.py`
+  - `tests/test_agent_pool.py`
+  - `tests/test_tool_policy_engine.py`
+  - `tests/test_dashboard_snapshot.py`
+  - `tests/test_phase6_hardening.py`
+  - `tests/test_exec_config.py`
+  - `tests/test_web_proxy_config.py`
+  - `tests/test_subagent_guardrail.py`
+  - `tests/test_tool_policy_config.py`
+  - `tests/test_sidecar_supervisor_status.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .` passed: `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q` passed: `1490 passed, 41 skipped in 178.19s (0:02:58)`
+- Follow-up impact:
+  - the repo now has an enforceable Alpha-grade zero-trust baseline, but connector write isolation, richer resource policy composition, and broader control-plane UX are still follow-on phases rather than finished in this slice
+
+### Zero-Trust Agent Gateway — Connector Write Isolation
+
+- What changed:
+  - added a connector-sidecar client and routed `social_platform_post` / `social_platform_like` through the gateway-sidecar path instead of letting connector write behavior live as an ad-hoc proxy call
+  - added connector write policy fields to the existing `tools.policy` surface:
+    - `connector_allowed_names`
+    - `connector_allowed_actions`
+    - `connector_allowed_target_resources`
+    - `connector_allowed_tenants`
+    - `connector_allowed_workspaces`
+  - added `tools.network.connector` config so connector write traffic has an explicit sidecar/proxy config surface with approval mode/token support
+  - enforced fail-closed connector authorization in `ToolRegistry`:
+    - missing connector metadata denied
+    - no connector policy under hardening denied
+    - cross-tenant / cross-workspace target denied
+    - connector name/action/resource/tenant/workspace scopes checked against allowlists
+  - propagated connector config through `AgentLoop`, `AgentPool`, CLI gateway entrypoints, and the dashboard API fallback agent path
+  - added audit events for connector-sensitive approval request / approval consume / deny / execute flows and exposed minimal connector isolation summary in dashboard security snapshot
+  - updated the social loop to send explicit connector capability/resource metadata on write actions
+- Key files touched:
+  - `zen_claw/config/schema.py`
+  - `zen_claw/agent/tools/connector_sidecar.py`
+  - `zen_claw/agent/tools/social_platform.py`
+  - `zen_claw/agent/tools/registry.py`
+  - `zen_claw/agent/loop.py`
+  - `zen_claw/agent/pool.py`
+  - `zen_claw/agent/social_loop.py`
+  - `zen_claw/cli/commands.py`
+  - `zen_claw/dashboard/server.py`
+  - `tests/test_social_agent_loop.py`
+  - `tests/test_tool_policy_engine.py`
+  - `tests/test_dashboard_snapshot.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .` passed: `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q` passed: `1494 passed, 41 skipped in 262.28s (0:04:22)`
+- Follow-up impact:
+  - connector write actions now honor the same zero-trust posture as the rest of the hardened runtime, but richer connector families and a first-class capability DSL are still future work
 
 ## 2026-03-23
 
@@ -2035,3 +2278,14 @@
   - `All checks passed!`
   - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
   - `1458 passed, 41 skipped in 116.58s (0:01:56)`
+- Zero-Trust Agent Gateway — Phase 3 write-isolation coverage
+  - Changed: expanded explicit write isolation from social connector writes to `message.send` and outbound webhook dispatch paths; external message sends now use connector sidecar, local bus-only channels stay local, webhook dispatcher supports sidecar contract and records sidecar metadata.
+  - Key files: `zen_claw/agent/tools/message.py`, `zen_claw/agent/tools/connector_sidecar.py`, `zen_claw/node/dispatcher.py`, `zen_claw/cli/commands.py`, `zen_claw/webhooks/outbound.py`, `zen_claw/dashboard/server.py`, `tests/test_tool_native_results.py`, `tests/test_node_dispatcher.py`, `tests/test_webhook_outbound.py`, `tests/test_dashboard_snapshot.py`
+  - Verification: `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests\test_tool_native_results.py tests\test_node_dispatcher.py tests\test_webhook_outbound.py tests\test_dashboard_snapshot.py` → `60 passed in 15.12s`
+  - Impact: hardened default now fail-closes explicit external `message.send` when no sidecar is configured; dashboard security snapshot now exposes message/webhook write profiles and isolated write-path coverage.
+
+- Zero-Trust Agent Gateway — Phase 4 channel outbound isolation
+  - Changed: moved `ChannelManager` outbound dispatch onto a new outbound isolation adapter so trusted-local channels remain local while external channel replies and drop notices go through the connector sidecar contract; added outbound audit events and dashboard visibility for `local_only` / `isolated_external` / `blocked_no_sidecar`.
+  - Key files: `zen_claw/channels/outbound_adapter.py`, `zen_claw/channels/manager.py`, `zen_claw/dashboard/server.py`, `tests/test_channel_rate_limit_integration.py`, `tests/test_channel_manager_media_root.py`, `tests/test_dashboard_snapshot.py`
+  - Verification: `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests\test_channel_rate_limit.py tests\test_channel_rate_limit_integration.py tests\test_channel_manager_media_root.py tests\test_dashboard_snapshot.py tests\test_tool_native_results.py tests\test_webhook_outbound.py tests\test_node_dispatcher.py` → `72 passed in 14.25s`
+  - Impact: the main channel outbound path no longer directly calls external channel SDK transports in hardened mode; external sends are fail-closed behind connector policy and now show up in security summaries.

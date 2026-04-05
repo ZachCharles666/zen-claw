@@ -3,7 +3,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { randomUUID } = require("crypto");
+const { createHash, createHmac, randomUUID } = require("crypto");
 const { chromium } = require("playwright");
 
 function parseBind(bind) {
@@ -27,7 +27,7 @@ function isAllowedHost(host, allow, deny) {
   const h = String(host || "").toLowerCase();
   if (!h) return false;
   if (deny.some((d) => h === d || h.endsWith("." + d))) return false;
-  if (allow.length === 0) return true;
+  if (allow.length === 0) return false;
   return allow.some((a) => h === a || h.endsWith("." + a));
 }
 
@@ -49,8 +49,37 @@ function safeJsonParse(text) {
   }
 }
 
+function isApproved(req, method, routePath, rawBody) {
+  if (approvalSecret) {
+    const traceId = String(req.headers["x-trace-id"] || "").trim();
+    const ts = String(req.headers["x-gateway-timestamp"] || req.headers["x-approval-timestamp"] || "").trim();
+    const nonce = String(req.headers["x-gateway-nonce"] || "").trim();
+    const requestHash = String(req.headers["x-gateway-request-hash"] || "").trim().toLowerCase();
+    const gatewayInstance = String(req.headers["x-gateway-instance"] || "").trim();
+    const policySnapshotHash = String(req.headers["x-policy-snapshot-hash"] || "").trim();
+    const sig = String(req.headers["x-gateway-signature"] || req.headers["x-approval-signature"] || "").trim().toLowerCase();
+    if (!traceId || !ts || !sig) return false;
+    const tsNum = Number(ts);
+    const now = Math.floor(Date.now() / 1000);
+    if (!Number.isFinite(tsNum) || tsNum < now - 120 || tsNum > now + 120) return false;
+    const bodyHash = createHash("sha256").update(String(rawBody || "")).digest("hex");
+    if (requestHash && requestHash !== bodyHash) return false;
+    const canonical = nonce || gatewayInstance || policySnapshotHash
+      ? [traceId, ts, nonce, String(method || "").toUpperCase().trim(), String(routePath || "").trim(), bodyHash, gatewayInstance, policySnapshotHash].join("\n")
+      : [traceId, ts, String(method || "").toUpperCase().trim(), String(routePath || "").trim(), bodyHash].join("\n");
+    const expected = createHmac("sha256", approvalSecret).update(canonical).digest("hex");
+    return expected === sig;
+  }
+  if (approvalToken) {
+    const reqToken = String(req.headers["x-approval-token"] || "");
+    return reqToken === approvalToken;
+  }
+  return true;
+}
+
 const bind = parseBind(process.env.BROWSER_SIDECAR_BIND);
 const approvalToken = String(process.env.BROWSER_SIDECAR_TOKEN || "");
+const approvalSecret = String(process.env.BROWSER_SIDECAR_SECRET || "");
 const defaultAllow = parseDomainList(process.env.BROWSER_SIDECAR_ALLOW_DOMAINS);
 const defaultDeny = parseDomainList(process.env.BROWSER_SIDECAR_DENY_DOMAINS);
 const defaultMaxSteps = Math.max(1, Number(process.env.BROWSER_SIDECAR_MAX_STEPS || "20"));
@@ -105,11 +134,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/healthz") {
     return sendJson(res, 200, { ok: true });
   }
-  // Verify approval token on all non-health endpoints (HIGH-001).
-  // If BROWSER_SIDECAR_TOKEN is not set the check is skipped for backward compatibility.
-  if (approvalToken) {
-    const reqToken = String(req.headers["x-approval-token"] || "");
-    if (reqToken !== approvalToken) {
+  if (!approvalSecret && approvalToken) {
+    if (!isApproved(req, req.method, req.url, "")) {
       return sendJson(res, 403, { ok: false, error: "unauthorized", error_code: "unauthorized" });
     }
   }
@@ -124,6 +150,9 @@ const server = http.createServer(async (req, res) => {
   });
 
   req.on("end", async () => {
+    if (!isApproved(req, req.method, req.url, body)) {
+      return sendJson(res, 403, { ok: false, error: "unauthorized", error_code: "unauthorized" });
+    }
     const payload = safeJsonParse(body);
     if (!payload || typeof payload !== "object") {
       return sendJson(res, 400, { ok: false, error: "invalid json", error_code: "invalid_json" });

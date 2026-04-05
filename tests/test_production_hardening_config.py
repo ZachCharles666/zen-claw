@@ -44,3 +44,69 @@ def test_production_hardening_disables_all_fallbacks() -> None:
     assert cfg.tools.network.exec.sidecar_fallback_to_local is False
     assert cfg.tools.network.search.proxy_fallback_to_local is False
     assert cfg.tools.network.fetch.proxy_fallback_to_local is False
+
+
+@pytest.mark.parametrize(
+    ("path", "raw"),
+    [
+        (
+            "exec",
+            {
+                "tools": {
+                    "policy": {"productionHardening": True},
+                    "network": {"exec": {"mode": "sidecar", "sidecarApprovalMode": "token"}},
+                }
+            },
+        ),
+        (
+            "search",
+            {
+                "tools": {
+                    "policy": {"productionHardening": True},
+                    "network": {"search": {"mode": "proxy", "proxyApprovalMode": "token"}},
+                }
+            },
+        ),
+        (
+            "fetch",
+            {
+                "tools": {
+                    "policy": {"productionHardening": True},
+                    "network": {"fetch": {"mode": "proxy", "proxyApprovalMode": "token"}},
+                }
+            },
+        ),
+        (
+            "browser",
+            {
+                "tools": {
+                    "policy": {"productionHardening": True},
+                    "network": {"browser": {"mode": "sidecar", "sidecarApprovalMode": "token"}},
+                }
+            },
+        ),
+        (
+            "connector",
+            {
+                "tools": {
+                    "policy": {"productionHardening": True},
+                    "network": {"connector": {"mode": "sidecar", "sidecarApprovalMode": "token"}},
+                }
+            },
+        ),
+    ],
+)
+def test_production_hardening_requires_hmac_approval_modes(path: str, raw: dict) -> None:
+    with pytest.raises(ValueError, match=path):
+        Config.model_validate(convert_keys(raw))
+
+
+def test_production_hardening_rejects_legacy_compat_override() -> None:
+    raw = {
+        "tools": {
+            "policy": {"productionHardening": True, "legacyCompat": True},
+            "network": {},
+        }
+    }
+    with pytest.raises(ValueError, match="legacy_compat"):
+        Config.model_validate(convert_keys(raw))

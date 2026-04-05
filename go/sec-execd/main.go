@@ -31,6 +31,25 @@ type execRequest struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
+type securityContextPayload struct {
+	TraceID       string `json:"trace_id,omitempty"`
+	Channel       string `json:"channel,omitempty"`
+	SenderID      string `json:"sender_id,omitempty"`
+	ChatID        string `json:"chat_id,omitempty"`
+	TenantID      string `json:"tenant_id,omitempty"`
+	WorkspaceID   string `json:"workspace_id,omitempty"`
+	AgentProfile  string `json:"agent_profile,omitempty"`
+	Role          string `json:"role,omitempty"`
+	TrustLevel    string `json:"trust_level,omitempty"`
+	OriginSurface string `json:"origin_surface,omitempty"`
+}
+
+type gatewayMetaPayload struct {
+	GatewayInstance    string `json:"gateway_instance,omitempty"`
+	PolicySnapshotHash string `json:"policy_snapshot_hash,omitempty"`
+	RequestHash        string `json:"request_hash,omitempty"`
+}
+
 type execResponse struct {
 	OK           bool   `json:"ok"`
 	Stdout       string `json:"stdout,omitempty"`
@@ -43,10 +62,13 @@ type execResponse struct {
 }
 
 type sessionStartRequest struct {
-	Command        string `json:"command"`
-	WorkingDir     string `json:"working_dir"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
-	PTY            bool   `json:"pty,omitempty"`
+	Command         string                 `json:"command"`
+	WorkingDir      string                 `json:"working_dir"`
+	TimeoutSeconds  int                    `json:"timeout_seconds"`
+	PTY             bool                   `json:"pty,omitempty"`
+	SecurityContext securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
 }
 
 type sessionStartResponse struct {
@@ -74,11 +96,21 @@ type sessionStatusResponse struct {
 	ErrorMessage string `json:"error_message,omitempty"`
 	StartedAtMs  int64  `json:"started_at_ms"`
 	FinishedAtMs int64  `json:"finished_at_ms,omitempty"`
+	TenantID     string `json:"tenant_id,omitempty"`
+	WorkspaceID  string `json:"workspace_id,omitempty"`
+	SessionOwner string `json:"session_owner,omitempty"`
+	ExpiresAtMs  int64  `json:"expires_at_ms,omitempty"`
 }
 
 type sessionListResponse struct {
 	OK       bool                    `json:"ok"`
 	Sessions []sessionStatusResponse `json:"sessions"`
+}
+
+type sessionListRequest struct {
+	SecurityContext securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
 }
 
 type sessionKillResponse struct {
@@ -102,7 +134,10 @@ type sessionReadResponse struct {
 }
 
 type sessionWriteRequest struct {
-	Input string `json:"input"`
+	Input           string                 `json:"input"`
+	SecurityContext securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
 }
 
 type sessionWriteResponse struct {
@@ -115,7 +150,10 @@ type sessionWriteResponse struct {
 }
 
 type sessionSignalRequest struct {
-	Signal string `json:"signal"`
+	Signal          string                 `json:"signal"`
+	SecurityContext securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
 }
 
 type sessionSignalResponse struct {
@@ -129,8 +167,19 @@ type sessionSignalResponse struct {
 }
 
 type sessionResizeRequest struct {
-	Rows int `json:"rows"`
-	Cols int `json:"cols"`
+	Rows            int                    `json:"rows"`
+	Cols            int                    `json:"cols"`
+	SecurityContext securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
+}
+
+type sessionReadRequest struct {
+	Cursor          int                    `json:"cursor,omitempty"`
+	MaxBytes        int                    `json:"max_bytes,omitempty"`
+	SecurityContext securityContextPayload `json:"security_context,omitempty"`
+	PolicySnapshot  map[string]any         `json:"policy_snapshot,omitempty"`
+	GatewayMeta     gatewayMetaPayload     `json:"gateway_meta,omitempty"`
 }
 
 type sessionResizeResponse struct {
@@ -158,14 +207,27 @@ type serverConfig struct {
 }
 
 type sessionRecord struct {
-	ID           string
-	Command      string
-	WorkingDir   string
-	StartedAtMs  int64
-	FinishedAtMs int64
-	PTY          bool
-	PTYRows      int
-	PTYCols      int
+	ID                 string
+	Command            string
+	WorkingDir         string
+	StartedAtMs        int64
+	FinishedAtMs       int64
+	ExpiresAtMs        int64
+	PTY                bool
+	PTYRows            int
+	PTYCols            int
+	OwnerTraceID       string
+	Channel            string
+	SenderID           string
+	ChatID             string
+	TenantID           string
+	WorkspaceID        string
+	AgentProfile       string
+	Role               string
+	TrustLevel         string
+	OriginSurface      string
+	PolicySnapshotHash string
+	RequestHash        string
 
 	mu           sync.RWMutex
 	Status       string
@@ -189,13 +251,21 @@ type sessionManager struct {
 }
 
 type auditPayload struct {
-	Event       string `json:"event"`
-	TraceID     string `json:"trace_id,omitempty"`
-	PolicyCode  string `json:"policy_code,omitempty"`
-	PolicyScope string `json:"policy_scope,omitempty"`
-	ErrorKind   string `json:"error_kind,omitempty"`
-	Retryable   *bool  `json:"retryable,omitempty"`
-	Message     string `json:"message,omitempty"`
+	Event              string         `json:"event"`
+	TraceID            string         `json:"trace_id,omitempty"`
+	PolicyCode         string         `json:"policy_code,omitempty"`
+	PolicyScope        string         `json:"policy_scope,omitempty"`
+	ErrorKind          string         `json:"error_kind,omitempty"`
+	Retryable          *bool          `json:"retryable,omitempty"`
+	Message            string         `json:"message,omitempty"`
+	Capability         string         `json:"capability,omitempty"`
+	ResourceScope      map[string]any `json:"resource_scope,omitempty"`
+	PolicySnapshotHash string         `json:"policy_snapshot_hash,omitempty"`
+	RequestHash        string         `json:"request_hash,omitempty"`
+	SessionID          string         `json:"session_id,omitempty"`
+	SessionOwner       string         `json:"session_owner,omitempty"`
+	TenantID           string         `json:"tenant_id,omitempty"`
+	WorkspaceID        string         `json:"workspace_id,omitempty"`
 }
 
 func main() {
@@ -285,6 +355,69 @@ func loadConfig() (*serverConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+func validateSecurityContext(sec securityContextPayload) []string {
+	missing := make([]string, 0, 9)
+	for key, value := range map[string]string{
+		"channel":        strings.TrimSpace(sec.Channel),
+		"sender_id":      strings.TrimSpace(sec.SenderID),
+		"chat_id":        strings.TrimSpace(sec.ChatID),
+		"tenant_id":      strings.TrimSpace(sec.TenantID),
+		"workspace_id":   strings.TrimSpace(sec.WorkspaceID),
+		"agent_profile":  strings.TrimSpace(sec.AgentProfile),
+		"role":           strings.TrimSpace(sec.Role),
+		"trust_level":    strings.TrimSpace(sec.TrustLevel),
+		"origin_surface": strings.TrimSpace(sec.OriginSurface),
+	} {
+		if value == "" {
+			missing = append(missing, key)
+		}
+	}
+	return missing
+}
+
+func sessionOwnerLabel(sec securityContextPayload) string {
+	return strings.TrimSpace(sec.Channel) + "/" + strings.TrimSpace(sec.SenderID) + "/" + strings.TrimSpace(sec.ChatID)
+}
+
+func validateSessionEnvelope(
+	traceID string,
+	sec securityContextPayload,
+	gateway gatewayMetaPayload,
+) (string, string) {
+	if strings.TrimSpace(traceID) == "" {
+		return "trace_required", "trace_id is required"
+	}
+	if missing := validateSecurityContext(sec); len(missing) > 0 {
+		return "security_context_missing", "security_context missing: " + strings.Join(missing, ", ")
+	}
+	if strings.TrimSpace(gateway.PolicySnapshotHash) == "" {
+		return "policy_snapshot_missing", "policy snapshot hash is required"
+	}
+	return "", ""
+}
+
+func enforceSessionOwner(rec *sessionRecord, sec securityContextPayload) (string, string) {
+	if strings.TrimSpace(rec.TenantID) != "" && !strings.EqualFold(strings.TrimSpace(rec.TenantID), strings.TrimSpace(sec.TenantID)) {
+		return "session_owner_tenant_mismatch", "session belongs to a different tenant"
+	}
+	if strings.TrimSpace(rec.WorkspaceID) != "" && strings.TrimSpace(rec.WorkspaceID) != strings.TrimSpace(sec.WorkspaceID) {
+		return "session_owner_workspace_mismatch", "session belongs to a different workspace"
+	}
+	if strings.TrimSpace(rec.Channel) != "" && !strings.EqualFold(strings.TrimSpace(rec.Channel), strings.TrimSpace(sec.Channel)) {
+		return "session_owner_channel_mismatch", "session belongs to a different channel"
+	}
+	if strings.TrimSpace(rec.SenderID) != "" && strings.TrimSpace(rec.SenderID) != strings.TrimSpace(sec.SenderID) {
+		return "session_owner_sender_mismatch", "session belongs to a different sender"
+	}
+	if strings.TrimSpace(rec.ChatID) != "" && strings.TrimSpace(rec.ChatID) != strings.TrimSpace(sec.ChatID) {
+		return "session_owner_chat_mismatch", "session belongs to a different chat"
+	}
+	if rec.ExpiresAtMs > 0 && time.Now().UnixMilli() > rec.ExpiresAtMs {
+		return "session_expired", "session has expired"
+	}
+	return "", ""
 }
 
 func handleExec(w http.ResponseWriter, r *http.Request, cfg *serverConfig) {
@@ -501,6 +634,27 @@ func handleSessionStart(w http.ResponseWriter, r *http.Request, cfg *serverConfi
 		})
 		return
 	}
+	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+		logAudit(auditPayload{
+			Event:              "exec.session.denied",
+			TraceID:            traceID,
+			PolicyCode:         code,
+			PolicyScope:        "session_security",
+			ErrorKind:          "permission",
+			Message:            msg,
+			Capability:         "sessions.spawn",
+			PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+			RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+			TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+			WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
+		})
+		writeJSONAny(w, http.StatusForbidden, sessionStartResponse{
+			OK:           false,
+			ErrorCode:    code,
+			ErrorMessage: msg,
+		})
+		return
+	}
 	if strings.TrimSpace(req.Command) == "" {
 		writeJSONAny(w, http.StatusBadRequest, sessionStartResponse{
 			OK:           false,
@@ -546,11 +700,19 @@ func handleSessionStart(w http.ResponseWriter, r *http.Request, cfg *serverConfi
 		}
 	}
 
-	rec := sessions.start(req.Command, absWorkdir, timeoutSec, cfg.MaxOutputBytes, req.PTY)
+	rec := sessions.start(req.Command, absWorkdir, timeoutSec, cfg.MaxOutputBytes, req.PTY, req.SecurityContext, req.GatewayMeta)
 	logAudit(auditPayload{
-		Event:   "exec.session.started",
-		TraceID: traceID,
-		Message: "session started",
+		Event:              "exec.session.started",
+		TraceID:            traceID,
+		Message:            "session started",
+		Capability:         "sessions.spawn",
+		ResourceScope:      map[string]any{"working_dir": absWorkdir, "command": req.Command},
+		PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+		RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+		SessionID:          rec.ID,
+		SessionOwner:       sessionOwnerLabel(req.SecurityContext),
+		TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+		WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
 	})
 	writeJSONAny(w, http.StatusOK, sessionStartResponse{
 		OK:        true,
@@ -576,7 +738,12 @@ func handleSessionList(w http.ResponseWriter, r *http.Request, cfg *serverConfig
 		return
 	}
 	traceID := strings.TrimSpace(r.Header.Get("X-Trace-Id"))
-	if !checkApproval(r, cfg, traceID, "GET", "/v1/sessions", []byte{}) {
+	bodyBytes, err := readBodyBytes(r, 1<<20)
+	if err != nil {
+		writeJSONAny(w, http.StatusBadRequest, sessionListResponse{OK: false, Sessions: []sessionStatusResponse{}})
+		return
+	}
+	if !checkApproval(r, cfg, traceID, "GET", "/v1/sessions", bodyBytes) {
 		logAudit(auditPayload{
 			Event:       "exec.session.list.denied",
 			TraceID:     traceID,
@@ -591,14 +758,44 @@ func handleSessionList(w http.ResponseWriter, r *http.Request, cfg *serverConfig
 		})
 		return
 	}
+	var req sessionListRequest
+	if len(bodyBytes) > 0 {
+		if err := json.Unmarshal(bodyBytes, &req); err != nil {
+			writeJSONAny(w, http.StatusBadRequest, sessionListResponse{OK: false, Sessions: []sessionStatusResponse{}})
+			return
+		}
+	}
+	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+		logAudit(auditPayload{
+			Event:              "exec.session.list.denied",
+			TraceID:            traceID,
+			PolicyCode:         code,
+			PolicyScope:        "session_security",
+			ErrorKind:          "permission",
+			Message:            msg,
+			Capability:         "sessions.list",
+			PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+			RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+			TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+			WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
+		})
+		writeJSONAny(w, http.StatusForbidden, sessionListResponse{OK: false, Sessions: []sessionStatusResponse{}})
+		return
+	}
 	logAudit(auditPayload{
-		Event:   "exec.session.list.allowed",
-		TraceID: traceID,
-		Message: "sessions listed",
+		Event:              "exec.session.list.allowed",
+		TraceID:            traceID,
+		Message:            "sessions listed",
+		Capability:         "sessions.list",
+		PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+		RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+		SessionOwner:       sessionOwnerLabel(req.SecurityContext),
+		TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+		WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
 	})
 	writeJSONAny(w, http.StatusOK, sessionListResponse{
 		OK:       true,
-		Sessions: sessions.list(),
+		Sessions: sessions.listForOwner(req.SecurityContext),
 	})
 }
 
@@ -624,7 +821,16 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 	sessionID := parts[0]
 	if len(parts) == 1 && r.Method == http.MethodGet {
 		traceID := strings.TrimSpace(r.Header.Get("X-Trace-Id"))
-		if !checkApproval(r, cfg, traceID, "GET", "/v1/sessions/"+sessionID, []byte{}) {
+		bodyBytes, err := readBodyBytes(r, 1<<20)
+		if err != nil {
+			writeJSONAny(w, http.StatusBadRequest, sessionStartResponse{
+				OK:           false,
+				ErrorCode:    "invalid_body",
+				ErrorMessage: err.Error(),
+			})
+			return
+		}
+		if !checkApproval(r, cfg, traceID, "GET", "/v1/sessions/"+sessionID, bodyBytes) {
 			logAudit(auditPayload{
 				Event:       "exec.session.status.denied",
 				TraceID:     traceID,
@@ -640,7 +846,26 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		status, ok := sessions.get(sessionID)
+		var req sessionListRequest
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, &req); err != nil {
+				writeJSONAny(w, http.StatusBadRequest, sessionStartResponse{
+					OK:           false,
+					ErrorCode:    "invalid_json",
+					ErrorMessage: err.Error(),
+				})
+				return
+			}
+		}
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+			writeJSONAny(w, http.StatusForbidden, sessionStartResponse{
+				OK:           false,
+				ErrorCode:    code,
+				ErrorMessage: msg,
+			})
+			return
+		}
+		status, ok := sessions.getForOwner(sessionID, req.SecurityContext)
 		if !ok {
 			logAudit(auditPayload{
 				Event:      "exec.session.status.not_found",
@@ -657,9 +882,16 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			return
 		}
 		logAudit(auditPayload{
-			Event:   "exec.session.status.allowed",
-			TraceID: traceID,
-			Message: "session status returned",
+			Event:              "exec.session.status.allowed",
+			TraceID:            traceID,
+			Message:            "session status returned",
+			Capability:         "sessions.status",
+			PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+			RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+			SessionID:          sessionID,
+			SessionOwner:       sessionOwnerLabel(req.SecurityContext),
+			TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+			WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
 		})
 		writeJSONAny(w, http.StatusOK, status)
 		return
@@ -685,7 +917,30 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		killed, found := sessions.kill(sessionID)
+		var req sessionListRequest
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, &req); err != nil {
+				writeJSONAny(w, http.StatusBadRequest, sessionKillResponse{
+					OK:           false,
+					SessionID:    sessionID,
+					Killed:       false,
+					ErrorCode:    "invalid_json",
+					ErrorMessage: err.Error(),
+				})
+				return
+			}
+		}
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+			writeJSONAny(w, http.StatusForbidden, sessionKillResponse{
+				OK:           false,
+				SessionID:    sessionID,
+				Killed:       false,
+				ErrorCode:    code,
+				ErrorMessage: msg,
+			})
+			return
+		}
+		killed, found := sessions.killForOwner(sessionID, req.SecurityContext)
 		if !found {
 			logAudit(auditPayload{
 				Event:      "exec.session.kill.not_found",
@@ -710,9 +965,16 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			msg = "session killed"
 		}
 		logAudit(auditPayload{
-			Event:   ev,
-			TraceID: traceID,
-			Message: msg,
+			Event:              ev,
+			TraceID:            traceID,
+			Message:            msg,
+			Capability:         "sessions.kill",
+			PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+			RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+			SessionID:          sessionID,
+			SessionOwner:       sessionOwnerLabel(req.SecurityContext),
+			TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+			WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
 		})
 		writeJSONAny(w, http.StatusOK, sessionKillResponse{
 			OK:        true,
@@ -760,6 +1022,15 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+			writeJSONAny(w, http.StatusForbidden, sessionWriteResponse{
+				OK:           false,
+				SessionID:    sessionID,
+				ErrorCode:    code,
+				ErrorMessage: msg,
+			})
+			return
+		}
 		if req.Input == "" {
 			writeJSONAny(w, http.StatusBadRequest, sessionWriteResponse{
 				OK:           false,
@@ -779,7 +1050,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			return
 		}
 
-		resp, found := sessions.write(sessionID, []byte(req.Input))
+		resp, found := sessions.writeForOwner(sessionID, []byte(req.Input), req.SecurityContext)
 		if !found {
 			logAudit(auditPayload{
 				Event:      "exec.session.write.not_found",
@@ -801,13 +1072,23 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			if resp.ErrorCode == "stdin_write_failed" {
 				code = http.StatusInternalServerError
 			}
+			if strings.HasPrefix(resp.ErrorCode, "session_owner_") || resp.ErrorCode == "session_expired" {
+				code = http.StatusForbidden
+			}
 			writeJSONAny(w, code, resp)
 			return
 		}
 		logAudit(auditPayload{
-			Event:   "exec.session.write.allowed",
-			TraceID: traceID,
-			Message: "session input written",
+			Event:              "exec.session.write.allowed",
+			TraceID:            traceID,
+			Message:            "session input written",
+			Capability:         "sessions.write",
+			PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+			RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+			SessionID:          sessionID,
+			SessionOwner:       sessionOwnerLabel(req.SecurityContext),
+			TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+			WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
 		})
 		writeJSONAny(w, http.StatusOK, resp)
 		return
@@ -851,6 +1132,15 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+			writeJSONAny(w, http.StatusForbidden, sessionSignalResponse{
+				OK:           false,
+				SessionID:    sessionID,
+				ErrorCode:    code,
+				ErrorMessage: msg,
+			})
+			return
+		}
 		sig := strings.TrimSpace(strings.ToLower(req.Signal))
 		if sig == "" {
 			sig = "interrupt"
@@ -871,7 +1161,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		resp, found := sessions.signal(sessionID, sig)
+		resp, found := sessions.signalForOwner(sessionID, sig, req.SecurityContext)
 		if !found {
 			logAudit(auditPayload{
 				Event:      "exec.session.signal.not_found",
@@ -893,6 +1183,9 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			if resp.ErrorCode == "signal_delivery_failed" {
 				code = http.StatusInternalServerError
 			}
+			if strings.HasPrefix(resp.ErrorCode, "session_owner_") || resp.ErrorCode == "session_expired" {
+				code = http.StatusForbidden
+			}
 			writeJSONAny(w, code, resp)
 			return
 		}
@@ -903,9 +1196,16 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			msg = "signal delivered"
 		}
 		logAudit(auditPayload{
-			Event:   ev,
-			TraceID: traceID,
-			Message: msg,
+			Event:              ev,
+			TraceID:            traceID,
+			Message:            msg,
+			Capability:         "sessions.signal",
+			PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+			RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+			SessionID:          sessionID,
+			SessionOwner:       sessionOwnerLabel(req.SecurityContext),
+			TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+			WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
 		})
 		writeJSONAny(w, http.StatusOK, resp)
 		return
@@ -949,6 +1249,15 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+			writeJSONAny(w, http.StatusForbidden, sessionResizeResponse{
+				OK:           false,
+				SessionID:    sessionID,
+				ErrorCode:    code,
+				ErrorMessage: msg,
+			})
+			return
+		}
 		if req.Rows <= 0 || req.Cols <= 0 || req.Rows > 1000 || req.Cols > 1000 {
 			logAudit(auditPayload{
 				Event:      "exec.session.resize.invalid",
@@ -965,7 +1274,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		resp, found := sessions.resize(sessionID, req.Rows, req.Cols)
+		resp, found := sessions.resizeForOwner(sessionID, req.Rows, req.Cols, req.SecurityContext)
 		if !found {
 			logAudit(auditPayload{
 				Event:      "exec.session.resize.not_found",
@@ -983,7 +1292,11 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			return
 		}
 		if !resp.OK {
-			writeJSONAny(w, http.StatusBadRequest, resp)
+			code := http.StatusBadRequest
+			if strings.HasPrefix(resp.ErrorCode, "session_owner_") || resp.ErrorCode == "session_expired" {
+				code = http.StatusForbidden
+			}
+			writeJSONAny(w, code, resp)
 			return
 		}
 		ev := "exec.session.resize.noop"
@@ -993,16 +1306,33 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			msg = "resize applied"
 		}
 		logAudit(auditPayload{
-			Event:   ev,
-			TraceID: traceID,
-			Message: msg,
+			Event:              ev,
+			TraceID:            traceID,
+			Message:            msg,
+			Capability:         "sessions.resize",
+			PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+			RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+			SessionID:          sessionID,
+			SessionOwner:       sessionOwnerLabel(req.SecurityContext),
+			TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+			WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
 		})
 		writeJSONAny(w, http.StatusOK, resp)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "read" && r.Method == http.MethodGet {
 		traceID := strings.TrimSpace(r.Header.Get("X-Trace-Id"))
-		if !checkApproval(r, cfg, traceID, "GET", "/v1/sessions/"+sessionID+"/read", []byte{}) {
+		bodyBytes, err := readBodyBytes(r, 1<<20)
+		if err != nil {
+			writeJSONAny(w, http.StatusBadRequest, sessionReadResponse{
+				OK:           false,
+				SessionID:    sessionID,
+				ErrorCode:    "invalid_body",
+				ErrorMessage: err.Error(),
+			})
+			return
+		}
+		if !checkApproval(r, cfg, traceID, "GET", "/v1/sessions/"+sessionID+"/read", bodyBytes) {
 			logAudit(auditPayload{
 				Event:       "exec.session.read.denied",
 				TraceID:     traceID,
@@ -1019,8 +1349,29 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
+		var req sessionReadRequest
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, &req); err != nil {
+				writeJSONAny(w, http.StatusBadRequest, sessionReadResponse{
+					OK:           false,
+					SessionID:    sessionID,
+					ErrorCode:    "invalid_json",
+					ErrorMessage: err.Error(),
+				})
+				return
+			}
+		}
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta); code != "" {
+			writeJSONAny(w, http.StatusForbidden, sessionReadResponse{
+				OK:           false,
+				SessionID:    sessionID,
+				ErrorCode:    code,
+				ErrorMessage: msg,
+			})
+			return
+		}
 
-		cursor, ok := parseNonNegativeIntBounded(r.URL.Query().Get("cursor"), 0, cfg.MaxOutputBytes)
+		cursor, ok := parseNonNegativeIntBounded(strconv.Itoa(req.Cursor), 0, cfg.MaxOutputBytes)
 		if !ok {
 			logAudit(auditPayload{
 				Event:      "exec.session.read.invalid_query",
@@ -1037,7 +1388,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		maxBytes, ok := parseNonNegativeIntBounded(r.URL.Query().Get("max_bytes"), 2048, cfg.MaxOutputBytes)
+		maxBytes, ok := parseNonNegativeIntBounded(strconv.Itoa(req.MaxBytes), 2048, cfg.MaxOutputBytes)
 		if !ok || maxBytes <= 0 {
 			logAudit(auditPayload{
 				Event:      "exec.session.read.invalid_query",
@@ -1055,7 +1406,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			return
 		}
 
-		resp, found := sessions.read(sessionID, cursor, maxBytes)
+		resp, found := sessions.readForOwner(sessionID, cursor, maxBytes, req.SecurityContext)
 		if !found {
 			logAudit(auditPayload{
 				Event:      "exec.session.read.not_found",
@@ -1072,11 +1423,26 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
+		if !resp.OK {
+			code := http.StatusBadRequest
+			if strings.HasPrefix(resp.ErrorCode, "session_owner_") || resp.ErrorCode == "session_expired" {
+				code = http.StatusForbidden
+			}
+			writeJSONAny(w, code, resp)
+			return
+		}
 
 		logAudit(auditPayload{
-			Event:   "exec.session.read.allowed",
-			TraceID: traceID,
-			Message: "session output chunk returned",
+			Event:              "exec.session.read.allowed",
+			TraceID:            traceID,
+			Message:            "session output chunk returned",
+			Capability:         "sessions.read",
+			PolicySnapshotHash: strings.TrimSpace(req.GatewayMeta.PolicySnapshotHash),
+			RequestHash:        strings.TrimSpace(req.GatewayMeta.RequestHash),
+			SessionID:          sessionID,
+			SessionOwner:       sessionOwnerLabel(req.SecurityContext),
+			TenantID:           strings.TrimSpace(req.SecurityContext.TenantID),
+			WorkspaceID:        strings.TrimSpace(req.SecurityContext.WorkspaceID),
 		})
 		writeJSONAny(w, http.StatusOK, resp)
 		return
@@ -1265,8 +1631,18 @@ func checkHMACApproval(r *http.Request, secret, traceID, method, path string, bo
 	if traceID == "" {
 		return false
 	}
-	tsStr := strings.TrimSpace(r.Header.Get("X-Approval-Timestamp"))
-	sigHex := strings.TrimSpace(r.Header.Get("X-Approval-Signature"))
+	tsStr := strings.TrimSpace(r.Header.Get("X-Gateway-Timestamp"))
+	if tsStr == "" {
+		tsStr = strings.TrimSpace(r.Header.Get("X-Approval-Timestamp"))
+	}
+	nonce := strings.TrimSpace(r.Header.Get("X-Gateway-Nonce"))
+	requestHash := strings.TrimSpace(r.Header.Get("X-Gateway-Request-Hash"))
+	gatewayInstance := strings.TrimSpace(r.Header.Get("X-Gateway-Instance"))
+	policySnapshotHash := strings.TrimSpace(r.Header.Get("X-Policy-Snapshot-Hash"))
+	sigHex := strings.TrimSpace(r.Header.Get("X-Gateway-Signature"))
+	if sigHex == "" {
+		sigHex = strings.TrimSpace(r.Header.Get("X-Approval-Signature"))
+	}
 	if tsStr == "" || sigHex == "" {
 		return false
 	}
@@ -1279,16 +1655,37 @@ func checkHMACApproval(r *http.Request, secret, traceID, method, path string, bo
 		return false
 	}
 	bodyHash := sha256.Sum256(bodyBytes)
-	canonical := strings.Join(
-		[]string{
-			traceID,
-			tsStr,
-			strings.ToUpper(strings.TrimSpace(method)),
-			strings.TrimSpace(path),
-			hex.EncodeToString(bodyHash[:]),
-		},
-		"\n",
-	)
+	computedHash := hex.EncodeToString(bodyHash[:])
+	if requestHash != "" && !strings.EqualFold(requestHash, computedHash) {
+		return false
+	}
+	var canonical string
+	if nonce != "" || gatewayInstance != "" || policySnapshotHash != "" {
+		canonical = strings.Join(
+			[]string{
+				traceID,
+				tsStr,
+				strings.TrimSpace(nonce),
+				strings.ToUpper(strings.TrimSpace(method)),
+				strings.TrimSpace(path),
+				computedHash,
+				strings.TrimSpace(gatewayInstance),
+				strings.TrimSpace(policySnapshotHash),
+			},
+			"\n",
+		)
+	} else {
+		canonical = strings.Join(
+			[]string{
+				traceID,
+				tsStr,
+				strings.ToUpper(strings.TrimSpace(method)),
+				strings.TrimSpace(path),
+				computedHash,
+			},
+			"\n",
+		)
+	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(canonical))
 	expected := hex.EncodeToString(mac.Sum(nil))
@@ -1310,16 +1707,35 @@ func newSessionManagerWithRetention(retentionSec int) *sessionManager {
 	}
 }
 
-func (m *sessionManager) start(command, workingDir string, timeoutSec, maxOutput int, pty bool) *sessionRecord {
+func (m *sessionManager) start(
+	command, workingDir string,
+	timeoutSec, maxOutput int,
+	pty bool,
+	sec securityContextPayload,
+	gateway gatewayMetaPayload,
+) *sessionRecord {
 	id := fmt.Sprintf("s-%d", atomic.AddUint64(&m.nextID, 1))
 	now := time.Now().UnixMilli()
 	rec := &sessionRecord{
-		ID:          id,
-		Command:     command,
-		WorkingDir:  workingDir,
-		StartedAtMs: now,
-		Status:      "running",
-		PTY:         pty,
+		ID:                 id,
+		Command:            command,
+		WorkingDir:         workingDir,
+		StartedAtMs:        now,
+		ExpiresAtMs:        now + int64(timeoutSec)*1000,
+		Status:             "running",
+		PTY:                pty,
+		OwnerTraceID:       strings.TrimSpace(sec.TraceID),
+		Channel:            strings.TrimSpace(sec.Channel),
+		SenderID:           strings.TrimSpace(sec.SenderID),
+		ChatID:             strings.TrimSpace(sec.ChatID),
+		TenantID:           strings.TrimSpace(sec.TenantID),
+		WorkspaceID:        strings.TrimSpace(sec.WorkspaceID),
+		AgentProfile:       strings.TrimSpace(sec.AgentProfile),
+		Role:               strings.TrimSpace(sec.Role),
+		TrustLevel:         strings.TrimSpace(sec.TrustLevel),
+		OriginSurface:      strings.TrimSpace(sec.OriginSurface),
+		PolicySnapshotHash: strings.TrimSpace(gateway.PolicySnapshotHash),
+		RequestHash:        strings.TrimSpace(gateway.RequestHash),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
@@ -1456,12 +1872,40 @@ func (m *sessionManager) get(id string) (sessionStatusResponse, bool) {
 	return rec.snapshot(), true
 }
 
+func (m *sessionManager) getForOwner(id string, sec securityContextPayload) (sessionStatusResponse, bool) {
+	m.mu.Lock()
+	m.gcExpiredLocked(time.Now().UnixMilli())
+	rec, ok := m.sessions[id]
+	m.mu.Unlock()
+	if !ok {
+		return sessionStatusResponse{}, false
+	}
+	if code, _ := enforceSessionOwner(rec, sec); code != "" {
+		return sessionStatusResponse{}, false
+	}
+	return rec.snapshot(), true
+}
+
 func (m *sessionManager) list() []sessionStatusResponse {
 	m.mu.Lock()
 	m.gcExpiredLocked(time.Now().UnixMilli())
 	defer m.mu.Unlock()
 	out := make([]sessionStatusResponse, 0, len(m.sessions))
 	for _, rec := range m.sessions {
+		out = append(out, rec.snapshot())
+	}
+	return out
+}
+
+func (m *sessionManager) listForOwner(sec securityContextPayload) []sessionStatusResponse {
+	m.mu.Lock()
+	m.gcExpiredLocked(time.Now().UnixMilli())
+	defer m.mu.Unlock()
+	out := make([]sessionStatusResponse, 0, len(m.sessions))
+	for _, rec := range m.sessions {
+		if code, _ := enforceSessionOwner(rec, sec); code != "" {
+			continue
+		}
 		out = append(out, rec.snapshot())
 	}
 	return out
@@ -1486,6 +1930,19 @@ func (m *sessionManager) kill(id string) (bool, bool) {
 	}
 	rec.cancel()
 	return true, true
+}
+
+func (m *sessionManager) killForOwner(id string, sec securityContextPayload) (bool, bool) {
+	m.mu.RLock()
+	rec, ok := m.sessions[id]
+	m.mu.RUnlock()
+	if !ok {
+		return false, false
+	}
+	if code, _ := enforceSessionOwner(rec, sec); code != "" {
+		return false, false
+	}
+	return m.kill(id)
 }
 
 func (m *sessionManager) write(id string, input []byte) (sessionWriteResponse, bool) {
@@ -1515,6 +1972,25 @@ func (m *sessionManager) write(id string, input []byte) (sessionWriteResponse, b
 	}, true
 }
 
+func (m *sessionManager) writeForOwner(id string, input []byte, sec securityContextPayload) (sessionWriteResponse, bool) {
+	m.mu.Lock()
+	m.gcExpiredLocked(time.Now().UnixMilli())
+	rec, ok := m.sessions[id]
+	m.mu.Unlock()
+	if !ok {
+		return sessionWriteResponse{}, false
+	}
+	if code, msg := enforceSessionOwner(rec, sec); code != "" {
+		return sessionWriteResponse{
+			OK:           false,
+			SessionID:    id,
+			ErrorCode:    code,
+			ErrorMessage: msg,
+		}, true
+	}
+	return m.write(id, input)
+}
+
 func (m *sessionManager) read(id string, cursor, maxBytes int) (sessionReadResponse, bool) {
 	m.mu.Lock()
 	m.gcExpiredLocked(time.Now().UnixMilli())
@@ -1533,6 +2009,25 @@ func (m *sessionManager) read(id string, cursor, maxBytes int) (sessionReadRespo
 		Chunk:      chunk,
 		Truncated:  truncated,
 	}, true
+}
+
+func (m *sessionManager) readForOwner(id string, cursor, maxBytes int, sec securityContextPayload) (sessionReadResponse, bool) {
+	m.mu.Lock()
+	m.gcExpiredLocked(time.Now().UnixMilli())
+	rec, ok := m.sessions[id]
+	m.mu.Unlock()
+	if !ok {
+		return sessionReadResponse{}, false
+	}
+	if code, msg := enforceSessionOwner(rec, sec); code != "" {
+		return sessionReadResponse{
+			OK:           false,
+			SessionID:    id,
+			ErrorCode:    code,
+			ErrorMessage: msg,
+		}, true
+	}
+	return m.read(id, cursor, maxBytes)
 }
 
 func (m *sessionManager) signal(id, sig string) (sessionSignalResponse, bool) {
@@ -1564,6 +2059,26 @@ func (m *sessionManager) signal(id, sig string) (sessionSignalResponse, bool) {
 	}, true
 }
 
+func (m *sessionManager) signalForOwner(id, sig string, sec securityContextPayload) (sessionSignalResponse, bool) {
+	m.mu.Lock()
+	m.gcExpiredLocked(time.Now().UnixMilli())
+	rec, ok := m.sessions[id]
+	m.mu.Unlock()
+	if !ok {
+		return sessionSignalResponse{}, false
+	}
+	if code, msg := enforceSessionOwner(rec, sec); code != "" {
+		return sessionSignalResponse{
+			OK:           false,
+			SessionID:    id,
+			Signal:       sig,
+			ErrorCode:    code,
+			ErrorMessage: msg,
+		}, true
+	}
+	return m.signal(id, sig)
+}
+
 func (m *sessionManager) resize(id string, rows, cols int) (sessionResizeResponse, bool) {
 	m.mu.Lock()
 	m.gcExpiredLocked(time.Now().UnixMilli())
@@ -1593,6 +2108,27 @@ func (m *sessionManager) resize(id string, rows, cols int) (sessionResizeRespons
 		Cols:      cols,
 		Applied:   applied,
 	}, true
+}
+
+func (m *sessionManager) resizeForOwner(id string, rows, cols int, sec securityContextPayload) (sessionResizeResponse, bool) {
+	m.mu.Lock()
+	m.gcExpiredLocked(time.Now().UnixMilli())
+	rec, ok := m.sessions[id]
+	m.mu.Unlock()
+	if !ok {
+		return sessionResizeResponse{}, false
+	}
+	if code, msg := enforceSessionOwner(rec, sec); code != "" {
+		return sessionResizeResponse{
+			OK:           false,
+			SessionID:    id,
+			Rows:         rows,
+			Cols:         cols,
+			ErrorCode:    code,
+			ErrorMessage: msg,
+		}, true
+	}
+	return m.resize(id, rows, cols)
 }
 
 func (m *sessionManager) gcExpiredLocked(nowMs int64) {
@@ -1633,6 +2169,14 @@ func (r *sessionRecord) snapshot() sessionStatusResponse {
 		ErrorMessage: r.ErrorMessage,
 		StartedAtMs:  r.StartedAtMs,
 		FinishedAtMs: r.FinishedAtMs,
+		TenantID:     r.TenantID,
+		WorkspaceID:  r.WorkspaceID,
+		SessionOwner: sessionOwnerLabel(securityContextPayload{
+			Channel:  r.Channel,
+			SenderID: r.SenderID,
+			ChatID:   r.ChatID,
+		}),
+		ExpiresAtMs: r.ExpiresAtMs,
 	}
 }
 

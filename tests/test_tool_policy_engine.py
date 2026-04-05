@@ -1,9 +1,16 @@
 from typing import Any
 
 from zen_claw.agent.tools.base import Tool
+from zen_claw.agent.tools.capability_policy import (
+    CapabilityPolicyEvaluator,
+    CapabilityRequest,
+    connector_capability_request,
+)
 from zen_claw.agent.tools.policy import ToolPolicyEngine
 from zen_claw.agent.tools.registry import ToolRegistry
 from zen_claw.agent.tools.result import ToolErrorKind
+from zen_claw.config.loader import convert_keys
+from zen_claw.config.schema import Config
 
 
 class _DangerTool(Tool):
@@ -111,3 +118,315 @@ async def test_registry_blocks_all_tools_when_kill_switch_enabled() -> None:
     assert result.error.code == "tool_kill_switch_enabled"
     assert result.meta.get("policy_scope") == "global_kill_switch"
     assert "incident" in result.error.message
+
+
+class _MessageTool(_DangerTool):
+    @property
+    def name(self) -> str:
+        return "message"
+
+
+class _FetchTool(_DangerTool):
+    @property
+    def name(self) -> str:
+        return "web_fetch"
+
+
+class _ReadFileTool(_DangerTool):
+    @property
+    def name(self) -> str:
+        return "read_file"
+
+
+class _ConnectorPostTool(_DangerTool):
+    @property
+    def name(self) -> str:
+        return "social_platform_post"
+
+
+class _KnowledgeTool(_DangerTool):
+    @property
+    def name(self) -> str:
+        return "knowledge_search"
+
+
+async def test_registry_denies_message_without_explicit_channel_allowlist() -> None:
+    cfg = Config()
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_MessageTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": ".",
+            "policy_snapshot": {"production_hardening": True},
+        }
+    )
+
+    denied = await reg.execute("message", {"content": "hello", "channel": "slack"})
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.kind == ToolErrorKind.PERMISSION
+    assert denied.error.code == "resource_scope_message_unconfigured"
+    assert denied.meta.get("policy_scope") == "resource"
+    assert denied.meta.get("capability") == "message.send"
+
+
+async def test_registry_denies_web_fetch_for_non_allowlisted_domain() -> None:
+    cfg = Config.model_validate(
+        convert_keys({"tools": {"policy": {"fetchAllowedDomains": ["example.com"]}}})
+    )
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_FetchTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": ".",
+            "policy_snapshot": {"production_hardening": True},
+        }
+    )
+
+    denied = await reg.execute("web_fetch", {"url": "https://evil.example.net/"})
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.code == "resource_scope_domain_denied"
+    assert denied.meta.get("resource_scope", {}).get("domain") == "evil.example.net"
+
+
+async def test_registry_denies_filesystem_access_outside_workspace() -> None:
+    cfg = Config()
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_ReadFileTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": "E:/nano-claw-public/tests",
+            "policy_snapshot": {"production_hardening": True},
+        }
+    )
+
+    denied = await reg.execute("read_file", {"path": "E:/nano-claw-public/pyproject.toml"})
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.code == "resource_scope_filesystem_workspace"
+    assert denied.meta.get("policy_scope") == "resource"
+
+
+async def test_registry_denies_filesystem_access_without_allowlisted_subpath_under_hardening() -> None:
+    cfg = Config()
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_ReadFileTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": "E:/nano-claw-public/tests",
+            "policy_snapshot": {"production_hardening": True},
+        }
+    )
+
+    denied = await reg.execute("read_file", {"path": "E:/nano-claw-public/tests/test_tool_policy_engine.py"})
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.code == "resource_scope_filesystem_unconfigured"
+
+
+async def test_registry_denies_connector_write_without_explicit_policy() -> None:
+    cfg = Config()
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_ConnectorPostTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": ".",
+            "policy_snapshot": {"production_hardening": True},
+        }
+    )
+
+    denied = await reg.execute(
+        "social_platform_post",
+        {
+            "connector_name": "moltbook",
+            "action": "connector.record.create",
+            "target_resource": "moltbook.posts",
+        },
+    )
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.code == "resource_scope_connector_unconfigured"
+    assert denied.meta.get("capability") == "connector.record.create"
+
+
+async def test_registry_denies_knowledge_without_explicit_allowlist_under_hardening() -> None:
+    cfg = Config()
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_KnowledgeTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": ".",
+            "policy_snapshot": {"production_hardening": True},
+        }
+    )
+
+    denied = await reg.execute("knowledge_search", {"notebook_id": "nb-1"})
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.code == "resource_scope_knowledge_unconfigured"
+
+
+async def test_registry_denies_connector_cross_tenant_target() -> None:
+    cfg = Config.model_validate(
+        convert_keys(
+            {
+                "tools": {
+                    "policy": {
+                        "connectorAllowedNames": ["moltbook"],
+                        "connectorAllowedActions": ["connector.record.create"],
+                        "connectorAllowedTargetResources": ["moltbook.posts"],
+                        "connectorAllowedTenants": ["tenant-a"],
+                        "connectorAllowedWorkspaces": ["ws-1"],
+                    }
+                }
+            }
+        )
+    )
+    reg = ToolRegistry(policy=ToolPolicyEngine(default_deny_tools=set()))
+    reg.register(_ConnectorPostTool())
+    reg.set_security_policy(cfg.tools.policy)
+    reg.set_request_context(
+        {
+            "channel": "cli",
+            "sender_id": "user-1",
+            "chat_id": "chat-1",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "agent_profile": "default",
+            "role": "operator",
+            "workspace_path": ".",
+            "policy_snapshot": {"production_hardening": True},
+        }
+    )
+
+    denied = await reg.execute(
+        "social_platform_post",
+        {
+            "connector_name": "moltbook",
+            "action": "connector.record.create",
+            "target_resource": "moltbook.posts.comments",
+            "tenant_id": "tenant-b",
+            "workspace_id": "ws-1",
+        },
+    )
+    assert denied.ok is False
+    assert denied.error is not None
+    assert denied.error.code == "resource_scope_connector_cross_tenant"
+    assert denied.meta.get("matched_scope", {}).get("current_tenant") == "tenant-a"
+
+
+def test_capability_policy_evaluator_reuses_connector_policy_for_channel_outbound() -> None:
+    cfg = Config.model_validate(
+        convert_keys(
+            {
+                "tools": {
+                    "policy": {
+                        "connectorAllowedNames": ["discord"],
+                        "connectorAllowedActions": ["connector.message.send"],
+                        "connectorAllowedTargetResources": ["channel.discord"],
+                        "connectorAllowedTenants": ["tenant-a"],
+                        "connectorAllowedWorkspaces": ["ws-1"],
+                    }
+                }
+            }
+        )
+    )
+    evaluator = CapabilityPolicyEvaluator(
+        cfg.tools.policy,
+        {
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "policy_snapshot": {"production_hardening": True},
+        },
+    )
+
+    allowed = evaluator.evaluate(
+        connector_capability_request(
+            capability="connector.message.send",
+            connector_name="discord",
+            target_resource="channel.discord.message",
+            tenant_id="tenant-a",
+            workspace_id="ws-1",
+        )
+    )
+    assert allowed.allowed is True
+    assert allowed.capability == "connector.message.send"
+
+    denied = evaluator.evaluate(
+        connector_capability_request(
+            capability="connector.file.upload",
+            connector_name="discord",
+            target_resource="channel.discord.file",
+            tenant_id="tenant-a",
+            workspace_id="ws-1",
+        )
+    )
+    assert denied.allowed is False
+    assert denied.error_code == "resource_scope_connector_action"
+
+
+def test_capability_policy_evaluator_denies_unconfigured_message_under_hardening() -> None:
+    cfg = Config()
+    evaluator = CapabilityPolicyEvaluator(
+        cfg.tools.policy,
+        {
+            "channel": "cli",
+            "tenant_id": "tenant-a",
+            "workspace_id": "ws-1",
+            "policy_snapshot": {"production_hardening": True},
+        },
+    )
+    decision = evaluator.evaluate(
+        CapabilityRequest(capability="message.send", resource_scope={"channel": "slack"})
+    )
+    assert decision.allowed is False
+    assert decision.error_code == "resource_scope_message_unconfigured"

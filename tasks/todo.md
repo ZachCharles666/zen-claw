@@ -2,6 +2,12 @@
 
 ## Current Priorities
 
+- [x] Zero-Trust Agent Gateway fail-closed convergence:
+  - remove production `compat_unhardened` / `legacy_compat_direct` outbound bypasses
+  - require explicit resource allowlists for high-risk capabilities under `production_hardening`
+  - promote `sessions_*` to zero-trust execution with full security context, policy snapshot, and owner-bound session scope
+  - make sidecar/proxy empty allowlist semantics fail-closed instead of allow-all
+  - extend regression coverage and verification for policy denial, sessions isolation, and approval/audit trace linkage
 - [x] Node supply-chain governance baseline:
   - generate and commit `bridge/package-lock.json`
   - pin direct Node dependency versions in `bridge/` and `browser/sidecar/`
