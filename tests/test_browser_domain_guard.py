@@ -85,7 +85,7 @@ def _security_context(trace_id: str) -> dict:
         role="admin",
         trust_level="trusted_local",
         origin_surface="cli",
-        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+        policy_snapshot={"production_hardening": True},
     )
 
 

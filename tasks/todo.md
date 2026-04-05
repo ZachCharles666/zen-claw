@@ -1,6 +1,11 @@
 # Active Tasks
 
 ## Current Priorities
+- [x] Zero-Trust Agent Gateway cross-language canonicalization unification:
+  - publish a single canonicalization spec plus golden fixtures for Python / Go / Node
+  - expose public Python canonicalization helpers and remove direct request-hash recomputation drift in sidecar/proxy clients
+  - align `net-proxy`, `sec-execd`, and `browser-sidecar` with the same full-envelope canonicalization semantics in strict mode
+  - remove browser integration's insecure sidecar compatibility escape hatch and cover strict-mode request/signature mismatch paths
 - [x] Zero-Trust Agent Gateway further optimization:
   - introduce a single gateway issuer service so runtime call sites stop composing subject/grant defaults ad hoc
   - make sidecar gateway-envelope verification strict-by-default with an explicit insecure compatibility escape hatch

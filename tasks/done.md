@@ -106,6 +106,40 @@
 
 ## 2026-04-05
 
+### Zero-Trust Agent Gateway — Cross-Language Canonicalization Unification
+
+- What changed:
+  - published a canonicalization spec under `docs/security/gateway_canonicalization.md`, added shared fixture cases plus generated golden fixtures, and added a fixture generator script so Python remains the reference implementation without being the only source of truth
+  - exposed public Python helpers for canonical gateway payload bytes/hash plus canonical policy-snapshot hashing, then switched exec/web/browser/sessions/connector sidecar clients to derive `request_hash` from the canonical payload and to sign the actual sidecar request body instead of reusing the ingress envelope signature
+  - aligned `go/net-proxy`, `go/sec-execd`, and `browser/sidecar` with the same full-payload canonicalization and policy-snapshot hash semantics, including strict browser-sidecar validation without the insecure compatibility escape hatch in the main integration path
+  - added cross-language regression coverage through Python fixture tests, browser strict-mode integration, and subprocess-driven Go/Node fixture verification
+- Key files touched:
+  - `zen_claw/security_context.py`
+  - `zen_claw/agent/tools/browser.py`
+  - `zen_claw/agent/tools/web.py`
+  - `zen_claw/agent/tools/shell.py`
+  - `zen_claw/agent/tools/sessions.py`
+  - `zen_claw/agent/tools/connector_sidecar.py`
+  - `scripts/generate_gateway_canonicalization_fixtures.py`
+  - `tests/fixtures/gateway_canonicalization_cases.json`
+  - `tests/fixtures/gateway_canonicalization_golden.json`
+  - `tests/test_gateway_canonicalization.py`
+  - `browser/sidecar/canonicalization.js`
+  - `browser/sidecar/canonicalization.test.js`
+  - `browser/sidecar/server.js`
+  - `go/net-proxy/main.go`
+  - `go/net-proxy/canonical_test.go`
+  - `go/sec-execd/main.go`
+  - `go/sec-execd/canonical_test.go`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .`
+  - `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
+  - `1529 passed, 41 skipped in 189.51s (0:03:09)`
+  - `gofmt -w go\sec-execd\main.go go\sec-execd\canonical_test.go go\net-proxy\main.go go\net-proxy\canonical_test.go`
+- Follow-up impact:
+  - browser/net/exec canonicalization now shares one repository-level spec and golden fixtures; future validator drift should show up immediately through the Python/Go/Node fixture checks instead of only appearing as late browser strict-mode failures
+
 ### Zero-Trust Agent Gateway — Further Optimization Areas
 
 - What changed:

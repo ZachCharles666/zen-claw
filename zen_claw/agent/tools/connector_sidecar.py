@@ -12,9 +12,11 @@ import httpx
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.agent.tools.sidecar_approval import build_hmac_approval_headers, hmac_body_json
 from zen_claw.security_context import (
+    canonical_gateway_envelope_hash,
+    canonical_policy_snapshot_hash,
     gateway_instance_id,
     resource_scope_for_security_context,
-    stable_json_hash,
+    sign_gateway_envelope,
 )
 
 
@@ -51,14 +53,13 @@ class ConnectorSidecarClient:
         policy_snapshot_hash = str(
             sec.get("policy_snapshot_hash")
             or policy_snapshot.get("policy_snapshot_hash")
-            or stable_json_hash(policy_snapshot)
+            or canonical_policy_snapshot_hash(policy_snapshot)
         )
         request_payload = {
             "url": target_url,
             "method": str(method or "POST").strip().upper() or "POST",
             "headers": dict(headers or {}),
             "body": body,
-            "gateway_signature": str(sec.get("gateway_signature") or ""),
             "connector_meta": {
                 "connector_name": str(connector_name or "").strip().lower(),
                 "action": str(action or "").strip().lower(),
@@ -89,7 +90,10 @@ class ConnectorSidecarClient:
                 "policy_snapshot_hash": policy_snapshot_hash,
             },
         }
-        request_payload["gateway_meta"]["request_hash"] = stable_json_hash(request_payload)
+        request_payload["gateway_meta"]["request_hash"] = canonical_gateway_envelope_hash(
+            request_payload
+        )
+        request_payload["gateway_signature"] = sign_gateway_envelope(request_payload)
         return request_payload
 
     def build_proxy_headers(

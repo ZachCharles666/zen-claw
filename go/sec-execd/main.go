@@ -445,12 +445,37 @@ func stableMapHash(payload map[string]any) string {
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	raw, err := json.Marshal(payload)
+	clone := map[string]any{}
+	for key, value := range payload {
+		if key == "policy_snapshot_hash" {
+			continue
+		}
+		clone[key] = value
+	}
+	raw, err := stableJSONBytes(clone)
 	if err != nil {
 		return ""
 	}
 	sum := sha256.Sum256(raw)
 	return fmt.Sprintf("%x", sum[:])
+}
+
+func stableJSONBytes(payload any) ([]byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	var normalized any
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(normalized); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
 func canonicalGatewayPayload(payload any) ([]byte, error) {
@@ -473,7 +498,7 @@ func canonicalGatewayPayload(payload any) ([]byte, error) {
 		}
 		clone["gateway_meta"] = metaClone
 	}
-	return json.Marshal(clone)
+	return stableJSONBytes(clone)
 }
 
 func gatewayPayloadMasterKey() []byte {

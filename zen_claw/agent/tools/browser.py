@@ -11,7 +11,12 @@ from zen_claw.agent.tools._url_guard import is_domain_blocked
 from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.agent.tools.sidecar_approval import build_hmac_approval_headers, hmac_body_json
-from zen_claw.security_context import gateway_instance_id, stable_json_hash
+from zen_claw.security_context import (
+    canonical_gateway_envelope_hash,
+    canonical_policy_snapshot_hash,
+    gateway_instance_id,
+    sign_gateway_envelope,
+)
 
 
 def _healthz_from_sidecar_url(url: str) -> str:
@@ -80,7 +85,7 @@ class _BrowserSidecarBase(Tool):
         policy_snapshot_hash = str(
             security_context.get("policy_snapshot_hash")
             or policy_snapshot.get("policy_snapshot_hash")
-            or stable_json_hash(policy_snapshot)
+            or canonical_policy_snapshot_hash(policy_snapshot)
         )
         missing_sec = [
             key
@@ -109,8 +114,8 @@ class _BrowserSidecarBase(Tool):
                 "browser sidecar requires policy snapshot hash",
                 code="browser_sidecar_policy_snapshot_missing",
             )
-        gateway_signature = str(security_context.get("gateway_signature") or "").strip()
-        if not gateway_signature:
+        upstream_gateway_signature = str(security_context.get("gateway_signature") or "").strip()
+        if not upstream_gateway_signature:
             return ToolResult.failure(
                 ToolErrorKind.PERMISSION,
                 "browser sidecar requires gateway signature",
@@ -124,7 +129,6 @@ class _BrowserSidecarBase(Tool):
             "payload": payload,
             "security_context": security_context,
             "policy_snapshot": policy_snapshot,
-            "gateway_signature": gateway_signature,
             "policy": {
                 "allowed_domains": self.allowed_domains,
                 "blocked_domains": self.blocked_domains,
@@ -135,7 +139,8 @@ class _BrowserSidecarBase(Tool):
                 "policy_snapshot_hash": policy_snapshot_hash,
             },
         }
-        req["gateway_meta"]["request_hash"] = stable_json_hash(req)
+        req["gateway_meta"]["request_hash"] = canonical_gateway_envelope_hash(req)
+        req["gateway_signature"] = sign_gateway_envelope(req)
         headers = {"Content-Type": "application/json"}
         body_bytes = hmac_body_json(req)
         if self.sidecar_approval_mode == "hmac":

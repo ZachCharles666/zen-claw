@@ -2,7 +2,7 @@ import httpx
 
 from zen_claw.agent.tools.result import ToolErrorKind
 from zen_claw.agent.tools.shell import ExecTool
-from zen_claw.security_context import build_security_context
+from zen_claw.security_context import build_security_context, canonical_gateway_envelope_hash
 
 
 class _FakeResponse:
@@ -24,6 +24,7 @@ class _FakeClient:
         self._response = response
         self._exc = exc
         self._health_response = health_response or _FakeResponse(200, {"ok": True})
+        self.last_json: dict = {}
 
     async def __aenter__(self) -> "_FakeClient":
         return self
@@ -38,6 +39,7 @@ class _FakeClient:
             raise self._exc
         assert url
         if json is not None:
+            self.last_json = json
             assert "command" in json
         if content is not None:
             assert len(content) > 0
@@ -61,7 +63,7 @@ def _security_context(trace_id: str) -> dict:
         trust_level="trusted_local",
         origin_surface="cli",
         workspace_path="workspace",
-        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+        policy_snapshot={"production_hardening": True},
     )
 
 
@@ -222,6 +224,25 @@ async def test_exec_tool_sidecar_passes_trace_id_header(monkeypatch) -> None:
     )
     assert result.ok is True
     assert observed.get("trace") == "trace-xyz"
+
+
+async def test_exec_tool_sidecar_request_hash_uses_canonical_envelope(monkeypatch) -> None:
+    fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "stdout": "ok", "exit_code": 0}))
+    monkeypatch.setattr(
+        "zen_claw.agent.tools.shell.httpx.AsyncClient",
+        lambda timeout: fake,
+    )
+
+    tool = ExecTool(mode="sidecar", sidecar_url="http://127.0.0.1:4488/v1/exec")
+    result = await tool.execute(
+        "echo hello",
+        trace_id="trace-exec-hash",
+        security_context=_security_context("trace-exec-hash"),
+    )
+    assert result.ok is True
+    assert fake.last_json["gateway_meta"]["request_hash"] == canonical_gateway_envelope_hash(
+        fake.last_json
+    )
 
 
 async def test_exec_tool_sidecar_hmac_adds_signature_headers(monkeypatch) -> None:

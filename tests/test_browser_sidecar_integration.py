@@ -20,6 +20,8 @@ from zen_claw.agent.tools.browser import (
 )
 from zen_claw.security_context import build_security_context
 
+TEST_GATEWAY_KEY = "browser-sidecar-test-key"
+
 
 def _find_free_port() -> int:
     with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
@@ -80,8 +82,8 @@ def _start_sidecar(
     env = os.environ.copy()
     env["BROWSER_SIDECAR_BIND"] = f"127.0.0.1:{sidecar_port}"
     env["BROWSER_SIDECAR_ALLOW_DOMAINS"] = allow_domains
-    env["ZEN_CLAW_ALLOW_INSECURE_SIDECAR"] = "1"
-    env.pop("ZEN_CLAW_HMAC_MASTER_KEY", None)
+    env["ZEN_CLAW_HMAC_MASTER_KEY"] = TEST_GATEWAY_KEY
+    env.pop("ZEN_CLAW_ALLOW_INSECURE_SIDECAR", None)
     if timeout_sec is not None:
         env["BROWSER_SIDECAR_TIMEOUT_SEC"] = str(timeout_sec)
     proc = subprocess.Popen(
@@ -97,6 +99,7 @@ def _start_sidecar(
 
 
 def _security_context(trace_id: str) -> dict:
+    os.environ["ZEN_CLAW_HMAC_MASTER_KEY"] = TEST_GATEWAY_KEY
     return build_security_context(
         trace_id=trace_id,
         channel="cli",
@@ -108,7 +111,7 @@ def _security_context(trace_id: str) -> dict:
         role="admin",
         trust_level="trusted_local",
         origin_surface="cli",
-        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+        policy_snapshot={"production_hardening": True},
     )
 
 

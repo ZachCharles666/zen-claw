@@ -16,8 +16,10 @@ from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.agent.tools.sidecar_approval import build_hmac_approval_headers, hmac_body_json
 from zen_claw.security_context import (
+    canonical_gateway_envelope_hash,
+    canonical_policy_snapshot_hash,
     gateway_instance_id,
-    stable_json_hash,
+    sign_gateway_envelope,
 )
 
 # Shared constants
@@ -240,7 +242,7 @@ class WebSearchTool(Tool):
         policy_snapshot_hash = str(
             security_context.get("policy_snapshot_hash")
             or policy_snapshot.get("policy_snapshot_hash")
-            or stable_json_hash(policy_snapshot)
+            or canonical_policy_snapshot_hash(policy_snapshot)
         )
         if not trace_id:
             return ToolResult.failure(
@@ -254,8 +256,8 @@ class WebSearchTool(Tool):
                 "proxy search requires policy snapshot hash",
                 code="web_search_proxy_policy_snapshot_missing",
             )
-        gateway_signature = str(security_context.get("gateway_signature") or "").strip()
-        if not gateway_signature:
+        upstream_gateway_signature = str(security_context.get("gateway_signature") or "").strip()
+        if not upstream_gateway_signature:
             return ToolResult.failure(
                 ToolErrorKind.PERMISSION,
                 "proxy search requires gateway signature",
@@ -268,13 +270,13 @@ class WebSearchTool(Tool):
             "api_key": self.api_key,
             "security_context": security_context,
             "policy_snapshot": policy_snapshot,
-            "gateway_signature": gateway_signature,
             "gateway_meta": {
                 "gateway_instance": str(security_context.get("gateway_instance") or gateway_instance_id()),
                 "policy_snapshot_hash": policy_snapshot_hash,
             },
         }
-        payload["gateway_meta"]["request_hash"] = stable_json_hash(payload)
+        payload["gateway_meta"]["request_hash"] = canonical_gateway_envelope_hash(payload)
+        payload["gateway_signature"] = sign_gateway_envelope(payload)
         body_bytes = hmac_body_json(payload)
         if self.proxy_approval_mode == "hmac":
             if not self.proxy_approval_token:
@@ -546,7 +548,7 @@ class WebFetchTool(Tool):
         policy_snapshot_hash = str(
             security_context.get("policy_snapshot_hash")
             or policy_snapshot.get("policy_snapshot_hash")
-            or stable_json_hash(policy_snapshot)
+            or canonical_policy_snapshot_hash(policy_snapshot)
         )
         if not trace_id:
             return ToolResult.failure(
@@ -560,8 +562,8 @@ class WebFetchTool(Tool):
                 "proxy fetch requires policy snapshot hash",
                 code="web_fetch_proxy_policy_snapshot_missing",
             )
-        gateway_signature = str(security_context.get("gateway_signature") or "").strip()
-        if not gateway_signature:
+        upstream_gateway_signature = str(security_context.get("gateway_signature") or "").strip()
+        if not upstream_gateway_signature:
             return ToolResult.failure(
                 ToolErrorKind.PERMISSION,
                 "proxy fetch requires gateway signature",
@@ -574,13 +576,13 @@ class WebFetchTool(Tool):
             "max_bytes": max_chars,
             "security_context": security_context,
             "policy_snapshot": policy_snapshot,
-            "gateway_signature": gateway_signature,
             "gateway_meta": {
                 "gateway_instance": str(security_context.get("gateway_instance") or gateway_instance_id()),
                 "policy_snapshot_hash": policy_snapshot_hash,
             },
         }
-        payload["gateway_meta"]["request_hash"] = stable_json_hash(payload)
+        payload["gateway_meta"]["request_hash"] = canonical_gateway_envelope_hash(payload)
+        payload["gateway_signature"] = sign_gateway_envelope(payload)
         body_bytes = hmac_body_json(payload)
         if self.proxy_approval_mode == "hmac":
             if not self.proxy_approval_token:

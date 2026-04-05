@@ -14,7 +14,12 @@ import httpx
 from zen_claw.agent.tools.base import Tool
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.agent.tools.sidecar_approval import build_hmac_approval_headers, hmac_body_json
-from zen_claw.security_context import gateway_instance_id, stable_json_hash
+from zen_claw.security_context import (
+    canonical_gateway_envelope_hash,
+    canonical_policy_snapshot_hash,
+    gateway_instance_id,
+    sign_gateway_envelope,
+)
 
 
 class ExecTool(Tool):
@@ -176,7 +181,7 @@ class ExecTool(Tool):
         policy_snapshot_hash = str(
             sec.get("policy_snapshot_hash")
             or policy_snapshot.get("policy_snapshot_hash")
-            or stable_json_hash(policy_snapshot)
+            or canonical_policy_snapshot_hash(policy_snapshot)
         )
         missing_sec = [
             key
@@ -205,8 +210,8 @@ class ExecTool(Tool):
                 "exec sidecar requires policy snapshot hash",
                 code="exec_sidecar_policy_snapshot_missing",
             )
-        gateway_signature = str(sec.get("gateway_signature") or "").strip()
-        if not gateway_signature:
+        upstream_gateway_signature = str(sec.get("gateway_signature") or "").strip()
+        if not upstream_gateway_signature:
             return ToolResult.failure(
                 ToolErrorKind.PERMISSION,
                 "exec sidecar requires gateway signature",
@@ -218,7 +223,6 @@ class ExecTool(Tool):
             "timeout_seconds": self.timeout,
             "security_context": sec,
             "policy_snapshot": policy_snapshot,
-            "gateway_signature": gateway_signature,
         }
         if env is not None:
             payload["env"] = env
@@ -226,7 +230,8 @@ class ExecTool(Tool):
             "gateway_instance": str(sec.get("gateway_instance") or gateway_instance_id()),
             "policy_snapshot_hash": policy_snapshot_hash,
         }
-        payload["gateway_meta"]["request_hash"] = stable_json_hash(payload)
+        payload["gateway_meta"]["request_hash"] = canonical_gateway_envelope_hash(payload)
+        payload["gateway_signature"] = sign_gateway_envelope(payload)
         body_bytes = hmac_body_json(payload)
         headers = {"Content-Type": "application/json"}
         if self.sidecar_approval_mode == "hmac":

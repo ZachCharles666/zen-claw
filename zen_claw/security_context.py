@@ -26,6 +26,18 @@ def stable_json_hash(payload: Any) -> str:
     return hashlib.sha256(stable_json_bytes(payload)).hexdigest()
 
 
+def canonical_policy_snapshot(policy_snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    """Return the canonical policy snapshot used for policy hash verification."""
+    canonical = dict(policy_snapshot or {})
+    canonical.pop("policy_snapshot_hash", None)
+    return canonical
+
+
+def canonical_policy_snapshot_hash(policy_snapshot: dict[str, Any] | None) -> str:
+    """Return the stable policy snapshot hash used in gateway metadata."""
+    return stable_json_hash(canonical_policy_snapshot(policy_snapshot))
+
+
 def gateway_instance_id() -> str:
     """Return a stable gateway instance identifier."""
     raw = str(
@@ -63,7 +75,7 @@ class GatewaySubject:
     def security_context(self, *, policy_snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = asdict(self)
         payload["policy_snapshot"] = dict(policy_snapshot or {})
-        payload["policy_snapshot_hash"] = stable_json_hash(payload["policy_snapshot"])
+        payload["policy_snapshot_hash"] = canonical_policy_snapshot_hash(payload["policy_snapshot"])
         payload["subject_type"] = str(self.subject_type or "agent").strip().lower() or "agent"
         payload["trust_tier"] = (
             str(self.trust_tier or self.trust_level or "").strip().lower()
@@ -90,8 +102,10 @@ class GatewayEnvelopeIssuer:
         ).strip()
         policy = dict(sec.get("policy_snapshot") or {})
         if "policy_snapshot_hash" not in policy:
-            policy["policy_snapshot_hash"] = stable_json_hash(policy)
-        policy_snapshot_hash = str(policy.get("policy_snapshot_hash") or stable_json_hash(policy))
+            policy["policy_snapshot_hash"] = canonical_policy_snapshot_hash(policy)
+        policy_snapshot_hash = str(
+            policy.get("policy_snapshot_hash") or canonical_policy_snapshot_hash(policy)
+        )
         envelope = {
             "trace_id": str(sec.get("trace_id") or "").strip(),
             "security_context": {
@@ -122,12 +136,13 @@ class GatewayEnvelopeIssuer:
             "capability_grants": list(envelope["capability_grants"]),
         }
         envelope.update(flattened)
-        envelope["gateway_meta"]["request_hash"] = stable_json_hash(_canonical_gateway_envelope(envelope))
+        envelope["gateway_meta"]["request_hash"] = canonical_gateway_envelope_hash(envelope)
         envelope["gateway_signature"] = sign_gateway_envelope(envelope)
         return envelope
 
 
-def _canonical_gateway_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
+def canonical_gateway_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Return the canonical gateway payload used for request-hash/signature checks."""
     canonical = dict(envelope)
     canonical.pop("gateway_signature", None)
     gateway_meta = canonical.get("gateway_meta")
@@ -137,9 +152,24 @@ def _canonical_gateway_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
     return canonical
 
 
+def canonical_gateway_envelope_bytes(envelope: dict[str, Any]) -> bytes:
+    """Return canonical UTF-8 bytes for a gateway envelope/request payload."""
+    return stable_json_bytes(canonical_gateway_envelope(envelope))
+
+
+def canonical_gateway_envelope_hash(envelope: dict[str, Any]) -> str:
+    """Return the canonical request hash for a gateway envelope/request payload."""
+    return hashlib.sha256(canonical_gateway_envelope_bytes(envelope)).hexdigest()
+
+
+def _canonical_gateway_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Backward-compatible alias for older internal callers."""
+    return canonical_gateway_envelope(envelope)
+
+
 def sign_gateway_envelope(envelope: dict[str, Any]) -> str:
     """Return gateway envelope signature."""
-    return sign_data(stable_json_bytes(_canonical_gateway_envelope(envelope)).decode("utf-8"))
+    return sign_data(canonical_gateway_envelope_bytes(envelope).decode("utf-8"))
 
 
 def verify_gateway_envelope(envelope: dict[str, Any]) -> tuple[bool, str]:
@@ -149,14 +179,14 @@ def verify_gateway_envelope(envelope: dict[str, Any]) -> tuple[bool, str]:
     gateway_signature = str(envelope.get("gateway_signature") or "").strip()
     gateway_meta = dict(envelope.get("gateway_meta") or {})
     request_hash = str(gateway_meta.get("request_hash") or "").strip()
-    expected_hash = stable_json_hash(_canonical_gateway_envelope(envelope))
+    expected_hash = canonical_gateway_envelope_hash(envelope)
     if not gateway_signature:
         return False, "signature_missing"
     if not request_hash:
         return False, "request_hash_missing"
     if request_hash != expected_hash:
         return False, "request_hash_mismatch"
-    canonical = stable_json_bytes(_canonical_gateway_envelope(envelope)).decode("utf-8")
+    canonical = canonical_gateway_envelope_bytes(envelope).decode("utf-8")
     if not verify_signature(canonical, gateway_signature):
         return False, "signature_invalid"
     return True, ""
@@ -212,7 +242,7 @@ def ensure_security_envelope(
         or {}
     )
     if policy_snapshot and "policy_snapshot_hash" not in policy_snapshot:
-        policy_snapshot["policy_snapshot_hash"] = stable_json_hash(policy_snapshot)
+        policy_snapshot["policy_snapshot_hash"] = canonical_policy_snapshot_hash(policy_snapshot)
     grants = capability_grants
     if grants is None:
         if "capability_grants" in raw:

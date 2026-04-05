@@ -17,7 +17,7 @@ from zen_claw.agent.tools.sessions import (
 from zen_claw.bus.queue import MessageBus
 from zen_claw.config.schema import ExecToolConfig, ToolPolicyConfig
 from zen_claw.providers.base import LLMProvider, LLMResponse, ToolCallRequest
-from zen_claw.security_context import build_security_context
+from zen_claw.security_context import build_security_context, canonical_gateway_envelope_hash
 
 
 def _security_context(trace_id: str = "trace-sessions-test") -> dict:
@@ -33,7 +33,7 @@ def _security_context(trace_id: str = "trace-sessions-test") -> dict:
         trust_level="trusted_local",
         origin_surface="cli",
         workspace_path="E:/nano-claw-public",
-        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+        policy_snapshot={"production_hardening": True},
     )
 
 
@@ -56,6 +56,7 @@ class _FakeClient:
         self._get_response = get_response or _FakeResponse(200, {"ok": True})
         self._post_response = post_response or _FakeResponse(200, {"ok": True})
         self._exc = exc
+        self.last_json: dict = {}
 
     async def __aenter__(self) -> "_FakeClient":
         return self
@@ -81,6 +82,7 @@ class _FakeClient:
         if self._exc:
             raise self._exc
         assert url
+        self.last_json = json or {}
         if content is not None:
             assert len(content) > 0
         return self._post_response
@@ -141,6 +143,26 @@ async def test_sessions_spawn_includes_pty_payload(monkeypatch) -> None:
     assert result.ok is True
     assert isinstance(observed.get("json"), dict)
     assert observed["json"].get("pty") is True
+
+
+async def test_sessions_spawn_request_hash_uses_canonical_envelope(monkeypatch) -> None:
+    fake = _FakeClient(
+        post_response=_FakeResponse(200, {"ok": True, "session_id": "s-hash", "status": "running"})
+    )
+    monkeypatch.setattr(
+        "zen_claw.agent.tools.sessions.httpx.AsyncClient",
+        lambda timeout: fake,
+    )
+    tool = SessionsSpawnTool(sidecar_exec_url="http://127.0.0.1:4488/v1/exec")
+    result = await tool.execute(
+        command="echo hi",
+        trace_id="trace-spawn-hash",
+        security_context=_security_context("trace-spawn-hash"),
+    )
+    assert result.ok is True
+    assert fake.last_json["gateway_meta"]["request_hash"] == canonical_gateway_envelope_hash(
+        fake.last_json
+    )
 
 
 async def test_sessions_list_sidecar_success(monkeypatch) -> None:

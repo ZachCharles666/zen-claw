@@ -184,7 +184,16 @@ func handleFetch(w http.ResponseWriter, r *http.Request, c cfg) {
 		})
 		return
 	}
-	if code, message := validateGatewayEnvelope(req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature); code != "" {
+	var rawPayload map[string]any
+	if err := json.Unmarshal(bodyBytes, &rawPayload); err != nil {
+		writeJSON(w, http.StatusBadRequest, fetchResponse{
+			OK:        false,
+			ErrorCode: "invalid_json",
+			Error:     err.Error(),
+		})
+		return
+	}
+	if code, message := validateGatewayEnvelope(rawPayload); code != "" {
 		writeJSON(w, http.StatusForbidden, fetchResponse{
 			OK:        false,
 			ErrorCode: code,
@@ -417,7 +426,16 @@ func handleSearch(w http.ResponseWriter, r *http.Request, c cfg) {
 		})
 		return
 	}
-	if code, message := validateGatewayEnvelope(req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature); code != "" {
+	var rawPayload map[string]any
+	if err := json.Unmarshal(bodyBytes, &rawPayload); err != nil {
+		writeJSONSearch(w, http.StatusBadRequest, searchResponse{
+			OK:        false,
+			ErrorCode: "invalid_json",
+			Error:     err.Error(),
+		})
+		return
+	}
+	if code, message := validateGatewayEnvelope(rawPayload); code != "" {
 		writeJSONSearch(w, http.StatusForbidden, searchResponse{
 			OK:        false,
 			ErrorCode: code,
@@ -664,7 +682,11 @@ func denied(host string, deny map[string]struct{}) bool {
 	return ok
 }
 
-func validateGatewayEnvelope(securityContext, policySnapshot, gatewayMeta map[string]any, gatewaySignature string) (string, string) {
+func validateGatewayEnvelope(payload map[string]any) (string, string) {
+	securityContext, _ := payload["security_context"].(map[string]any)
+	policySnapshot, _ := payload["policy_snapshot"].(map[string]any)
+	gatewayMeta, _ := payload["gateway_meta"].(map[string]any)
+	gatewaySignature := strings.TrimSpace(fmt.Sprintf("%v", payload["gateway_signature"]))
 	if strings.TrimSpace(gatewaySignature) == "" {
 		return "gateway_signature_required", "gateway signature is required"
 	}
@@ -697,12 +719,10 @@ func validateGatewayEnvelope(securityContext, policySnapshot, gatewayMeta map[st
 	if !gatewayVerificationStrict() && strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
 		return "", ""
 	}
-	canonical, err := canonicalGatewayEnvelope(map[string]any{
-		"security_context":  securityContext,
-		"policy_snapshot":   mapOrEmpty(policySnapshot),
-		"gateway_meta":      gatewayMeta,
-		"gateway_signature": gatewaySignature,
-	})
+	if expectedPolicyHash := stableMapHash(policySnapshot); expectedPolicyHash != "" && !strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", gatewayMeta["policy_snapshot_hash"])), expectedPolicyHash) {
+		return "policy_snapshot_hash_mismatch", "policy snapshot hash does not match payload"
+	}
+	canonical, err := canonicalGatewayPayload(payload)
 	if err != nil {
 		return "gateway_payload_invalid", "failed to canonicalize gateway payload"
 	}
@@ -723,10 +743,51 @@ func mapOrEmpty(in map[string]any) map[string]any {
 	return in
 }
 
-func canonicalGatewayEnvelope(payload map[string]any) ([]byte, error) {
+func stableMapHash(payload map[string]any) string {
+	if payload == nil {
+		payload = map[string]any{}
+	}
 	clone := map[string]any{}
 	for key, value := range payload {
+		if key == "policy_snapshot_hash" {
+			continue
+		}
 		clone[key] = value
+	}
+	raw, err := stableJSONBytes(clone)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func stableJSONBytes(payload any) ([]byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	var normalized any
+	if err := json.Unmarshal(raw, &normalized); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(normalized); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(buf.Bytes()), nil
+}
+
+func canonicalGatewayPayload(payload any) ([]byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	var clone map[string]any
+	if err := json.Unmarshal(raw, &clone); err != nil {
+		return nil, err
 	}
 	delete(clone, "gateway_signature")
 	if gatewayMeta, ok := clone["gateway_meta"].(map[string]any); ok {
@@ -739,7 +800,7 @@ func canonicalGatewayEnvelope(payload map[string]any) ([]byte, error) {
 		}
 		clone["gateway_meta"] = metaClone
 	}
-	return json.Marshal(clone)
+	return stableJSONBytes(clone)
 }
 
 func gatewayMasterKey() []byte {

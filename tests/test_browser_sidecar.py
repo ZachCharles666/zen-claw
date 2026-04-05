@@ -7,7 +7,7 @@ from zen_claw.agent.tools.browser import (
     BrowserTypeTool,
 )
 from zen_claw.agent.tools.result import ToolErrorKind
-from zen_claw.security_context import build_security_context
+from zen_claw.security_context import build_security_context, canonical_gateway_envelope_hash
 
 
 class _FakeResponse:
@@ -57,7 +57,7 @@ def _security_context(trace_id: str = "trace-browser-test") -> dict:
         role="admin",
         trust_level="trusted_local",
         origin_surface="cli",
-        policy_snapshot={"production_hardening": True, "policy_snapshot_hash": "policy-test"},
+        policy_snapshot={"production_hardening": True},
     )
 
 
@@ -96,6 +96,26 @@ async def test_browser_sidecar_trace_header(monkeypatch) -> None:
     )
     assert result.ok is True
     assert fake.last_headers.get("X-Trace-Id") == "trace-browser-1"
+
+
+async def test_browser_sidecar_request_hash_uses_canonical_envelope(monkeypatch) -> None:
+    fake = _FakeClient(response=_FakeResponse(200, {"ok": True, "session_id": "s1"}))
+    monkeypatch.setattr("zen_claw.agent.tools.browser.httpx.AsyncClient", lambda **kwargs: fake)
+
+    tool = BrowserOpenTool(
+        mode="sidecar",
+        sidecar_url="http://127.0.0.1:4500/v1/browser",
+        sidecar_approval_mode="token",
+    )
+    result = await tool.execute(
+        url="https://example.com",
+        trace_id="trace-browser-hash",
+        security_context=_security_context("trace-browser-hash"),
+    )
+    assert result.ok is True
+    assert fake.last_json["gateway_meta"]["request_hash"] == canonical_gateway_envelope_hash(
+        fake.last_json
+    )
 
 
 async def test_browser_sends_approval_token_header(monkeypatch) -> None:

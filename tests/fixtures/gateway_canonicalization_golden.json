@@ -1,0 +1,400 @@
+[
+  {
+    "name": "minimal_gateway_envelope",
+    "payload": {
+      "trace_id": "trace-minimal",
+      "security_context": {
+        "trace_id": "trace-minimal",
+        "channel": "cli",
+        "sender_id": "tester",
+        "chat_id": "direct",
+        "tenant_id": "default",
+        "workspace_id": "workspace",
+        "agent_profile": "default",
+        "role": "admin",
+        "trust_level": "trusted_local",
+        "origin_surface": "cli",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "exec.run"
+        ],
+        "policy_snapshot": {
+          "production_hardening": true,
+          "network": {
+            "mode": "proxy"
+          },
+          "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b"
+        },
+        "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b"
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "network": {
+          "mode": "proxy"
+        },
+        "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b"
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1,
+        "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b",
+        "request_hash": "2fd57e5a3111522f219b78c368c721a67557f39993361dd2ce1ade1fef7b17ab"
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "exec.run"
+      ],
+      "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b",
+      "gateway_signature": "6cccc563abf7390c631dae03dc8d7997978880afa2b9e63717c3b41685b4d64b"
+    },
+    "canonical_payload": {
+      "trace_id": "trace-minimal",
+      "security_context": {
+        "trace_id": "trace-minimal",
+        "channel": "cli",
+        "sender_id": "tester",
+        "chat_id": "direct",
+        "tenant_id": "default",
+        "workspace_id": "workspace",
+        "agent_profile": "default",
+        "role": "admin",
+        "trust_level": "trusted_local",
+        "origin_surface": "cli",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "exec.run"
+        ],
+        "policy_snapshot": {
+          "production_hardening": true,
+          "network": {
+            "mode": "proxy"
+          },
+          "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b"
+        },
+        "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b"
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "network": {
+          "mode": "proxy"
+        },
+        "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b"
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1,
+        "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b"
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "exec.run"
+      ],
+      "policy_snapshot_hash": "c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b"
+    },
+    "canonical_text": "{\"capability_grants\":[\"exec.run\"],\"gateway_meta\":{\"envelope_version\":1,\"gateway_instance\":\"fixture-gateway\",\"policy_snapshot_hash\":\"c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b\"},\"policy_snapshot\":{\"network\":{\"mode\":\"proxy\"},\"policy_snapshot_hash\":\"c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b\",\"production_hardening\":true},\"policy_snapshot_hash\":\"c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b\",\"security_context\":{\"agent_profile\":\"default\",\"capability_grants\":[\"exec.run\"],\"channel\":\"cli\",\"chat_id\":\"direct\",\"origin_surface\":\"cli\",\"policy_snapshot\":{\"network\":{\"mode\":\"proxy\"},\"policy_snapshot_hash\":\"c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b\",\"production_hardening\":true},\"policy_snapshot_hash\":\"c10789eedb87dd552401d4b00d7ec2ccb243c3c2dac82ee461272b0777abd40b\",\"role\":\"admin\",\"sender_id\":\"tester\",\"subject_type\":\"agent\",\"tenant_id\":\"default\",\"trace_id\":\"trace-minimal\",\"trust_level\":\"trusted_local\",\"trust_tier\":\"trusted_local\",\"workspace_id\":\"workspace\"},\"subject_type\":\"agent\",\"trace_id\":\"trace-minimal\",\"trust_tier\":\"trusted_local\"}",
+    "request_hash": "2fd57e5a3111522f219b78c368c721a67557f39993361dd2ce1ade1fef7b17ab",
+    "gateway_signature": "6cccc563abf7390c631dae03dc8d7997978880afa2b9e63717c3b41685b4d64b"
+  },
+  {
+    "name": "browser_unicode_nested",
+    "payload": {
+      "action": "open",
+      "payload": {
+        "url": "http://127.0.0.1:8123/中文?q=零信任",
+        "session_id": "sess-中文"
+      },
+      "policy": {
+        "allowed_domains": [
+          "127.0.0.1",
+          "localhost"
+        ],
+        "blocked_domains": [],
+        "max_steps": 7
+      },
+      "trace_id": "trace-browser-unicode",
+      "security_context": {
+        "trace_id": "trace-browser-unicode",
+        "channel": "webchat",
+        "sender_id": "alice",
+        "chat_id": "room-1",
+        "tenant_id": "tenant-cn",
+        "workspace_id": "workspace-browser",
+        "agent_profile": "default",
+        "role": "operator",
+        "trust_level": "trusted_local",
+        "origin_surface": "webchat",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "browser.open",
+          "browser.extract"
+        ],
+        "policy_snapshot": {
+          "production_hardening": true,
+          "browser": {
+            "allowed_domains": [
+              "127.0.0.1",
+              "localhost"
+            ],
+            "max_steps": 7
+          },
+          "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975"
+        },
+        "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975"
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "browser": {
+          "allowed_domains": [
+            "127.0.0.1",
+            "localhost"
+          ],
+          "max_steps": 7
+        },
+        "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975"
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1,
+        "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975",
+        "request_hash": "dc8e911060953df366429ec798e9de9dfc0e21c2cfb0474dc88a76a5174927c7"
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "browser.open",
+        "browser.extract"
+      ],
+      "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975",
+      "gateway_signature": "de66bbb661e4bbd6d569869fedb239df9a193be14f64c87f18b2a73ce3677351"
+    },
+    "canonical_payload": {
+      "action": "open",
+      "payload": {
+        "url": "http://127.0.0.1:8123/中文?q=零信任",
+        "session_id": "sess-中文"
+      },
+      "policy": {
+        "allowed_domains": [
+          "127.0.0.1",
+          "localhost"
+        ],
+        "blocked_domains": [],
+        "max_steps": 7
+      },
+      "trace_id": "trace-browser-unicode",
+      "security_context": {
+        "trace_id": "trace-browser-unicode",
+        "channel": "webchat",
+        "sender_id": "alice",
+        "chat_id": "room-1",
+        "tenant_id": "tenant-cn",
+        "workspace_id": "workspace-browser",
+        "agent_profile": "default",
+        "role": "operator",
+        "trust_level": "trusted_local",
+        "origin_surface": "webchat",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "browser.open",
+          "browser.extract"
+        ],
+        "policy_snapshot": {
+          "production_hardening": true,
+          "browser": {
+            "allowed_domains": [
+              "127.0.0.1",
+              "localhost"
+            ],
+            "max_steps": 7
+          },
+          "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975"
+        },
+        "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975"
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "browser": {
+          "allowed_domains": [
+            "127.0.0.1",
+            "localhost"
+          ],
+          "max_steps": 7
+        },
+        "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975"
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1,
+        "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975"
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "browser.open",
+        "browser.extract"
+      ],
+      "policy_snapshot_hash": "4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975"
+    },
+    "canonical_text": "{\"action\":\"open\",\"capability_grants\":[\"browser.open\",\"browser.extract\"],\"gateway_meta\":{\"envelope_version\":1,\"gateway_instance\":\"fixture-gateway\",\"policy_snapshot_hash\":\"4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975\"},\"payload\":{\"session_id\":\"sess-中文\",\"url\":\"http://127.0.0.1:8123/中文?q=零信任\"},\"policy\":{\"allowed_domains\":[\"127.0.0.1\",\"localhost\"],\"blocked_domains\":[],\"max_steps\":7},\"policy_snapshot\":{\"browser\":{\"allowed_domains\":[\"127.0.0.1\",\"localhost\"],\"max_steps\":7},\"policy_snapshot_hash\":\"4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975\",\"production_hardening\":true},\"policy_snapshot_hash\":\"4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975\",\"security_context\":{\"agent_profile\":\"default\",\"capability_grants\":[\"browser.open\",\"browser.extract\"],\"channel\":\"webchat\",\"chat_id\":\"room-1\",\"origin_surface\":\"webchat\",\"policy_snapshot\":{\"browser\":{\"allowed_domains\":[\"127.0.0.1\",\"localhost\"],\"max_steps\":7},\"policy_snapshot_hash\":\"4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975\",\"production_hardening\":true},\"policy_snapshot_hash\":\"4efafa65a0ea05197083dff1686b6a88c8d84d7541e1d15ca341a66fbb1e4975\",\"role\":\"operator\",\"sender_id\":\"alice\",\"subject_type\":\"agent\",\"tenant_id\":\"tenant-cn\",\"trace_id\":\"trace-browser-unicode\",\"trust_level\":\"trusted_local\",\"trust_tier\":\"trusted_local\",\"workspace_id\":\"workspace-browser\"},\"subject_type\":\"agent\",\"trace_id\":\"trace-browser-unicode\",\"trust_tier\":\"trusted_local\"}",
+    "request_hash": "dc8e911060953df366429ec798e9de9dfc0e21c2cfb0474dc88a76a5174927c7",
+    "gateway_signature": "de66bbb661e4bbd6d569869fedb239df9a193be14f64c87f18b2a73ce3677351"
+  },
+  {
+    "name": "exec_empty_false_zero",
+    "payload": {
+      "command": "echo zero-trust",
+      "working_dir": "E:/nano-claw-public",
+      "timeout_seconds": 0,
+      "env": {
+        "EMPTY": "",
+        "FLAG": false,
+        "COUNT": 0
+      },
+      "extra": {
+        "empty_dict": {},
+        "empty_list": [],
+        "enabled": false,
+        "retries": 0
+      },
+      "trace_id": "trace-exec-edge",
+      "security_context": {
+        "trace_id": "trace-exec-edge",
+        "channel": "cli",
+        "sender_id": "tester",
+        "chat_id": "direct",
+        "tenant_id": "tenant-a",
+        "workspace_id": "workspace-a",
+        "agent_profile": "default",
+        "role": "operator",
+        "trust_level": "trusted_local",
+        "origin_surface": "cli",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "exec.run",
+          "sessions.spawn"
+        ],
+        "policy_snapshot": {
+          "production_hardening": true,
+          "exec": {
+            "allowed_working_dirs": [
+              "E:/nano-claw-public"
+            ],
+            "allowed_command_prefixes": [
+              "echo"
+            ]
+          },
+          "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038"
+        },
+        "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038"
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "exec": {
+          "allowed_working_dirs": [
+            "E:/nano-claw-public"
+          ],
+          "allowed_command_prefixes": [
+            "echo"
+          ]
+        },
+        "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038"
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1,
+        "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038",
+        "request_hash": "ea8e93272ec236d9e2da5dfafc5fba506b3aceeccd77f8fbcd7721bfc4e37296"
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "exec.run",
+        "sessions.spawn"
+      ],
+      "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038",
+      "gateway_signature": "b3c2511e5fcf6450d25684ffaaf8748ae7bc090f54719b17c45902dc280cb0dd"
+    },
+    "canonical_payload": {
+      "command": "echo zero-trust",
+      "working_dir": "E:/nano-claw-public",
+      "timeout_seconds": 0,
+      "env": {
+        "EMPTY": "",
+        "FLAG": false,
+        "COUNT": 0
+      },
+      "extra": {
+        "empty_dict": {},
+        "empty_list": [],
+        "enabled": false,
+        "retries": 0
+      },
+      "trace_id": "trace-exec-edge",
+      "security_context": {
+        "trace_id": "trace-exec-edge",
+        "channel": "cli",
+        "sender_id": "tester",
+        "chat_id": "direct",
+        "tenant_id": "tenant-a",
+        "workspace_id": "workspace-a",
+        "agent_profile": "default",
+        "role": "operator",
+        "trust_level": "trusted_local",
+        "origin_surface": "cli",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "exec.run",
+          "sessions.spawn"
+        ],
+        "policy_snapshot": {
+          "production_hardening": true,
+          "exec": {
+            "allowed_working_dirs": [
+              "E:/nano-claw-public"
+            ],
+            "allowed_command_prefixes": [
+              "echo"
+            ]
+          },
+          "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038"
+        },
+        "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038"
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "exec": {
+          "allowed_working_dirs": [
+            "E:/nano-claw-public"
+          ],
+          "allowed_command_prefixes": [
+            "echo"
+          ]
+        },
+        "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038"
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1,
+        "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038"
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "exec.run",
+        "sessions.spawn"
+      ],
+      "policy_snapshot_hash": "45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038"
+    },
+    "canonical_text": "{\"capability_grants\":[\"exec.run\",\"sessions.spawn\"],\"command\":\"echo zero-trust\",\"env\":{\"COUNT\":0,\"EMPTY\":\"\",\"FLAG\":false},\"extra\":{\"empty_dict\":{},\"empty_list\":[],\"enabled\":false,\"retries\":0},\"gateway_meta\":{\"envelope_version\":1,\"gateway_instance\":\"fixture-gateway\",\"policy_snapshot_hash\":\"45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038\"},\"policy_snapshot\":{\"exec\":{\"allowed_command_prefixes\":[\"echo\"],\"allowed_working_dirs\":[\"E:/nano-claw-public\"]},\"policy_snapshot_hash\":\"45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038\",\"production_hardening\":true},\"policy_snapshot_hash\":\"45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038\",\"security_context\":{\"agent_profile\":\"default\",\"capability_grants\":[\"exec.run\",\"sessions.spawn\"],\"channel\":\"cli\",\"chat_id\":\"direct\",\"origin_surface\":\"cli\",\"policy_snapshot\":{\"exec\":{\"allowed_command_prefixes\":[\"echo\"],\"allowed_working_dirs\":[\"E:/nano-claw-public\"]},\"policy_snapshot_hash\":\"45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038\",\"production_hardening\":true},\"policy_snapshot_hash\":\"45172bc5e20cd3e2f008e8e56daf4282ccdef05b49c069ad844005b7983cf038\",\"role\":\"operator\",\"sender_id\":\"tester\",\"subject_type\":\"agent\",\"tenant_id\":\"tenant-a\",\"trace_id\":\"trace-exec-edge\",\"trust_level\":\"trusted_local\",\"trust_tier\":\"trusted_local\",\"workspace_id\":\"workspace-a\"},\"subject_type\":\"agent\",\"timeout_seconds\":0,\"trace_id\":\"trace-exec-edge\",\"trust_tier\":\"trusted_local\",\"working_dir\":\"E:/nano-claw-public\"}",
+    "request_hash": "ea8e93272ec236d9e2da5dfafc5fba506b3aceeccd77f8fbcd7721bfc4e37296",
+    "gateway_signature": "b3c2511e5fcf6450d25684ffaaf8748ae7bc090f54719b17c45902dc280cb0dd"
+  }
+]

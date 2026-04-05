@@ -1,0 +1,156 @@
+[
+  {
+    "name": "minimal_gateway_envelope",
+    "payload": {
+      "trace_id": "trace-minimal",
+      "security_context": {
+        "trace_id": "trace-minimal",
+        "channel": "cli",
+        "sender_id": "tester",
+        "chat_id": "direct",
+        "tenant_id": "default",
+        "workspace_id": "workspace",
+        "agent_profile": "default",
+        "role": "admin",
+        "trust_level": "trusted_local",
+        "origin_surface": "cli",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "exec.run"
+        ]
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "network": {
+          "mode": "proxy"
+        }
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "exec.run"
+      ]
+    }
+  },
+  {
+    "name": "browser_unicode_nested",
+    "payload": {
+      "action": "open",
+      "payload": {
+        "url": "http://127.0.0.1:8123/中文?q=零信任",
+        "session_id": "sess-中文"
+      },
+      "policy": {
+        "allowed_domains": [
+          "127.0.0.1",
+          "localhost"
+        ],
+        "blocked_domains": [],
+        "max_steps": 7
+      },
+      "trace_id": "trace-browser-unicode",
+      "security_context": {
+        "trace_id": "trace-browser-unicode",
+        "channel": "webchat",
+        "sender_id": "alice",
+        "chat_id": "room-1",
+        "tenant_id": "tenant-cn",
+        "workspace_id": "workspace-browser",
+        "agent_profile": "default",
+        "role": "operator",
+        "trust_level": "trusted_local",
+        "origin_surface": "webchat",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "browser.open",
+          "browser.extract"
+        ]
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "browser": {
+          "allowed_domains": [
+            "127.0.0.1",
+            "localhost"
+          ],
+          "max_steps": 7
+        }
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "browser.open",
+        "browser.extract"
+      ]
+    }
+  },
+  {
+    "name": "exec_empty_false_zero",
+    "payload": {
+      "command": "echo zero-trust",
+      "working_dir": "E:/nano-claw-public",
+      "timeout_seconds": 0,
+      "env": {
+        "EMPTY": "",
+        "FLAG": false,
+        "COUNT": 0
+      },
+      "extra": {
+        "empty_dict": {},
+        "empty_list": [],
+        "enabled": false,
+        "retries": 0
+      },
+      "trace_id": "trace-exec-edge",
+      "security_context": {
+        "trace_id": "trace-exec-edge",
+        "channel": "cli",
+        "sender_id": "tester",
+        "chat_id": "direct",
+        "tenant_id": "tenant-a",
+        "workspace_id": "workspace-a",
+        "agent_profile": "default",
+        "role": "operator",
+        "trust_level": "trusted_local",
+        "origin_surface": "cli",
+        "subject_type": "agent",
+        "trust_tier": "trusted_local",
+        "capability_grants": [
+          "exec.run",
+          "sessions.spawn"
+        ]
+      },
+      "policy_snapshot": {
+        "production_hardening": true,
+        "exec": {
+          "allowed_working_dirs": [
+            "E:/nano-claw-public"
+          ],
+          "allowed_command_prefixes": [
+            "echo"
+          ]
+        }
+      },
+      "gateway_meta": {
+        "gateway_instance": "fixture-gateway",
+        "envelope_version": 1
+      },
+      "subject_type": "agent",
+      "trust_tier": "trusted_local",
+      "capability_grants": [
+        "exec.run",
+        "sessions.spawn"
+      ]
+    }
+  }
+]
