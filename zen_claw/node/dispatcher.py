@@ -11,8 +11,9 @@ from loguru import logger
 
 from zen_claw.agent.tools.connector_sidecar import ConnectorSidecarClient
 from zen_claw.bus.events import OutboundMessage
+from zen_claw.config.schema import ToolPolicyConfig
+from zen_claw.gateway import GatewayControlPlane
 from zen_claw.node.service import NodeService
-from zen_claw.security_context import issue_gateway_envelope
 
 
 class NodeTaskDispatcher:
@@ -66,6 +67,12 @@ class NodeTaskDispatcher:
             proxy_url=connector_proxy_url,
             approval_mode=connector_approval_mode,
             approval_token=connector_approval_token,
+        )
+        policy = ToolPolicyConfig(trusted_local_channels=list(trusted_local_channels or []))
+        self._gateway = GatewayControlPlane(
+            workspace_path=".",
+            tool_policy=policy,
+            agent_id="node_dispatcher",
         )
 
     async def start(self) -> None:
@@ -233,7 +240,7 @@ class NodeTaskDispatcher:
                 "error": "message.send requires connector sidecar configuration",
                 "error_code": "message_send_sidecar_not_configured",
             }
-        security_context = issue_gateway_envelope(
+        security_context = self._gateway.issue_envelope(
             trace_id=trace_id,
             channel="system",
             sender_id=f"node:{node_id}",
@@ -242,15 +249,15 @@ class NodeTaskDispatcher:
             workspace_id=str(payload.get("workspace_id") or f"node:{node_id}").strip(),
             agent_profile=str(payload.get("agent_profile") or "node_dispatcher").strip().lower(),
             role=str(payload.get("role") or "operator").strip().lower(),
-            trust_level="trusted_local",
             origin_surface="node_dispatcher",
-            policy_snapshot={
+            policy_snapshot_extra={
                 "source": "node_dispatcher",
                 "task_type": "message.send",
             },
             subject_type="node_dispatcher",
-            trust_tier="trusted_local",
             capability_grants=["connector.message.send"],
+            trust_level="trusted_local",
+            trust_tier="trusted_local",
         )
         request_payload = self._connector_sidecar.build_request_payload(
             target_url=f"channel://{channel}/{chat_id}",

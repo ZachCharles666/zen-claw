@@ -5,6 +5,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
@@ -164,6 +165,147 @@ def verify_audit_log(path: Path) -> dict[str, object]:
             prev_hash = observed_hash
             checked += 1
     return {"ok": True, "checked": checked, "error": "", "error_index": None}
+
+
+def verify_security_replay_consistency(path: Path) -> dict[str, object]:
+    """Verify same-trace request/policy consistency across approval and execution events."""
+    if not path.exists():
+        return {"ok": True, "checked": 0, "mismatches": [], "error": ""}
+
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    checked = 0
+    with open(path, "r", encoding="utf-8") as fh:
+        for idx, line in enumerate(fh):
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                continue
+            approval = row.get("approval")
+            approval = approval if isinstance(approval, dict) else {}
+            gateway_meta = row.get("gateway_meta")
+            gateway_meta = gateway_meta if isinstance(gateway_meta, dict) else {}
+            request_hash = str(
+                row.get("request_hash")
+                or approval.get("request_hash")
+                or gateway_meta.get("request_hash")
+                or ""
+            ).strip()
+            if not request_hash:
+                continue
+            trace_id = str(row.get("trace_id") or "").strip()
+            key = (trace_id, request_hash)
+            group = groups.setdefault(
+                key,
+                {
+                    "policy_snapshot_hashes": set(),
+                    "gateway_instances": set(),
+                    "event_types": [],
+                    "line_indexes": [],
+                    "decision_ids": set(),
+                },
+            )
+            policy_snapshot_hash = str(
+                row.get("policy_snapshot_hash")
+                or approval.get("policy_snapshot_hash")
+                or gateway_meta.get("policy_snapshot_hash")
+                or ""
+            ).strip()
+            if policy_snapshot_hash:
+                group["policy_snapshot_hashes"].add(policy_snapshot_hash)
+            gateway_instance = str(
+                row.get("gateway_instance") or gateway_meta.get("gateway_instance") or ""
+            ).strip()
+            if gateway_instance:
+                group["gateway_instances"].add(gateway_instance)
+            event_type = str(row.get("event_type") or "").strip()
+            if event_type:
+                group["event_types"].append(event_type)
+            decision_id = str(row.get("decision_id") or approval.get("approval_id") or "").strip()
+            if decision_id:
+                group["decision_ids"].add(decision_id)
+            group["line_indexes"].append(idx)
+            checked += 1
+
+    mismatches: list[dict[str, Any]] = []
+    for (trace_id, request_hash), group in groups.items():
+        policy_hashes = set(group["policy_snapshot_hashes"])
+        gateway_instances = set(group["gateway_instances"])
+        event_types = list(group["event_types"])
+        if len(policy_hashes) > 1:
+            mismatches.append(
+                {
+                    "trace_id": trace_id,
+                    "request_hash": request_hash,
+                    "error": "policy_snapshot_hash_mismatch",
+                    "event_types": event_types,
+                    "line_indexes": list(group["line_indexes"]),
+                }
+            )
+            continue
+        if len(gateway_instances) > 1:
+            mismatches.append(
+                {
+                    "trace_id": trace_id,
+                    "request_hash": request_hash,
+                    "error": "gateway_instance_mismatch",
+                    "event_types": event_types,
+                    "line_indexes": list(group["line_indexes"]),
+                }
+            )
+            continue
+        has_approval_requested = "approval.requested" in event_types
+        has_approval_decision = any(
+            event in {"approval.approved", "approval.denied", "approval.expired"} for event in event_types
+        )
+        has_execution = any(
+            event.startswith("tool.")
+            or event.startswith("message.outbound.")
+            or event in {"approval.execution_started", "approval.execution_finished"}
+            for event in event_types
+        )
+        if has_approval_decision and not has_approval_requested:
+            mismatches.append(
+                {
+                    "trace_id": trace_id,
+                    "request_hash": request_hash,
+                    "error": "approval_decision_without_request",
+                    "event_types": event_types,
+                    "line_indexes": list(group["line_indexes"]),
+                }
+            )
+            continue
+        if "approval.execution_started" in event_types and not (
+            has_approval_requested or "approval.approved" in event_types
+        ):
+            mismatches.append(
+                {
+                    "trace_id": trace_id,
+                    "request_hash": request_hash,
+                    "error": "execution_started_without_approval_chain",
+                    "event_types": event_types,
+                    "line_indexes": list(group["line_indexes"]),
+                }
+            )
+            continue
+        if (has_approval_decision or "approval.execution_started" in event_types) and not has_execution:
+            mismatches.append(
+                {
+                    "trace_id": trace_id,
+                    "request_hash": request_hash,
+                    "error": "approval_chain_missing_execution",
+                    "event_types": event_types,
+                    "line_indexes": list(group["line_indexes"]),
+                }
+            )
+    return {
+        "ok": len(mismatches) == 0,
+        "checked": checked,
+        "groups": len(groups),
+        "mismatches": mismatches,
+        "error": "" if not mismatches else str(mismatches[0].get("error") or "replay_mismatch"),
+    }
 
 
 def get_isolation_config() -> dict:

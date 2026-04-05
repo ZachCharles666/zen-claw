@@ -80,6 +80,8 @@ def _start_sidecar(
     env = os.environ.copy()
     env["BROWSER_SIDECAR_BIND"] = f"127.0.0.1:{sidecar_port}"
     env["BROWSER_SIDECAR_ALLOW_DOMAINS"] = allow_domains
+    env["ZEN_CLAW_ALLOW_INSECURE_SIDECAR"] = "1"
+    env.pop("ZEN_CLAW_HMAC_MASTER_KEY", None)
     if timeout_sec is not None:
         env["BROWSER_SIDECAR_TIMEOUT_SEC"] = str(timeout_sec)
     proc = subprocess.Popen(

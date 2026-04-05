@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-from zen_claw.observability.audit import AuditWorker
+from zen_claw.observability.audit import AuditWorker, verify_security_replay_consistency
 
 # ---------------------------------------------------------------------------
 # AuditWorker unit tests
@@ -122,3 +122,95 @@ def test_tool_execution_no_audit_without_trace_id(tmp_path):
 
     log_files = list((tmp_path / "audit_logs").glob("*.jsonl"))
     assert len(log_files) == 0
+
+
+def test_verify_security_replay_consistency_ok(tmp_path):
+    worker = AuditWorker(data_dir=tmp_path)
+    trace_id = "trace-replay-ok"
+    request_hash = "req-1"
+    policy_snapshot_hash = "policy-1"
+    gateway_instance = "gw-1"
+
+    asyncio.run(
+        worker.audit_turn(
+            trace_id,
+            {
+                "event_type": "approval.requested",
+                "approval": {
+                    "approval_id": "APR-1",
+                    "request_hash": request_hash,
+                    "policy_snapshot_hash": policy_snapshot_hash,
+                },
+                "gateway_instance": gateway_instance,
+            },
+        )
+    )
+    asyncio.run(
+        worker.audit_turn(
+            trace_id,
+            {
+                "event_type": "approval.approved",
+                "approval": {
+                    "approval_id": "APR-1",
+                    "request_hash": request_hash,
+                    "policy_snapshot_hash": policy_snapshot_hash,
+                },
+                "gateway_instance": gateway_instance,
+            },
+        )
+    )
+    asyncio.run(
+        worker.audit_turn(
+            trace_id,
+            {
+                "event_type": "tool.executed",
+                "request_hash": request_hash,
+                "policy_snapshot_hash": policy_snapshot_hash,
+                "gateway_instance": gateway_instance,
+                "tool": "exec",
+                "ok": True,
+            },
+        )
+    )
+    log_file = next((tmp_path / "audit_logs").glob("*.jsonl"))
+    result = verify_security_replay_consistency(log_file)
+    assert result["ok"] is True
+    assert result["groups"] == 1
+
+
+def test_verify_security_replay_consistency_detects_policy_mismatch(tmp_path):
+    worker = AuditWorker(data_dir=tmp_path)
+    trace_id = "trace-replay-bad"
+    request_hash = "req-2"
+
+    asyncio.run(
+        worker.audit_turn(
+            trace_id,
+            {
+                "event_type": "approval.requested",
+                "approval": {
+                    "approval_id": "APR-2",
+                    "request_hash": request_hash,
+                    "policy_snapshot_hash": "policy-a",
+                },
+                "gateway_instance": "gw-1",
+            },
+        )
+    )
+    asyncio.run(
+        worker.audit_turn(
+            trace_id,
+            {
+                "event_type": "tool.executed",
+                "request_hash": request_hash,
+                "policy_snapshot_hash": "policy-b",
+                "gateway_instance": "gw-1",
+                "tool": "exec",
+                "ok": True,
+            },
+        )
+    )
+    log_file = next((tmp_path / "audit_logs").glob("*.jsonl"))
+    result = verify_security_replay_consistency(log_file)
+    assert result["ok"] is False
+    assert result["error"] == "policy_snapshot_hash_mismatch"

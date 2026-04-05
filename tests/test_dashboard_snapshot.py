@@ -1424,6 +1424,7 @@ def test_build_dashboard_snapshot_includes_zero_trust_security_fields(
     assert snapshot["security"]["legacy_compat"] is False
     assert snapshot["security"]["local_fallback_enabled"] is False
     assert snapshot["security"]["trusted_local_channels"] == ["cli", "system"]
+    assert snapshot["security"]["local_identity_channels"] == ["cli", "system"]
     assert snapshot["security"]["dev_profile_total"] == 1
     assert snapshot["security"]["dev_profiles"] == ["dev_shell"]
     assert snapshot["security"]["connector_write_policy_configured"] is False
@@ -1459,6 +1460,8 @@ def test_build_dashboard_snapshot_includes_zero_trust_security_fields(
     ]
     assert snapshot["security"]["audit_chain_ok"] is True
     assert snapshot["security"]["audit_chain_checked"] == 0
+    assert snapshot["security"]["replay_consistency_ok"] is True
+    assert snapshot["security"]["replay_consistency_checked"] == 0
 
 
 def test_build_dashboard_snapshot_includes_connector_security_summary(

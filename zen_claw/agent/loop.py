@@ -89,14 +89,10 @@ from zen_claw.agent.tools.web import WebFetchTool, WebSearchTool
 from zen_claw.bus.events import InboundMessage, OutboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.errors import AgentMidTurnReloadException
+from zen_claw.gateway import GatewayControlPlane
 from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider, LLMResponse
-from zen_claw.security_context import (
-    is_trusted_local_surface,
-    issue_gateway_envelope,
-    normalize_workspace_id,
-    security_policy_snapshot,
-)
+from zen_claw.security_context import normalize_workspace_id
 from zen_claw.session.manager import SessionManager
 
 
@@ -258,6 +254,16 @@ class AgentLoop:
         self.tools.set_kill_switch(
             self.tool_policy_config.kill_switch_enabled,
             reason=self.tool_policy_config.kill_switch_reason,
+        )
+        self._gateway = GatewayControlPlane(
+            workspace_path=self.workspace,
+            tool_policy=self.tool_policy_config,
+            restrict_to_workspace=self.restrict_to_workspace,
+            profile_allowed_tools=list(self.profile_allowed_tools or []),
+            profile_denied_tools=list(self.profile_denied_tools or []),
+            agent_id=self.agent_id,
+            dev_profile=self.dev_profile,
+            trusted_local_only=self.trusted_local_only,
         )
         self.execution = ExecutionController(
             max_reflections=self.max_reflections,
@@ -446,7 +452,7 @@ class AgentLoop:
             connector_proxy_url=self.connector_config.proxy_url,
             connector_approval_mode=self.connector_config.sidecar_approval_mode,
             connector_approval_token=self.connector_config.sidecar_approval_token.get_secret_value(),
-            trusted_local_channels=list(self.tool_policy_config.trusted_local_channels),
+            trusted_local_channels=list(self.tool_policy_config.local_identity_channels),
         )
         self.tools.register(message_tool)
 
@@ -2264,12 +2270,7 @@ class AgentLoop:
         Enforce hard fail-closed identity checks before planning/execution.
         """
         channel_key = (channel or "").strip().lower()
-        trusted_local_channels = {
-            str(v).strip().lower()
-            for v in (self.tool_policy_config.trusted_local_channels or [])
-            if str(v).strip()
-        }
-        if is_trusted_local_surface(channel_key, trusted_local_channels):
+        if self._gateway.is_local_identity_channel(channel_key):
             return None
 
         meta = metadata or {}
@@ -2321,12 +2322,7 @@ class AgentLoop:
             meta.get("tenant_id") or meta.get("tid") or session_meta.get("tenant_id") or ""
         ).strip()
         role = str(meta.get("role") or session_meta.get("role") or "").strip().lower()
-        trusted_local_channels = {
-            str(v).strip().lower()
-            for v in (self.tool_policy_config.trusted_local_channels or [])
-            if str(v).strip()
-        }
-        return issue_gateway_envelope(
+        return self._gateway.issue_envelope(
             trace_id=str(trace_id or "").strip(),
             channel=str(channel or "").strip().lower(),
             sender_id=str(meta.get("sender_id") or sender_id or "").strip(),
@@ -2337,34 +2333,11 @@ class AgentLoop:
             ).strip(),
             agent_profile=str(meta.get("agent_profile") or self.agent_id or "").strip().lower(),
             role=role,
-            trust_level=(
-                "trusted_local"
-                if is_trusted_local_surface(channel, trusted_local_channels)
-                else "remote_untrusted"
-            ),
             origin_surface=str(meta.get("origin_surface") or channel or "").strip().lower(),
             channel_role=str(meta.get("channel_role") or "").strip().lower(),
-            workspace_path=str(self.workspace),
-            dev_profile=bool(self.dev_profile),
-            trusted_local_only=bool(self.trusted_local_only),
-            policy_snapshot=security_policy_snapshot(
-                production_hardening=bool(self.tool_policy_config.production_hardening),
-                legacy_compat=bool(self.tool_policy_config.legacy_compat),
-                restrict_to_workspace=bool(self.restrict_to_workspace),
-                profile_allowed_tools=list(self.profile_allowed_tools or []),
-                profile_denied_tools=list(self.profile_denied_tools or []),
-                extra={
-                    "trusted_local_only": bool(self.trusted_local_only),
-                    "dev_profile": bool(self.dev_profile),
-                },
-            ),
             subject_type="agent",
-            trust_tier=(
-                "trusted_local"
-                if is_trusted_local_surface(channel, trusted_local_channels)
-                else "remote_untrusted"
-            ),
             capability_grants=["*"],
+            policy_snapshot_extra={},
         )
 
     def _apply_intent_contract_policy(self, contract: IntentToolContract) -> None:

@@ -283,6 +283,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid config: %v", err)
 	}
+	if gatewayVerificationStrict() && strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
+		log.Fatalf("strict zero-trust mode requires ZEN_CLAW_HMAC_MASTER_KEY")
+	}
 
 	mux := http.NewServeMux()
 	sessions := newSessionManagerWithRetention(cfg.SessionRetentionSec)
@@ -318,6 +321,10 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+}
+
+func gatewayVerificationStrict() bool {
+	return strings.TrimSpace(os.Getenv("ZEN_CLAW_ALLOW_INSECURE_SIDECAR")) == ""
 }
 
 func loadConfig() (*serverConfig, error) {
@@ -414,7 +421,7 @@ func validateSessionEnvelope(
 	if strings.TrimSpace(gatewaySignature) == "" {
 		return "gateway_signature_required", "gateway signature is required"
 	}
-	if strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
+	if !gatewayVerificationStrict() && strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
 		return "", ""
 	}
 	canonical, err := canonicalGatewayPayload(payload)

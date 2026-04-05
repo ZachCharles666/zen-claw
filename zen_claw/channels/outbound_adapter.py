@@ -13,7 +13,8 @@ from zen_claw.agent.tools.connector_sidecar import ConnectorSidecarClient
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.config.schema import Config
-from zen_claw.security_context import issue_gateway_envelope, normalize_workspace_id
+from zen_claw.gateway import GatewayControlPlane
+from zen_claw.security_context import normalize_workspace_id
 
 
 class ChannelOutboundAdapter:
@@ -32,11 +33,16 @@ class ChannelOutboundAdapter:
         self._trusted_local_channels = {
             str(ch).strip().lower()
             for ch in (
-                list(config.tools.policy.trusted_local_channels or [])
+                list(config.tools.policy.local_identity_channels or [])
                 + list(self._DEFAULT_LOCAL_CHANNELS)
             )
             if str(ch).strip()
         }
+        self._gateway = GatewayControlPlane(
+            workspace_path=config.workspace_path,
+            tool_policy=config.tools.policy,
+            agent_id="channel_outbound_adapter",
+        )
 
     @property
     def trusted_local_channels(self) -> set[str]:
@@ -68,7 +74,7 @@ class ChannelOutboundAdapter:
             or normalize_workspace_id(self.config.workspace_path)
             or "default"
         ).strip()
-        return issue_gateway_envelope(
+        return self._gateway.issue_envelope(
             trace_id=trace_id,
             channel=str(meta.get("origin_channel") or "system").strip().lower() or "system",
             sender_id=str(meta.get("sender_id") or meta.get("route_user_id") or "").strip(),
@@ -77,13 +83,15 @@ class ChannelOutboundAdapter:
             workspace_id=workspace_id,
             agent_profile=agent_profile,
             role=str(meta.get("role") or meta.get("channel_role") or "operator").strip().lower(),
-            trust_level=str(meta.get("trust_level") or "trusted_local").strip().lower(),
             origin_surface=str(meta.get("origin_surface") or msg.channel or "system").strip().lower(),
             channel_role=str(meta.get("channel_role") or "").strip().lower(),
-            workspace_path=str(self.config.workspace_path),
-            dev_profile=bool(meta.get("dev_profile")),
-            trusted_local_only=bool(meta.get("trusted_local_only")),
-            policy_snapshot={
+            subject_type="channel",
+            capability_grants=["connector.file.upload", "connector.message.send"],
+            trust_level=str(meta.get("trust_level") or "trusted_local").strip().lower(),
+            trust_tier=str(meta.get("trust_tier") or meta.get("trust_level") or "trusted_local")
+            .strip()
+            .lower(),
+            policy_snapshot_extra={
                 "production_hardening": bool(self.config.tools.policy.production_hardening),
                 "legacy_compat": bool(self.config.tools.policy.legacy_compat),
                 "policy_snapshot_hash": str(

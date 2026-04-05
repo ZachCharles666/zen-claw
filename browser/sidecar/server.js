@@ -75,6 +75,10 @@ function getGatewayKey() {
   return createHash("sha256").update(envKey, "utf8").digest();
 }
 
+function isStrictGatewayVerification() {
+  return String(process.env.ZEN_CLAW_ALLOW_INSECURE_SIDECAR || "").trim() === "";
+}
+
 function isApproved(req, method, routePath, rawBody) {
   if (approvalSecret) {
     const traceId = String(req.headers["x-trace-id"] || "").trim();
@@ -133,8 +137,11 @@ function validateGatewayEnvelope(payload) {
     return { ok: false, code: "request_hash_missing", error: "gateway request hash is required" };
   }
   const gatewayKey = getGatewayKey();
-  if (!gatewayKey) {
+  if (!gatewayKey && !isStrictGatewayVerification()) {
     return { ok: true };
+  }
+  if (!gatewayKey) {
+    return { ok: false, code: "gateway_key_missing", error: "ZEN_CLAW_HMAC_MASTER_KEY is required in strict zero-trust mode" };
   }
   const canonical = canonicalGatewayEnvelope(req);
   const canonicalText = stableStringify(canonical);
@@ -157,6 +164,11 @@ const defaultDeny = parseDomainList(process.env.BROWSER_SIDECAR_DENY_DOMAINS);
 const defaultMaxSteps = Math.max(1, Number(process.env.BROWSER_SIDECAR_MAX_STEPS || "20"));
 const defaultTimeoutMs = Math.max(1000, Number(process.env.BROWSER_SIDECAR_TIMEOUT_SEC || "30") * 1000);
 const stateDir = String(process.env.BROWSER_SIDECAR_STATE_DIR || "/tmp/browser-sessions");
+
+if (isStrictGatewayVerification() && !getGatewayKey()) {
+  process.stderr.write("browser-sidecar: strict zero-trust mode requires ZEN_CLAW_HMAC_MASTER_KEY\n");
+  process.exit(1);
+}
 
 try {
   fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });

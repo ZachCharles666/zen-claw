@@ -1,6 +1,11 @@
 # Active Tasks
 
 ## Current Priorities
+- [x] Zero-Trust Agent Gateway further optimization:
+  - introduce a single gateway issuer service so runtime call sites stop composing subject/grant defaults ad hoc
+  - make sidecar gateway-envelope verification strict-by-default with an explicit insecure compatibility escape hatch
+  - add replay-consistency verification across approval/tool/outbound security audit events and surface it in dashboard/API
+  - narrow `trusted_local_channels` semantics toward local identity labeling in runtime and dashboard surfaces
 - [x] Zero-Trust Agent Gateway fail-closed convergence:
   - remove production `compat_unhardened` / `legacy_compat_direct` outbound bypasses
   - require explicit resource allowlists for high-risk capabilities under `production_hardening`

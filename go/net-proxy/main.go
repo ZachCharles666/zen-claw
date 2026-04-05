@@ -84,6 +84,9 @@ type auditPayload struct {
 
 func main() {
 	c := loadCfg()
+	if gatewayVerificationStrict() && strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
+		log.Fatal("net-proxy requires ZEN_CLAW_HMAC_MASTER_KEY in strict zero-trust mode")
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("ok"))
@@ -108,6 +111,10 @@ func main() {
 	}
 	log.Printf("net-proxy listening on %s", c.BindAddress)
 	log.Fatal(srv.ListenAndServe())
+}
+
+func gatewayVerificationStrict() bool {
+	return strings.TrimSpace(os.Getenv("ZEN_CLAW_ALLOW_INSECURE_SIDECAR")) == ""
 }
 
 func loadCfg() cfg {
@@ -687,7 +694,7 @@ func validateGatewayEnvelope(securityContext, policySnapshot, gatewayMeta map[st
 	if strings.TrimSpace(fmt.Sprintf("%v", gatewayMeta["request_hash"])) == "" {
 		return "request_hash_missing", "gateway request hash is required"
 	}
-	if strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
+	if !gatewayVerificationStrict() && strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
 		return "", ""
 	}
 	canonical, err := canonicalGatewayEnvelope(map[string]any{

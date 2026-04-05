@@ -22,9 +22,9 @@ from zen_claw.agent.tools.result import ToolResult
 from zen_claw.agent.tools.web import WebFetchTool, WebSearchTool
 from zen_claw.bus.events import InboundMessage
 from zen_claw.bus.queue import MessageBus
+from zen_claw.gateway import GatewayControlPlane
 from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider
-from zen_claw.security_context import issue_gateway_envelope
 
 SUBAGENT_HARD_DENY_TOOLS: set[str] = {
     "spawn",
@@ -84,6 +84,12 @@ class SubagentManager:
         self.exec_config = exec_config or ExecToolConfig()
         self.tool_policy_config = tool_policy_config or ToolPolicyConfig()
         self.restrict_to_workspace = restrict_to_workspace
+        self._gateway = GatewayControlPlane(
+            workspace_path=self.workspace.resolve(),
+            tool_policy=self.tool_policy_config,
+            restrict_to_workspace=self.restrict_to_workspace,
+            agent_id="subagent",
+        )
         from zen_claw.agent.skills import SkillsLoader
 
         self.skills = SkillsLoader(workspace)
@@ -186,7 +192,7 @@ class SubagentManager:
                 )
             )
             tools.set_request_context(
-                issue_gateway_envelope(
+                self._gateway.issue_envelope(
                     trace_id=trace_id,
                     channel=origin["channel"],
                     sender_id="subagent",
@@ -198,11 +204,9 @@ class SubagentManager:
                     channel_role="agent",
                     trust_level="isolated",
                     origin_surface="subagent",
-                    workspace_path=str(self.workspace.resolve()),
-                    policy_snapshot={
+                    policy_snapshot_extra={
                         "production_hardening": bool(self.tool_policy_config.production_hardening),
                     },
-                    dev_profile=False,
                     subject_type="subagent",
                     trust_tier="isolated",
                     capability_grants=["network.search", "network.fetch"],

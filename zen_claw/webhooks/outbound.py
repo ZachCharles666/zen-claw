@@ -18,7 +18,8 @@ from zen_claw.agent.tools.capability_policy import (
 )
 from zen_claw.agent.tools.connector_sidecar import ConnectorSidecarClient
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
-from zen_claw.security_context import issue_gateway_envelope
+from zen_claw.config.schema import ToolPolicyConfig
+from zen_claw.gateway import GatewayControlPlane
 
 # ── Audit record ──────────────────────────────────────────────────────────────
 
@@ -118,6 +119,11 @@ class WebhookDispatcher:
             timeout_sec=timeout_sec,
         )
         self._security_policy = security_policy
+        self._gateway = GatewayControlPlane(
+            workspace_path=data_dir,
+            tool_policy=security_policy if security_policy is not None else ToolPolicyConfig(),
+            agent_id="webhook_dispatcher",
+        )
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -191,7 +197,7 @@ class WebhookDispatcher:
         workspace_id: str,
         agent_profile: str,
     ) -> WebhookDispatchRecord:
-        identity = issue_gateway_envelope(
+        identity = self._gateway.issue_envelope(
             trace_id=trace_id,
             channel="system",
             sender_id=f"agent:{agent_id}",
@@ -202,7 +208,7 @@ class WebhookDispatcher:
             role="system",
             trust_level="trusted_local",
             origin_surface="webhook_dispatcher",
-            policy_snapshot={"intent": intent, "source": "webhook_dispatcher"},
+            policy_snapshot_extra={"intent": intent, "source": "webhook_dispatcher"},
             subject_type="webhook",
             trust_tier="trusted_local",
             capability_grants=["connector.webhook.trigger"],

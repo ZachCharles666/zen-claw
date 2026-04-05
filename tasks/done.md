@@ -106,6 +106,42 @@
 
 ## 2026-04-05
 
+### Zero-Trust Agent Gateway — Further Optimization Areas
+
+- What changed:
+  - introduced `GatewayControlPlane` as a single gateway-envelope issuer service and switched the main agent loop, subagent runtime, node dispatcher, outbound adapter, and webhook dispatcher onto that shared control-plane API for subject defaults, grants, and policy snapshots
+  - tightened sidecar verification defaults so `net-proxy`, `sec-execd`, and `browser-sidecar` now require `ZEN_CLAW_HMAC_MASTER_KEY` in strict mode and only allow insecure presence-only verification through an explicit `ZEN_CLAW_ALLOW_INSECURE_SIDECAR=1` compatibility escape hatch
+  - added cross-component replay verification in `zen_claw/observability/audit.py`, surfaced replay-consistency status in the dashboard security snapshot, and exposed `GET /api/v1/security/audit/replay-verify`
+  - narrowed `trusted_local_channels` semantics by adding `local_identity_channels` as the operator-facing meaning while keeping existing config compatibility; dashboard security UI now shows local identity channels and replay-consistency health
+  - extended regression coverage for replay verification, dashboard snapshot replay status, and browser sidecar integration under the explicit insecure test compatibility mode
+- Key files touched:
+  - `zen_claw/gateway/service.py`
+  - `zen_claw/agent/loop.py`
+  - `zen_claw/agent/subagent.py`
+  - `zen_claw/channels/outbound_adapter.py`
+  - `zen_claw/node/dispatcher.py`
+  - `zen_claw/webhooks/outbound.py`
+  - `zen_claw/config/schema.py`
+  - `zen_claw/observability/audit.py`
+  - `zen_claw/dashboard/server.py`
+  - `go/net-proxy/main.go`
+  - `go/sec-execd/main.go`
+  - `browser/sidecar/server.js`
+  - `tests/test_audit_logging.py`
+  - `tests/test_browser_sidecar_integration.py`
+  - `tests/test_dashboard_snapshot.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .`
+  - `All checks passed!`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q tests\test_audit_logging.py tests\test_dashboard_snapshot.py tests\test_browser_sidecar_integration.py tests\test_subagent_guardrail.py tests\test_node_dispatcher.py tests\test_webhook_outbound.py`
+  - `66 passed, 2 skipped in 15.32s`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
+  - `1520 passed, 41 skipped in 162.99s (0:02:42)`
+  - `gofmt -w go\sec-execd\main.go go\net-proxy\main.go`
+- Follow-up impact:
+  - strict sidecar authenticity is now the default runtime posture; test/dev flows that intentionally skip shared-key verification must opt in with the explicit insecure sidecar escape hatch
+  - replay consistency is now observable alongside audit-chain health, but a future pass should still align browser/net/exec canonicalization fully so integration tests can also run the strict cross-process verification path without the compatibility escape hatch
+
 ### Zero-Trust Agent Gateway — Next Optimization Pass
 
 - What changed:

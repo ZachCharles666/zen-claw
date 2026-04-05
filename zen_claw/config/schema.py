@@ -743,6 +743,11 @@ class ToolPolicyConfig(BaseModel):
         self.channel_policies = normalized
         return self
 
+    @property
+    def local_identity_channels(self) -> list[str]:
+        """Channels classified as local identity surfaces, not execution bypasses."""
+        return list(self.trusted_local_channels or [])
+
     @staticmethod
     def _normalize_channel_list(values: list[str]) -> list[str]:
         out: list[str] = []
