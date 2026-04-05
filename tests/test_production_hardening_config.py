@@ -15,7 +15,7 @@ def test_production_hardening_rejects_legacy_tool_fields_without_network() -> No
         Config.model_validate(convert_keys(raw))
 
 
-def test_production_hardening_rejects_subagent_sensitive_override() -> None:
+def test_production_hardening_ignores_legacy_subagent_sensitive_override() -> None:
     raw = {
         "tools": {
             "policy": {
@@ -25,8 +25,8 @@ def test_production_hardening_rejects_subagent_sensitive_override() -> None:
             "network": {},
         }
     }
-    with pytest.raises(ValueError):
-        Config.model_validate(convert_keys(raw))
+    cfg = Config.model_validate(convert_keys(raw))
+    assert cfg.tools.policy.subagent.allow == ["web_search", "web_fetch"]
 
 
 def test_production_hardening_disables_all_fallbacks() -> None:

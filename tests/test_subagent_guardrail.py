@@ -36,7 +36,7 @@ def test_subagent_hard_deny_overrides_allowlist() -> None:
     assert denied.scope == "subagent_hard_deny"
 
 
-def test_config_parses_allow_subagent_sensitive_tools() -> None:
+def test_config_ignores_legacy_allow_subagent_sensitive_tools_flag() -> None:
     raw = {
         "tools": {
             "policy": {
@@ -46,7 +46,7 @@ def test_config_parses_allow_subagent_sensitive_tools() -> None:
         }
     }
     config = Config.model_validate(convert_keys(raw))
-    assert config.tools.policy.allow_subagent_sensitive_tools is True
+    assert not hasattr(config.tools.policy, "allow_subagent_sensitive_tools")
 
 
 class _DummyProvider:
@@ -67,7 +67,6 @@ class _FakeSpawnManager:
 async def test_subagent_sensitive_override_config_no_longer_disables_hard_deny() -> None:
     policy = ToolPolicyConfig()
     policy.default_deny_tools = []
-    policy.allow_subagent_sensitive_tools = True
     policy.subagent.allow = ["*"]
     policy.subagent.deny = []
 

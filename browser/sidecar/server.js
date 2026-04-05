@@ -49,6 +49,32 @@ function safeJsonParse(text) {
   }
 }
 
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return "[" + value.map((item) => stableStringify(item)).join(",") + "]";
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return "{" + keys.map((key) => JSON.stringify(key) + ":" + stableStringify(value[key])).join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+
+function canonicalGatewayEnvelope(payload) {
+  const req = payload && typeof payload === "object" ? JSON.parse(JSON.stringify(payload)) : {};
+  delete req.gateway_signature;
+  if (req.gateway_meta && typeof req.gateway_meta === "object") {
+    delete req.gateway_meta.request_hash;
+  }
+  return req;
+}
+
+function getGatewayKey() {
+  const envKey = String(process.env.ZEN_CLAW_HMAC_MASTER_KEY || "").trim();
+  if (!envKey) return null;
+  return createHash("sha256").update(envKey, "utf8").digest();
+}
+
 function isApproved(req, method, routePath, rawBody) {
   if (approvalSecret) {
     const traceId = String(req.headers["x-trace-id"] || "").trim();
@@ -105,6 +131,20 @@ function validateGatewayEnvelope(payload) {
   }
   if (!String(gatewayMeta.request_hash || "").trim()) {
     return { ok: false, code: "request_hash_missing", error: "gateway request hash is required" };
+  }
+  const gatewayKey = getGatewayKey();
+  if (!gatewayKey) {
+    return { ok: true };
+  }
+  const canonical = canonicalGatewayEnvelope(req);
+  const canonicalText = stableStringify(canonical);
+  const canonicalHash = createHash("sha256").update(canonicalText, "utf8").digest("hex");
+  if (String(gatewayMeta.request_hash || "").trim().toLowerCase() !== canonicalHash) {
+    return { ok: false, code: "request_hash_mismatch", error: "gateway request hash does not match payload" };
+  }
+  const expectedSignature = createHmac("sha256", gatewayKey).update(canonicalText, "utf8").digest("hex");
+  if (expectedSignature !== gatewaySignature.toLowerCase()) {
+    return { ok: false, code: "gateway_signature_invalid", error: "gateway signature does not match payload" };
   }
   return { ok: true };
 }

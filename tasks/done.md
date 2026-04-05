@@ -106,6 +106,45 @@
 
 ## 2026-04-05
 
+### Zero-Trust Agent Gateway — Next Optimization Pass
+
+- What changed:
+  - introduced an explicit gateway-envelope issuer in `zen_claw/security_context.py` and switched ingress/security-context construction in the main agent loop, channel ingress, outbound adapter, subagent runtime, node dispatcher, and webhook dispatcher onto the same issuer API instead of ad-hoc `build/ensure` composition
+  - removed the remaining trusted-local execution bypasses for node outbound delivery and webhook dispatch so `message.send`, node-delivered replies, and outbound webhooks now fail closed without connector sidecar configuration
+  - tightened the gateway tool into a sidecar-only proxy by deleting local `.sandbox` path handling and builtin shell fallback semantics
+  - deleted stale `allow_subagent_sensitive_tools` runtime/config behavior, shrank the default subagent allowlist to sidecar-backed read-only web capabilities, and kept `trusted_local_channels` as identity labeling rather than a node/webhook execution bypass
+  - upgraded browser/net/exec sidecar codepaths toward verifiable gateway envelopes, with explicit request-hash/signature verification when a shared `ZEN_CLAW_HMAC_MASTER_KEY` is configured and presence-only fail-closed behavior otherwise
+  - refreshed regression coverage for sidecar-only node/webhook behavior, gateway-tool semantics, obsolete subagent override parsing, and the narrowed subagent policy defaults
+- Key files touched:
+  - `zen_claw/security_context.py`
+  - `zen_claw/agent/loop.py`
+  - `zen_claw/agent/subagent.py`
+  - `zen_claw/agent/tools/gateway.py`
+  - `zen_claw/channels/base.py`
+  - `zen_claw/channels/outbound_adapter.py`
+  - `zen_claw/node/dispatcher.py`
+  - `zen_claw/webhooks/outbound.py`
+  - `zen_claw/config/schema.py`
+  - `zen_claw/cli/commands.py`
+  - `zen_claw/dashboard/server.py`
+  - `go/sec-execd/main.go`
+  - `go/net-proxy/main.go`
+  - `browser/sidecar/server.js`
+  - `tests/test_node_dispatcher.py`
+  - `tests/test_webhook_outbound.py`
+  - `tests/test_sandbox_gateway.py`
+  - `tests/test_subagent_guardrail.py`
+  - `tests/test_tool_policy_config.py`
+- Verification evidence:
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m ruff check .`
+  - `All checks passed!`
+  - `gofmt -w go\sec-execd\main.go go\net-proxy\main.go`
+  - `E:\nano-claw-public\.venv\Scripts\python.exe -m pytest -q`
+  - `1518 passed, 41 skipped in 155.36s (0:02:35)`
+- Follow-up impact:
+  - cross-process gateway-envelope authenticity is now ready for strict verification when a shared `ZEN_CLAW_HMAC_MASTER_KEY` is provisioned across Python and sidecars; local test/dev flows without that shared secret remain fail-closed on missing envelope fields but skip full signature verification
+  - node/webhook outbound flows no longer model trusted-local as an execution bypass, so operators must provision connector sidecar configuration even for previously local-looking delivery paths
+
 ### Zero-Trust Agent Gateway — Final Convergence
 
 - What changed:

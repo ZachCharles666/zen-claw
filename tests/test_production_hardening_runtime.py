@@ -70,4 +70,4 @@ def test_production_hardening_enforced_in_agent_runtime_tool_instances(
     assert isinstance(fetch_tool, WebFetchTool)
     assert fetch_tool.proxy_fallback_to_local is False
 
-    assert cfg.tools.policy.allow_subagent_sensitive_tools is False
+    assert cfg.tools.policy.subagent.allow == ["web_search", "web_fetch"]

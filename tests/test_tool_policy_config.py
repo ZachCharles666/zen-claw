@@ -17,7 +17,7 @@ def test_tools_policy_default_values() -> None:
     assert config.tools.policy.channel_policies == {}
     assert config.tools.policy.agent.allow == ["*"]
     assert config.tools.policy.subagent.allow is not None
-    assert "read_file" in config.tools.policy.subagent.allow
+    assert config.tools.policy.subagent.allow == ["web_search", "web_fetch"]
     assert config.tools.policy.production_hardening is True
     assert config.tools.policy.legacy_compat is False
 

@@ -92,9 +92,8 @@ from zen_claw.errors import AgentMidTurnReloadException
 from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider, LLMResponse
 from zen_claw.security_context import (
-    build_security_context,
-    ensure_security_envelope,
     is_trusted_local_surface,
+    issue_gateway_envelope,
     normalize_workspace_id,
     security_policy_snapshot,
 )
@@ -334,7 +333,7 @@ class AgentLoop:
                 sidecar_healthcheck=self.exec_config.sidecar_healthcheck,
             )
             self.tools.register(
-                GatewayTool(backend_tool=gateway_backend, workspace=str(self.workspace))
+                GatewayTool(backend_tool=gateway_backend)
             )
         else:
             self.tools.register(GatewayToolLocalStub())
@@ -2327,7 +2326,7 @@ class AgentLoop:
             for v in (self.tool_policy_config.trusted_local_channels or [])
             if str(v).strip()
         }
-        base_context = build_security_context(
+        return issue_gateway_envelope(
             trace_id=str(trace_id or "").strip(),
             channel=str(channel or "").strip().lower(),
             sender_id=str(meta.get("sender_id") or sender_id or "").strip(),
@@ -2359,9 +2358,6 @@ class AgentLoop:
                     "dev_profile": bool(self.dev_profile),
                 },
             ),
-        )
-        return ensure_security_envelope(
-            base_context,
             subject_type="agent",
             trust_tier=(
                 "trusted_local"

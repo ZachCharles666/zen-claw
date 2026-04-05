@@ -1,9 +1,4 @@
-"""Outbound webhook dispatcher — B3.
-
-Dispatches POST requests to configured URLs when an agent task completes.
-Signs each request with HMAC-SHA256; retries up to 3 times on failure.
-Appends audit records to {data_dir}/webhook_dispatch.log.jsonl.
-"""
+"""Outbound webhook dispatcher — B3."""
 
 from __future__ import annotations
 
@@ -11,8 +6,6 @@ import hashlib
 import hmac
 import json
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +18,7 @@ from zen_claw.agent.tools.capability_policy import (
 )
 from zen_claw.agent.tools.connector_sidecar import ConnectorSidecarClient
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
+from zen_claw.security_context import issue_gateway_envelope
 
 # ── Audit record ──────────────────────────────────────────────────────────────
 
@@ -155,59 +149,34 @@ class WebhookDispatcher:
         if extra:
             payload.update(extra)
 
-        if self._connector_sidecar.proxy_url:
-            return self._dispatch_via_sidecar(
+        if not self._connector_sidecar.proxy_url:
+            record = WebhookDispatchRecord(
+                at_ms=int(time.time() * 1000),
                 url=url,
-                payload=payload,
                 agent_id=agent_id,
                 session_id=session_id,
                 intent=intent,
+                status_code=0,
+                attempts=1,
+                success=False,
+                error="webhook dispatch requires connector sidecar configuration",
                 trace_id=trace_id,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                agent_profile=agent_profile,
+                error_code="webhook_sidecar_not_configured",
             )
+            self._append_log(record)
+            return record
 
-        body = json.dumps(payload, ensure_ascii=False).encode()
-        status_code = 0
-        error_msg = ""
-        attempts = 0
-
-        for attempt in range(1 + self._max_retries):
-            attempts = attempt + 1
-            try:
-                req = urllib.request.Request(
-                    url,
-                    data=body,
-                    headers=self._build_headers(body),
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=self._timeout_sec) as resp:
-                    status_code = resp.status
-                    error_msg = ""
-                    break  # success
-            except urllib.error.HTTPError as exc:
-                status_code = exc.code
-                error_msg = str(exc)
-            except Exception as exc:  # noqa: BLE001
-                status_code = 0
-                error_msg = str(exc)
-
-        success = 200 <= status_code < 300
-        record = WebhookDispatchRecord(
-            at_ms=int(time.time() * 1000),
+        return self._dispatch_via_sidecar(
             url=url,
+            payload=payload,
             agent_id=agent_id,
             session_id=session_id,
             intent=intent,
-            status_code=status_code,
-            attempts=attempts,
-            success=success,
-            error=error_msg,
             trace_id=trace_id,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            agent_profile=agent_profile,
         )
-        self._append_log(record)
-        return record
 
     def _dispatch_via_sidecar(
         self,
@@ -222,16 +191,22 @@ class WebhookDispatcher:
         workspace_id: str,
         agent_profile: str,
     ) -> WebhookDispatchRecord:
-        identity = {
-            "channel": "system",
-            "sender_id": f"agent:{agent_id}",
-            "chat_id": session_id,
-            "tenant_id": str(tenant_id or "").strip().lower(),
-            "workspace_id": str(workspace_id or "").strip(),
-            "agent_profile": str(agent_profile or "").strip().lower(),
-            "role": "system",
-            "policy_snapshot": {"intent": intent, "source": "webhook_dispatcher"},
-        }
+        identity = issue_gateway_envelope(
+            trace_id=trace_id,
+            channel="system",
+            sender_id=f"agent:{agent_id}",
+            chat_id=session_id,
+            tenant_id=str(tenant_id or "").strip().lower() or "default",
+            workspace_id=str(workspace_id or "").strip(),
+            agent_profile=str(agent_profile or "").strip().lower() or "default",
+            role="system",
+            trust_level="trusted_local",
+            origin_surface="webhook_dispatcher",
+            policy_snapshot={"intent": intent, "source": "webhook_dispatcher"},
+            subject_type="webhook",
+            trust_tier="trusted_local",
+            capability_grants=["connector.webhook.trigger"],
+        )
         if self._security_policy is not None:
             evaluator = CapabilityPolicyEvaluator(self._security_policy, identity)
             decision = evaluator.evaluate(

@@ -1,57 +1,48 @@
-import os
-
 import pytest
 
 from zen_claw.agent.tools.gateway import GatewayTool
-from zen_claw.agent.tools.result import ToolErrorKind
 from zen_claw.agent.tools.shell import ExecTool
 
 
 @pytest.fixture
 def mock_exec_tool():
-    """Returns a basic local ExecTool for testing."""
-    return ExecTool(mode="local")
+    """Returns a basic sidecar ExecTool for gateway testing."""
+    return ExecTool(mode="sidecar", sidecar_url="http://127.0.0.1:4488/v1/exec")
 
 
 @pytest.mark.asyncio
-async def test_gateway_directory_isolation(tmp_path, mock_exec_tool):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    gateway = GatewayTool(backend_tool=mock_exec_tool, workspace=str(workspace))
+async def test_gateway_routes_command_to_sidecar_backend(tmp_path, mock_exec_tool):
+    called: dict[str, object] = {}
 
-    # Executing normally within sandbox is allowed
-    # Note: gateway automatically resolves working_dir to .sandbox if none provided
-    result = await gateway.execute("echo test")
+    async def _fake_execute(**kwargs):  # type: ignore[no-untyped-def]
+        called.update(kwargs)
+        from zen_claw.agent.tools.result import ToolResult
+
+        return ToolResult.success("ok")
+
+    mock_exec_tool.execute = _fake_execute  # type: ignore[method-assign]
+    gateway = GatewayTool(backend_tool=mock_exec_tool)
+    result = await gateway.execute("echo test", working_dir=str(tmp_path))
     assert result.ok
-
-    # Executing outside the sandbox should be blocked
-    outside_dir = tmp_path / "outside"
-    outside_dir.mkdir()
-
-    result = await gateway.execute("echo test", working_dir=str(outside_dir))
-    assert not result.ok
-    assert result.error.kind == ToolErrorKind.PERMISSION
-    assert result.error.code == "gateway_path_traversal"
+    assert called["command"] == "echo test"
+    assert called["working_dir"] == str(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_gateway_environment_sanitization(tmp_path, mock_exec_tool):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    gateway = GatewayTool(backend_tool=mock_exec_tool, workspace=str(workspace))
+async def test_gateway_no_longer_uses_local_builtin_fallback(mock_exec_tool):
+    async def _fake_execute(**kwargs):  # type: ignore[no-untyped-def]
+        from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 
-    # Set a sensitive env var
-    # Test checking environment in linux/unix (printenv or env), but on Windows it's 'set'
-    os.environ["SUPER_SECRET_KEY"] = "hidden_value123"
+        del kwargs
+        return ToolResult.failure(
+            ToolErrorKind.RUNTIME,
+            "exec failed",
+            code="exec_failed",
+        )
 
-    # We execute a shell command to print env vars
-    # In Windows pwsh/cmd it would be `set`
+    mock_exec_tool.execute = _fake_execute  # type: ignore[method-assign]
+    gateway = GatewayTool(backend_tool=mock_exec_tool)
     result = await gateway.execute("set")
-
-    assert result.ok
-    # The output should NOT contain SUPER_SECRET_KEY
-    assert "SUPER_SECRET_KEY" not in result.content
-    assert "hidden_value123" not in result.content
-
-    # But it should contain safe vars like PATH
-    assert "PATH=" in result.content or "Path=" in result.content
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error.code == "exec_failed"

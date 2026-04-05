@@ -394,8 +394,10 @@ func sessionOwnerLabel(sec securityContextPayload) string {
 func validateSessionEnvelope(
 	traceID string,
 	sec securityContextPayload,
+	policySnapshot map[string]any,
 	gateway gatewayMetaPayload,
 	gatewaySignature string,
+	payload any,
 ) (string, string) {
 	if strings.TrimSpace(traceID) == "" {
 		return "trace_required", "trace_id is required"
@@ -412,7 +414,71 @@ func validateSessionEnvelope(
 	if strings.TrimSpace(gatewaySignature) == "" {
 		return "gateway_signature_required", "gateway signature is required"
 	}
+	if strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
+		return "", ""
+	}
+	canonical, err := canonicalGatewayPayload(payload)
+	if err != nil {
+		return "gateway_payload_invalid", "failed to canonicalize gateway payload"
+	}
+	canonicalHash := sha256.Sum256(canonical)
+	if !strings.EqualFold(strings.TrimSpace(gateway.RequestHash), fmt.Sprintf("%x", canonicalHash[:])) {
+		return "request_hash_mismatch", "gateway request hash does not match payload"
+	}
+	if !verifyGatewayPayloadSignature(canonical, gatewaySignature) {
+		return "gateway_signature_invalid", "gateway signature does not match payload"
+	}
+	if strings.TrimSpace(stableMapHash(policySnapshot)) != "" && !strings.EqualFold(strings.TrimSpace(gateway.PolicySnapshotHash), stableMapHash(policySnapshot)) {
+		return "policy_snapshot_hash_mismatch", "policy snapshot hash does not match payload"
+	}
 	return "", ""
+}
+
+func stableMapHash(payload map[string]any) string {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func canonicalGatewayPayload(payload any) ([]byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	var clone map[string]any
+	if err := json.Unmarshal(raw, &clone); err != nil {
+		return nil, err
+	}
+	delete(clone, "gateway_signature")
+	if gatewayMeta, ok := clone["gateway_meta"].(map[string]any); ok {
+		metaClone := map[string]any{}
+		for key, value := range gatewayMeta {
+			if key == "request_hash" {
+				continue
+			}
+			metaClone[key] = value
+		}
+		clone["gateway_meta"] = metaClone
+	}
+	return json.Marshal(clone)
+}
+
+func gatewayPayloadMasterKey() []byte {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY"))))
+	return sum[:]
+}
+
+func verifyGatewayPayloadSignature(canonical []byte, signature string) bool {
+	mac := hmac.New(sha256.New, gatewayPayloadMasterKey())
+	_, _ = mac.Write(canonical)
+	expected := fmt.Sprintf("%x", mac.Sum(nil))
+	return subtle.ConstantTimeCompare([]byte(strings.ToLower(strings.TrimSpace(signature))), []byte(expected)) == 1
 }
 
 func enforceSessionOwner(rec *sessionRecord, sec securityContextPayload) (string, string) {
@@ -491,7 +557,7 @@ func handleExec(w http.ResponseWriter, r *http.Request, cfg *serverConfig) {
 		})
 		return
 	}
-	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 		logAudit(auditPayload{
 			Event:       "exec.request.denied",
 			TraceID:     traceID,
@@ -667,7 +733,7 @@ func handleSessionStart(w http.ResponseWriter, r *http.Request, cfg *serverConfi
 		})
 		return
 	}
-	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 		logAudit(auditPayload{
 			Event:              "exec.session.denied",
 			TraceID:            traceID,
@@ -798,7 +864,7 @@ func handleSessionList(w http.ResponseWriter, r *http.Request, cfg *serverConfig
 			return
 		}
 	}
-	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+	if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 		logAudit(auditPayload{
 			Event:              "exec.session.list.denied",
 			TraceID:            traceID,
@@ -890,7 +956,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 				return
 			}
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionStartResponse{
 				OK:           false,
 				ErrorCode:    code,
@@ -963,7 +1029,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 				return
 			}
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionKillResponse{
 				OK:           false,
 				SessionID:    sessionID,
@@ -1055,7 +1121,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionWriteResponse{
 				OK:           false,
 				SessionID:    sessionID,
@@ -1165,7 +1231,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionSignalResponse{
 				OK:           false,
 				SessionID:    sessionID,
@@ -1282,7 +1348,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 			})
 			return
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionResizeResponse{
 				OK:           false,
 				SessionID:    sessionID,
@@ -1394,7 +1460,7 @@ func handleSessionRoutes(w http.ResponseWriter, r *http.Request, cfg *serverConf
 				return
 			}
 		}
-		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+		if code, msg := validateSessionEnvelope(traceID, req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature, req); code != "" {
 			writeJSONAny(w, http.StatusForbidden, sessionReadResponse{
 				OK:           false,
 				SessionID:    sessionID,

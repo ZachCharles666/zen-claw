@@ -24,7 +24,7 @@ from zen_claw.bus.events import InboundMessage
 from zen_claw.bus.queue import MessageBus
 from zen_claw.observability.trace import TraceContext
 from zen_claw.providers.base import LLMProvider
-from zen_claw.security_context import ensure_security_envelope
+from zen_claw.security_context import issue_gateway_envelope
 
 SUBAGENT_HARD_DENY_TOOLS: set[str] = {
     "spawn",
@@ -186,28 +186,23 @@ class SubagentManager:
                 )
             )
             tools.set_request_context(
-                ensure_security_envelope(
-                    {
-                        "trace_id": trace_id,
-                        "channel": origin["channel"],
-                        "sender_id": "subagent",
-                        "chat_id": origin["chat_id"],
-                        "tenant_id": "default",
-                        "workspace_id": str(self.workspace.resolve()),
-                        "agent_profile": "subagent",
-                        "role": "subagent",
-                        "channel_role": "agent",
-                        "trust_level": "isolated",
-                        "origin_surface": "subagent",
-                        "workspace_path": str(self.workspace.resolve()),
-                        "policy_snapshot": {
-                            "production_hardening": bool(
-                                self.tool_policy_config.production_hardening
-                            ),
-                            "allow_subagent_sensitive_tools": False,
-                        },
-                        "dev_profile": False,
+                issue_gateway_envelope(
+                    trace_id=trace_id,
+                    channel=origin["channel"],
+                    sender_id="subagent",
+                    chat_id=origin["chat_id"],
+                    tenant_id="default",
+                    workspace_id=str(self.workspace.resolve()),
+                    agent_profile="subagent",
+                    role="subagent",
+                    channel_role="agent",
+                    trust_level="isolated",
+                    origin_surface="subagent",
+                    workspace_path=str(self.workspace.resolve()),
+                    policy_snapshot={
+                        "production_hardening": bool(self.tool_policy_config.production_hardening),
                     },
+                    dev_profile=False,
                     subject_type="subagent",
                     trust_tier="isolated",
                     capability_grants=["network.search", "network.fetch"],

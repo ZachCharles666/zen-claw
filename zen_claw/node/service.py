@@ -629,7 +629,6 @@ class NodeService:
         t = str(task_type or "").strip().lower()
 
         forbidden_override_keys = {
-            "allow_subagent_sensitive_tools",
             "kill_switch_enabled",
             "kill_switch_reason",
             "production_hardening",

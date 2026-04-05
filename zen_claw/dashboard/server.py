@@ -1966,7 +1966,7 @@ def build_dashboard_snapshot(config: "Config") -> dict[str, Any]:
         },
         "security": {
             "production_hardening": bool(config.tools.policy.production_hardening),
-            "subagent_hard_guardrail": not bool(config.tools.policy.allow_subagent_sensitive_tools),
+            "subagent_hard_guardrail": True,
             "skill_permissions_mode": str(config.agents.defaults.skill_permissions_mode),
             "legacy_compat": bool(config.tools.policy.legacy_compat),
             "local_fallback_enabled": bool(

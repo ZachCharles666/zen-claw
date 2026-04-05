@@ -15,8 +15,8 @@ from zen_claw.config.loader import get_data_dir
 from zen_claw.observability.audit import AuditWorker
 from zen_claw.observability.trace import TraceContext
 from zen_claw.security_context import (
-    build_security_context,
     is_trusted_local_surface,
+    issue_gateway_envelope,
     security_policy_snapshot,
 )
 
@@ -158,7 +158,7 @@ class BaseChannel(ABC):
             for ch in getattr(self._effective_security_policy(), "trusted_local_channels", []) or []
             if str(ch).strip()
         }
-        security_context = build_security_context(
+        security_context = issue_gateway_envelope(
             trace_id=trace_id,
             channel=self.name,
             sender_id=str(sender_id),

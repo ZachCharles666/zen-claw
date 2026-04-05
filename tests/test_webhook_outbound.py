@@ -72,141 +72,30 @@ def test_record_failed_default():
     assert r.error == "timeout"
 
 
-# ── dispatcher: successful dispatch ──────────────────────────────────────────
+# ── dispatcher: fail-closed without sidecar ──────────────────────────────────
 
-def test_dispatch_success(tmp_path: Path):
-    srv = _FakeServer(status=200)
-    url = srv.start()
-    try:
-        dispatcher = WebhookDispatcher(tmp_path)
-        record = dispatcher.dispatch(url, agent_id="bot", session_id="s1", intent="greet")
-        assert record.success is True
-        assert record.status_code == 200
-        assert record.attempts == 1
-        assert len(srv.received) == 1
-        assert srv.received[0]["body"]["agent_id"] == "bot"
-    finally:
-        srv.stop()
+def test_dispatch_requires_sidecar_configuration(tmp_path: Path):
+    dispatcher = WebhookDispatcher(tmp_path)
+    record = dispatcher.dispatch("https://hooks.example.test/run", agent_id="bot", session_id="s1", intent="greet")
+    assert record.success is False
+    assert record.status_code == 0
+    assert record.error_code == "webhook_sidecar_not_configured"
+    assert "sidecar configuration" in record.error
 
 
 def test_dispatch_writes_audit_log(tmp_path: Path):
-    srv = _FakeServer(status=200)
-    url = srv.start()
-    try:
-        dispatcher = WebhookDispatcher(tmp_path)
-        dispatcher.dispatch(url, agent_id="bot2")
-        log_path = tmp_path / WebhookDispatcher.LOG_FILENAME
-        assert log_path.exists()
-        lines = log_path.read_text().strip().splitlines()
-        assert len(lines) == 1
-        entry = json.loads(lines[0])
-        assert entry["success"] is True
-    finally:
-        srv.stop()
-
-
-# ── dispatcher: retry on failure ─────────────────────────────────────────────
-
-def test_dispatch_retries_on_server_error(tmp_path: Path):
-    srv = _FakeServer(status=500)
-    url = srv.start()
-    try:
-        dispatcher = WebhookDispatcher(tmp_path, max_retries=2)
-        record = dispatcher.dispatch(url, agent_id="bot")
-        assert record.attempts == 3          # 1 + 2 retries
-        assert record.success is False
-        assert record.status_code == 500
-    finally:
-        srv.stop()
-
-
-def test_dispatch_no_retry_on_success(tmp_path: Path):
-    srv = _FakeServer(status=201)
-    url = srv.start()
-    try:
-        dispatcher = WebhookDispatcher(tmp_path, max_retries=2)
-        record = dispatcher.dispatch(url, agent_id="bot")
-        assert record.attempts == 1
-        assert record.success is True
-    finally:
-        srv.stop()
-
-
-def test_dispatch_network_error_records_failure(tmp_path: Path):
-    dispatcher = WebhookDispatcher(tmp_path, max_retries=0, timeout_sec=0.1)
-    record = dispatcher.dispatch(
-        "http://127.0.0.1:1",  # nothing listening → connection refused
-        agent_id="bot",
-    )
-    assert record.success is False
-    assert record.status_code == 0
-    assert record.attempts == 1
-
-
-# ── HMAC signing ─────────────────────────────────────────────────────────────
-
-def test_dispatch_includes_signature_header(tmp_path: Path):
-    srv = _FakeServer(status=200)
-    url = srv.start()
-    try:
-        dispatcher = WebhookDispatcher(tmp_path, secret="mysecret")
-        dispatcher.dispatch(url, agent_id="bot")
-        headers = srv.received[0]["headers"]
-        assert "x-webhook-signature" in {k.lower() for k in headers}
-    finally:
-        srv.stop()
-
-
-def test_dispatch_signature_is_valid_hmac(tmp_path: Path):
-    srv = _FakeServer(status=200)
-    url = srv.start()
-    try:
-        secret = "topsecret"
-        dispatcher = WebhookDispatcher(tmp_path, secret=secret)
-        dispatcher.dispatch(url, agent_id="bot")
-        req = srv.received[0]
-        raw_body = json.dumps(req["body"], ensure_ascii=False).encode()
-        sig_header = next(
-            v for k, v in req["headers"].items()
-            if k.lower() == "x-webhook-signature"
-        )
-        assert WebhookDispatcher.verify_signature(raw_body, sig_header, secret)
-    finally:
-        srv.stop()
-
-
-def test_verify_signature_wrong_secret(tmp_path: Path):
-    body = b'{"test": 1}'
-    sig = "sha256=" + hmac.new(b"correct", body, hashlib.sha256).hexdigest()
-    assert WebhookDispatcher.verify_signature(body, sig, "wrong") is False
-
-
-def test_verify_signature_bad_format():
-    assert WebhookDispatcher.verify_signature(b"x", "no-prefix", "s") is False
-
-
-# ── read_log ─────────────────────────────────────────────────────────────────
-
-def test_read_log_empty(tmp_path: Path):
     dispatcher = WebhookDispatcher(tmp_path)
-    assert dispatcher.read_log() == []
+    dispatcher.dispatch("https://hooks.example.test/run", agent_id="bot2")
+    log_path = tmp_path / WebhookDispatcher.LOG_FILENAME
+    assert log_path.exists()
+    lines = log_path.read_text().strip().splitlines()
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["success"] is False
+    assert entry["error_code"] == "webhook_sidecar_not_configured"
 
 
-def test_read_log_returns_records(tmp_path: Path):
-    srv = _FakeServer(status=200)
-    url = srv.start()
-    try:
-        dispatcher = WebhookDispatcher(tmp_path)
-        dispatcher.dispatch(url, agent_id="a1", intent="foo")
-        dispatcher.dispatch(url, agent_id="a2", intent="bar")
-        records = dispatcher.read_log()
-        assert len(records) == 2
-        intents = {r.intent for r in records}
-        assert "foo" in intents
-        assert "bar" in intents
-    finally:
-        srv.stop()
-
+# ── dispatcher: sidecar execution ─────────────────────────────────────────────
 
 def test_dispatch_via_sidecar_records_sidecar_target(monkeypatch, tmp_path: Path):
     captured: dict[str, object] = {}
@@ -244,3 +133,94 @@ def test_dispatch_via_sidecar_records_sidecar_target(monkeypatch, tmp_path: Path
     assert record.sidecar_target == "http://127.0.0.1:4499/v1/fetch"
     assert record.trace_id == "trace-1"
     assert captured["url"] == "http://127.0.0.1:4499/v1/fetch"
+    assert captured["content"] is None or captured["json"] is not None
+
+
+# ── HMAC signing ─────────────────────────────────────────────────────────────
+
+def test_dispatch_via_sidecar_includes_signature_header(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "status": 202, "body": {"queued": True}}
+
+    def _fake_post(url, headers=None, content=None, json=None, timeout=None):  # noqa: ANN001
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["content"] = content
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr("zen_claw.webhooks.outbound.httpx.post", _fake_post)
+    dispatcher = WebhookDispatcher(
+        tmp_path,
+        secret="mysecret",
+        connector_proxy_url="http://127.0.0.1:4499/v1/fetch",
+        connector_approval_token="token-1",
+    )
+    dispatcher.dispatch("https://hooks.example.test/run", agent_id="bot")
+    request_payload = dict(captured["json"] or {})
+    outbound_headers = dict(request_payload["headers"])
+    assert "X-Webhook-Signature" in outbound_headers
+
+
+def test_dispatch_via_sidecar_signature_is_valid_hmac(monkeypatch, tmp_path: Path):
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "status": 202, "body": {"queued": True}}
+
+    def _fake_post(url, headers=None, content=None, json=None, timeout=None):  # noqa: ANN001
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr("zen_claw.webhooks.outbound.httpx.post", _fake_post)
+    secret = "topsecret"
+    dispatcher = WebhookDispatcher(
+        tmp_path,
+        secret=secret,
+        connector_proxy_url="http://127.0.0.1:4499/v1/fetch",
+        connector_approval_token="token-1",
+    )
+    dispatcher.dispatch("https://hooks.example.test/run", agent_id="bot")
+    req = dict(captured["json"] or {})
+    raw_body = str(req["body"]).encode()
+    sig_header = dict(req["headers"])["X-Webhook-Signature"]
+    assert WebhookDispatcher.verify_signature(raw_body, sig_header, secret)
+
+
+def test_verify_signature_wrong_secret(tmp_path: Path):
+    body = b'{"test": 1}'
+    sig = "sha256=" + hmac.new(b"correct", body, hashlib.sha256).hexdigest()
+    assert WebhookDispatcher.verify_signature(body, sig, "wrong") is False
+
+
+def test_verify_signature_bad_format():
+    assert WebhookDispatcher.verify_signature(b"x", "no-prefix", "s") is False
+
+
+# ── read_log ─────────────────────────────────────────────────────────────────
+
+def test_read_log_empty(tmp_path: Path):
+    dispatcher = WebhookDispatcher(tmp_path)
+    assert dispatcher.read_log() == []
+
+
+def test_read_log_returns_records(tmp_path: Path):
+    dispatcher = WebhookDispatcher(tmp_path)
+    dispatcher.dispatch("https://hooks.example.test/run-a", agent_id="a1", intent="foo")
+    dispatcher.dispatch("https://hooks.example.test/run-b", agent_id="a2", intent="bar")
+    records = dispatcher.read_log()
+    assert len(records) == 2
+    intents = {r.intent for r in records}
+    assert "foo" in intents
+    assert "bar" in intents

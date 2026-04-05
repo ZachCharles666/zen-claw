@@ -12,6 +12,7 @@ from loguru import logger
 from zen_claw.agent.tools.connector_sidecar import ConnectorSidecarClient
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.node.service import NodeService
+from zen_claw.security_context import issue_gateway_envelope
 
 
 class NodeTaskDispatcher:
@@ -61,11 +62,6 @@ class NodeTaskDispatcher:
         self._chaos_attempts_by_channel: dict[str, int] = {}
         self._running = False
         self._task: asyncio.Task | None = None
-        self._trusted_local_channels = {
-            str(ch).strip().lower()
-            for ch in (trusted_local_channels or ["cli", "system"])
-            if str(ch).strip()
-        }
         self._connector_sidecar = ConnectorSidecarClient(
             proxy_url=connector_proxy_url,
             approval_mode=connector_approval_mode,
@@ -144,19 +140,22 @@ class NodeTaskDispatcher:
                     reply_channel = str(payload.get("reply_channel") or channel).strip()
                     reply_chat = str(payload.get("reply_chat_id") or chat_id).strip()
                     if reply_channel and reply_chat:
-                        await self._send_with_channel_circuit(
-                            OutboundMessage(
-                                channel=reply_channel,
-                                chat_id=reply_chat,
-                                content=response or "",
-                                metadata={
-                                    "source": "node_dispatcher",
-                                    "node_id": node_id,
-                                    "task_id": task_id,
-                                    "trace_id": trace_id,
-                                },
-                            ),
+                        result = await self._dispatch_outbound_via_sidecar(
+                            task_id=task_id,
+                            node_id=node_id,
+                            trace_id=trace_id,
+                            payload={
+                                "channel": reply_channel,
+                                "chat_id": reply_chat,
+                                "content": response or "",
+                                "tenant_id": payload.get("tenant_id"),
+                                "workspace_id": payload.get("workspace_id"),
+                                "agent_profile": payload.get("agent_profile"),
+                                "role": payload.get("role"),
+                            },
                         )
+                        if result is not None and not result.get("ok", False):
+                            raise RuntimeError(str(result.get("error") or "reply send failed"))
                 self.node_service.complete_task_system(
                     task_id=task_id,
                     ok=True,
@@ -204,6 +203,21 @@ class NodeTaskDispatcher:
         trace_id: str,
         payload: dict[str, Any],
     ) -> dict[str, Any] | None:
+        return await self._dispatch_outbound_via_sidecar(
+            task_id=task_id,
+            node_id=node_id,
+            trace_id=trace_id,
+            payload=payload,
+        )
+
+    async def _dispatch_outbound_via_sidecar(
+        self,
+        *,
+        task_id: str,
+        node_id: str,
+        trace_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
         channel = str(payload.get("channel") or "").strip()
         chat_id = str(payload.get("chat_id") or "").strip()
         text = str(payload.get("content") or payload.get("text") or "").strip()
@@ -213,22 +227,31 @@ class NodeTaskDispatcher:
             "task_id": task_id,
             "trace_id": trace_id,
         }
-        if str(channel).strip().lower() in self._trusted_local_channels:
-            await self._send_with_channel_circuit(
-                OutboundMessage(
-                    channel=channel,
-                    chat_id=chat_id,
-                    content=text,
-                    metadata=metadata,
-                ),
-            )
-            return {"ok": True, "mode": "local_bus"}
         if not self._connector_sidecar.proxy_url:
             return {
                 "ok": False,
                 "error": "message.send requires connector sidecar configuration",
                 "error_code": "message_send_sidecar_not_configured",
             }
+        security_context = issue_gateway_envelope(
+            trace_id=trace_id,
+            channel="system",
+            sender_id=f"node:{node_id}",
+            chat_id=chat_id,
+            tenant_id=str(payload.get("tenant_id") or "default").strip().lower(),
+            workspace_id=str(payload.get("workspace_id") or f"node:{node_id}").strip(),
+            agent_profile=str(payload.get("agent_profile") or "node_dispatcher").strip().lower(),
+            role=str(payload.get("role") or "operator").strip().lower(),
+            trust_level="trusted_local",
+            origin_surface="node_dispatcher",
+            policy_snapshot={
+                "source": "node_dispatcher",
+                "task_type": "message.send",
+            },
+            subject_type="node_dispatcher",
+            trust_tier="trusted_local",
+            capability_grants=["connector.message.send"],
+        )
         request_payload = self._connector_sidecar.build_request_payload(
             target_url=f"channel://{channel}/{chat_id}",
             method="POST",
@@ -245,19 +268,7 @@ class NodeTaskDispatcher:
             connector_name=str(channel).strip().lower(),
             action="connector.message.send",
             target_resource=f"channel.{str(channel).strip().lower()}.message",
-            security_context={
-                "channel": "system",
-                "sender_id": f"node:{node_id}",
-                "chat_id": chat_id,
-                "tenant_id": str(payload.get("tenant_id") or "default").strip().lower(),
-                "workspace_id": str(payload.get("workspace_id") or f"node:{node_id}").strip(),
-                "agent_profile": str(payload.get("agent_profile") or "node_dispatcher").strip().lower(),
-                "role": str(payload.get("role") or "operator").strip().lower(),
-                "policy_snapshot": {
-                    "source": "node_dispatcher",
-                    "task_type": "message.send",
-                },
-            },
+            security_context=security_context,
         )
         result = await self._connector_sidecar.execute_request(
             request_payload=request_payload,

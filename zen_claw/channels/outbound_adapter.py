@@ -13,7 +13,7 @@ from zen_claw.agent.tools.connector_sidecar import ConnectorSidecarClient
 from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.config.schema import Config
-from zen_claw.security_context import build_security_context, normalize_workspace_id
+from zen_claw.security_context import issue_gateway_envelope, normalize_workspace_id
 
 
 class ChannelOutboundAdapter:
@@ -68,7 +68,7 @@ class ChannelOutboundAdapter:
             or normalize_workspace_id(self.config.workspace_path)
             or "default"
         ).strip()
-        return build_security_context(
+        return issue_gateway_envelope(
             trace_id=trace_id,
             channel=str(meta.get("origin_channel") or "system").strip().lower() or "system",
             sender_id=str(meta.get("sender_id") or meta.get("route_user_id") or "").strip(),

@@ -619,7 +619,6 @@ class ToolPolicyConfig(BaseModel):
     )
     kill_switch_enabled: bool = False
     kill_switch_reason: str = ""
-    allow_subagent_sensitive_tools: bool = False
     hitl_sensitive_tools: list[str] | None = None  # Explicit override of HitL sensitive tool gate
     max_jobs_per_session: int = 10
     cron_allowed_channels: list[str] = Field(default_factory=list)
@@ -650,11 +649,16 @@ class ToolPolicyConfig(BaseModel):
     agent: ToolPolicyLayerConfig = Field(default_factory=lambda: ToolPolicyLayerConfig(allow=["*"]))
     subagent: ToolPolicyLayerConfig = Field(
         default_factory=lambda: ToolPolicyLayerConfig(
-            allow=["read_file", "write_file", "list_dir", "exec", "web_search", "web_fetch"],
+            allow=["web_search", "web_fetch"],
             deny=[
                 "spawn",
                 "message",
                 "cron",
+                "exec",
+                "read_file",
+                "write_file",
+                "edit_file",
+                "list_dir",
                 "sessions_spawn",
                 "sessions_list",
                 "sessions_kill",
@@ -888,9 +892,6 @@ class ToolsConfig(BaseModel):
                 "legacy tools.exec/tools.web.* are not allowed"
             )
 
-        # Prevent disabling subagent hard guardrail.
-        if self.policy.allow_subagent_sensitive_tools:
-            raise ValueError("production_hardening forbids allowSubagentSensitiveTools=true")
         if self.policy.legacy_compat:
             raise ValueError("production_hardening forbids legacy_compat=true")
         if self.network.exec.sidecar_approval_mode != "hmac":

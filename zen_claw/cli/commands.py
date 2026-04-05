@@ -768,7 +768,7 @@ def _print_effective_tool_backends(config) -> None:
         f"  browser: mode={browser_cfg.mode}, healthcheck={browser_cfg.sidecar_healthcheck}, "
         f"fallbackToOff={browser_cfg.sidecar_fallback_to_off}, maxSteps={browser_cfg.max_steps}"
     )
-    guardrail_on = not config.tools.policy.allow_subagent_sensitive_tools
+    guardrail_on = True
     kill_switch_on = bool(config.tools.policy.kill_switch_enabled)
     kill_switch_reason = (config.tools.policy.kill_switch_reason or "").strip()
     reason_text = f", reason={kill_switch_reason}" if kill_switch_reason else ""

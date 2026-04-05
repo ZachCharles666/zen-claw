@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from zen_claw.agent.tools.result import ToolErrorKind, ToolResult
 from zen_claw.bus.events import OutboundMessage
 from zen_claw.node.dispatcher import NodeTaskDispatcher
 from zen_claw.node.service import NodeService
@@ -105,23 +106,28 @@ async def test_node_dispatcher_message_send_task(tmp_path: Path) -> None:
     async def on_agent_prompt(prompt: str, **kwargs) -> str:
         return "unused"
 
-    outbound: list[OutboundMessage] = []
-
-    async def publish_outbound(msg: OutboundMessage) -> None:
-        outbound.append(msg)
-
     dispatcher = NodeTaskDispatcher(
         node_service=svc,
         on_agent_prompt=on_agent_prompt,
-        publish_outbound=publish_outbound,
+        publish_outbound=lambda msg: None,  # type: ignore[arg-type]
+        connector_proxy_url="http://127.0.0.1:4499/v1/fetch",
     )
+    captured: dict[str, object] = {}
+
+    async def _fake_execute_request(*, request_payload, trace_id):  # type: ignore[no-untyped-def]
+        captured["request_payload"] = request_payload
+        captured["trace_id"] = trace_id
+        return ToolResult.success("queued", sidecar_target=dispatcher._connector_sidecar.proxy_url)
+
+    dispatcher._connector_sidecar.execute_request = _fake_execute_request  # type: ignore[method-assign]
     did_work = await dispatcher.run_once()
     assert did_work is True
-    assert len(outbound) == 1
-    assert outbound[0].channel == "cli"
-    assert outbound[0].chat_id == "123"
-    assert outbound[0].content == "hello"
-    assert str((outbound[0].metadata or {}).get("trace_id") or "")
+    request_payload = dict(captured["request_payload"] or {})
+    assert request_payload["url"] == "channel://cli/123"
+    connector_meta = dict(request_payload["connector_meta"])
+    assert connector_meta["connector_name"] == "cli"
+    assert connector_meta["action"] == "connector.message.send"
+    assert request_payload["gateway_signature"]
     rows = svc.list_tasks(node_id=node_id)
     assert rows[0]["status"] == "done"
     assert rows[0]["result"]["sent"] is True
@@ -142,19 +148,13 @@ async def test_node_dispatcher_message_send_external_channel_requires_sidecar(tm
     async def on_agent_prompt(prompt: str, **kwargs) -> str:
         return "unused"
 
-    outbound: list[OutboundMessage] = []
-
-    async def publish_outbound(msg: OutboundMessage) -> None:
-        outbound.append(msg)
-
     dispatcher = NodeTaskDispatcher(
         node_service=svc,
         on_agent_prompt=on_agent_prompt,
-        publish_outbound=publish_outbound,
+        publish_outbound=lambda msg: None,  # type: ignore[arg-type]
     )
     did_work = await dispatcher.run_once()
     assert did_work is True
-    assert outbound == []
     rows = svc.list_tasks(node_id=node_id)
     assert rows[0]["status"] == "error"
     assert "sidecar configuration" in str(rows[0]["error"] or "")
@@ -422,7 +422,7 @@ async def test_node_high_risk_task_e2e_approval_to_gateway_execution_and_audit_v
 
 
 @pytest.mark.asyncio
-async def test_node_dispatcher_channel_circuit_opens_on_fail_rate(tmp_path: Path) -> None:
+async def test_node_dispatcher_message_send_never_uses_local_publish_outbound(tmp_path: Path) -> None:
     svc = NodeService(tmp_path / "nodes.json")
     reg = svc.register_node(name="phone-cb-a", platform="android", capabilities=["notify"])
     node_id = reg["node_id"]
@@ -450,25 +450,29 @@ async def test_node_dispatcher_channel_circuit_opens_on_fail_rate(tmp_path: Path
         node_service=svc,
         on_agent_prompt=on_agent_prompt,
         publish_outbound=publish_outbound,
-        channel_circuit_window=1,
-        channel_circuit_min_samples=1,
-        channel_circuit_fail_rate_threshold=1.0,
-        channel_circuit_open_sec=60.0,
-        trusted_local_channels=["cli", "system", "webchat", "telegram"],
+        connector_proxy_url="http://127.0.0.1:4499/v1/fetch",
     )
+    async def _fake_execute_request(*, request_payload, trace_id):  # type: ignore[no-untyped-def]
+        del request_payload, trace_id
+        return ToolResult.failure(
+            ToolErrorKind.RUNTIME,
+            "sidecar down",
+            code="connector_sidecar_unavailable",
+        )
+
+    dispatcher._connector_sidecar.execute_request = _fake_execute_request  # type: ignore[method-assign]
     did1 = await dispatcher.run_once()
     did2 = await dispatcher.run_once()
     assert did1 is True and did2 is True
-    # second task should fail fast via circuit and not call publisher again
-    assert calls["n"] == 1
+    assert calls["n"] == 0
     rows = svc.list_tasks(node_id=node_id)
     assert rows[0]["status"] == "error"
     assert rows[1]["status"] == "error"
-    assert "channel circuit open" in str(rows[1].get("error") or "")
+    assert "sidecar down" in str(rows[1].get("error") or "")
 
 
 @pytest.mark.asyncio
-async def test_node_dispatcher_channel_circuit_isolated_per_channel(tmp_path: Path) -> None:
+async def test_node_dispatcher_message_send_sidecar_result_isolated_per_channel(tmp_path: Path) -> None:
     svc = NodeService(tmp_path / "nodes.json")
     reg = svc.register_node(name="phone-cb-b", platform="android", capabilities=["notify"])
     node_id = reg["node_id"]
@@ -483,30 +487,28 @@ async def test_node_dispatcher_channel_circuit_isolated_per_channel(tmp_path: Pa
         payload={"channel": "discord", "chat_id": "2", "content": "dc-1"},
     )
 
-    sent: list[str] = []
-
     async def on_agent_prompt(prompt: str, **kwargs) -> str:
         return "unused"
 
     async def publish_outbound(msg: OutboundMessage) -> None:
-        if msg.channel == "telegram":
-            raise RuntimeError("telegram down")
-        sent.append(msg.channel)
+        raise RuntimeError("should not be called")
 
     dispatcher = NodeTaskDispatcher(
         node_service=svc,
         on_agent_prompt=on_agent_prompt,
         publish_outbound=publish_outbound,
-        channel_circuit_window=1,
-        channel_circuit_min_samples=1,
-        channel_circuit_fail_rate_threshold=1.0,
-        channel_circuit_open_sec=60.0,
-        trusted_local_channels=["cli", "system", "webchat", "telegram", "discord"],
+        connector_proxy_url="http://127.0.0.1:4499/v1/fetch",
     )
+    async def _fake_execute_request(*, request_payload, trace_id):  # type: ignore[no-untyped-def]
+        del trace_id
+        if request_payload["connector_meta"]["connector_name"] == "telegram":
+            return ToolResult.failure(ToolErrorKind.RUNTIME, "telegram down", code="sidecar_error")
+        return ToolResult.success("ok")
+
+    dispatcher._connector_sidecar.execute_request = _fake_execute_request  # type: ignore[method-assign]
     did1 = await dispatcher.run_once()
     did2 = await dispatcher.run_once()
     assert did1 is True and did2 is True
-    assert sent == ["discord"]
     rows = svc.list_tasks(node_id=node_id)
     by_content = {r["payload"]["content"]: r for r in rows}
     assert by_content["tg-1"]["status"] == "error"
@@ -514,113 +516,77 @@ async def test_node_dispatcher_channel_circuit_isolated_per_channel(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_node_dispatcher_channel_circuit_recovers_after_window(tmp_path: Path) -> None:
+async def test_node_dispatcher_agent_prompt_deliver_requires_sidecar(tmp_path: Path) -> None:
     svc = NodeService(tmp_path / "nodes.json")
     reg = svc.register_node(name="phone-cb-c", platform="android", capabilities=["notify"])
     node_id = reg["node_id"]
     svc.add_task(
         node_id=node_id,
-        task_type="message.send",
-        payload={"channel": "telegram", "chat_id": "1", "content": "first"},
+        task_type="agent.prompt",
+        payload={"prompt": "hello", "deliver": True, "reply_channel": "cli", "reply_chat_id": "1"},
     )
-    svc.add_task(
-        node_id=node_id,
-        task_type="message.send",
-        payload={"channel": "telegram", "chat_id": "1", "content": "second"},
-    )
-
-    now = {"t": 100.0}
-    sent: list[str] = []
-    calls = {"n": 0}
 
     async def on_agent_prompt(prompt: str, **kwargs) -> str:
-        return "unused"
+        return "reply body"
 
     async def publish_outbound(msg: OutboundMessage) -> None:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("one-time failure")
-        sent.append(msg.content)
+        raise RuntimeError("should not be called")
 
     dispatcher = NodeTaskDispatcher(
         node_service=svc,
         on_agent_prompt=on_agent_prompt,
         publish_outbound=publish_outbound,
-        channel_circuit_window=1,
-        channel_circuit_min_samples=1,
-        channel_circuit_fail_rate_threshold=1.0,
-        channel_circuit_open_sec=5.0,
-        now_fn=lambda: now["t"],
-        trusted_local_channels=["cli", "system", "webchat", "telegram"],
+        connector_proxy_url="",
     )
-    did1 = await dispatcher.run_once()
-    assert did1 is True
-
-    # Within open window: fail fast.
-    did2 = await dispatcher.run_once()
-    assert did2 is True
-    assert sent == []
-
-    # Add a third task after window elapsed.
-    svc.add_task(
-        node_id=node_id,
-        task_type="message.send",
-        payload={"channel": "telegram", "chat_id": "1", "content": "third"},
-    )
-    now["t"] = 106.0
-    did3 = await dispatcher.run_once()
-    assert did3 is True
-    assert sent == ["third"]
+    did = await dispatcher.run_once()
+    assert did is True
+    rows = svc.list_tasks(node_id=node_id)
+    assert rows[0]["status"] == "error"
+    assert "sidecar configuration" in str(rows[0]["error"] or "")
 
 
 @pytest.mark.asyncio
-async def test_node_dispatcher_chaos_injection_targets_channel(tmp_path: Path) -> None:
+async def test_node_dispatcher_agent_prompt_deliver_uses_sidecar_when_configured(tmp_path: Path) -> None:
     svc = NodeService(tmp_path / "nodes.json")
     reg = svc.register_node(name="phone-chaos-a", platform="android", capabilities=["notify"])
     node_id = reg["node_id"]
     svc.add_task(
         node_id=node_id,
-        task_type="message.send",
-        payload={"channel": "telegram", "chat_id": "1", "content": "c1"},
+        task_type="agent.prompt",
+        payload={"prompt": "hello", "deliver": True, "reply_channel": "cli", "reply_chat_id": "1"},
     )
-    svc.add_task(
-        node_id=node_id,
-        task_type="message.send",
-        payload={"channel": "discord", "chat_id": "2", "content": "c2"},
-    )
-
-    sent: list[str] = []
 
     async def on_agent_prompt(prompt: str, **kwargs) -> str:
-        return "unused"
+        return "done"
 
     async def publish_outbound(msg: OutboundMessage) -> None:
-        sent.append(msg.channel)
+        raise RuntimeError("should not be called")
 
     dispatcher = NodeTaskDispatcher(
         node_service=svc,
         on_agent_prompt=on_agent_prompt,
         publish_outbound=publish_outbound,
-        channel_circuit_enabled=False,
-        chaos_enabled=True,
-        chaos_fail_every=1,
-        chaos_channels=["telegram"],
-        trusted_local_channels=["cli", "system", "webchat", "telegram", "discord"],
+        connector_proxy_url="http://127.0.0.1:4499/v1/fetch",
     )
-    did1 = await dispatcher.run_once()
-    did2 = await dispatcher.run_once()
-    assert did1 is True and did2 is True
-    # telegram blocked by chaos, discord delivered normally
-    assert sent == ["discord"]
+    captured: dict[str, object] = {}
+
+    async def _fake_execute_request(*, request_payload, trace_id):  # type: ignore[no-untyped-def]
+        captured["request_payload"] = request_payload
+        captured["trace_id"] = trace_id
+        return ToolResult.success("ok")
+
+    dispatcher._connector_sidecar.execute_request = _fake_execute_request  # type: ignore[method-assign]
+    did = await dispatcher.run_once()
+    assert did is True
     rows = svc.list_tasks(node_id=node_id)
-    by_content = {r["payload"]["content"]: r for r in rows}
-    assert by_content["c1"]["status"] == "error"
-    assert "chaos_injected_timeout" in str(by_content["c1"].get("error") or "")
-    assert by_content["c2"]["status"] == "done"
+    assert rows[0]["status"] == "done"
+    request_payload = dict(captured["request_payload"] or {})
+    assert request_payload["url"] == "channel://cli/1"
+    assert request_payload["connector_meta"]["identity"]["trace_id"]
 
 
 @pytest.mark.asyncio
-async def test_node_dispatcher_chaos_injection_every_n(tmp_path: Path) -> None:
+async def test_node_dispatcher_message_send_sidecar_payload_includes_gateway_envelope(tmp_path: Path) -> None:
     svc = NodeService(tmp_path / "nodes.json")
     reg = svc.register_node(name="phone-chaos-b", platform="android", capabilities=["notify"])
     node_id = reg["node_id"]
@@ -629,36 +595,34 @@ async def test_node_dispatcher_chaos_injection_every_n(tmp_path: Path) -> None:
         task_type="message.send",
         payload={"channel": "telegram", "chat_id": "1", "content": "m1"},
     )
-    svc.add_task(
-        node_id=node_id,
-        task_type="message.send",
-        payload={"channel": "telegram", "chat_id": "1", "content": "m2"},
-    )
-
-    sent: list[str] = []
 
     async def on_agent_prompt(prompt: str, **kwargs) -> str:
         return "unused"
 
     async def publish_outbound(msg: OutboundMessage) -> None:
-        sent.append(msg.content)
+        raise RuntimeError("should not be called")
 
     dispatcher = NodeTaskDispatcher(
         node_service=svc,
         on_agent_prompt=on_agent_prompt,
         publish_outbound=publish_outbound,
-        channel_circuit_enabled=False,
-        chaos_enabled=True,
-        chaos_fail_every=2,
-        chaos_channels=["telegram"],
-        trusted_local_channels=["cli", "system", "webchat", "telegram"],
+        connector_proxy_url="http://127.0.0.1:4499/v1/fetch",
     )
-    did1 = await dispatcher.run_once()
-    did2 = await dispatcher.run_once()
-    assert did1 is True and did2 is True
-    # first send passes, second send is injected failure
-    assert sent == ["m1"]
+    captured: dict[str, object] = {}
+
+    async def _fake_execute_request(*, request_payload, trace_id):  # type: ignore[no-untyped-def]
+        captured["request_payload"] = request_payload
+        captured["trace_id"] = trace_id
+        return ToolResult.success("ok")
+
+    dispatcher._connector_sidecar.execute_request = _fake_execute_request  # type: ignore[method-assign]
+    did = await dispatcher.run_once()
+    assert did is True
     rows = svc.list_tasks(node_id=node_id)
-    by_content = {r["payload"]["content"]: r for r in rows}
-    assert by_content["m1"]["status"] == "done"
-    assert by_content["m2"]["status"] == "error"
+    assert rows[0]["status"] == "done"
+    request_payload = dict(captured["request_payload"] or {})
+    connector_meta = dict(request_payload["connector_meta"])
+    identity = dict(connector_meta["identity"])
+    assert identity["trace_id"]
+    assert identity["channel"] == "system"
+    assert request_payload["gateway_signature"]

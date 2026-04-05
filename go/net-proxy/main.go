@@ -177,7 +177,7 @@ func handleFetch(w http.ResponseWriter, r *http.Request, c cfg) {
 		})
 		return
 	}
-	if code, message := validateGatewayEnvelope(req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+	if code, message := validateGatewayEnvelope(req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature); code != "" {
 		writeJSON(w, http.StatusForbidden, fetchResponse{
 			OK:        false,
 			ErrorCode: code,
@@ -410,7 +410,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request, c cfg) {
 		})
 		return
 	}
-	if code, message := validateGatewayEnvelope(req.SecurityContext, req.GatewayMeta, req.GatewaySignature); code != "" {
+	if code, message := validateGatewayEnvelope(req.SecurityContext, req.PolicySnapshot, req.GatewayMeta, req.GatewaySignature); code != "" {
 		writeJSONSearch(w, http.StatusForbidden, searchResponse{
 			OK:        false,
 			ErrorCode: code,
@@ -657,7 +657,7 @@ func denied(host string, deny map[string]struct{}) bool {
 	return ok
 }
 
-func validateGatewayEnvelope(securityContext, gatewayMeta map[string]any, gatewaySignature string) (string, string) {
+func validateGatewayEnvelope(securityContext, policySnapshot, gatewayMeta map[string]any, gatewaySignature string) (string, string) {
 	if strings.TrimSpace(gatewaySignature) == "" {
 		return "gateway_signature_required", "gateway signature is required"
 	}
@@ -687,7 +687,65 @@ func validateGatewayEnvelope(securityContext, gatewayMeta map[string]any, gatewa
 	if strings.TrimSpace(fmt.Sprintf("%v", gatewayMeta["request_hash"])) == "" {
 		return "request_hash_missing", "gateway request hash is required"
 	}
+	if strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY")) == "" {
+		return "", ""
+	}
+	canonical, err := canonicalGatewayEnvelope(map[string]any{
+		"security_context":  securityContext,
+		"policy_snapshot":   mapOrEmpty(policySnapshot),
+		"gateway_meta":      gatewayMeta,
+		"gateway_signature": gatewaySignature,
+	})
+	if err != nil {
+		return "gateway_payload_invalid", "failed to canonicalize gateway payload"
+	}
+	canonicalHash := sha256.Sum256(canonical)
+	if !strings.EqualFold(strings.TrimSpace(fmt.Sprintf("%v", gatewayMeta["request_hash"])), fmt.Sprintf("%x", canonicalHash[:])) {
+		return "request_hash_mismatch", "gateway request hash does not match payload"
+	}
+	if !verifyGatewaySignature(canonical, gatewaySignature) {
+		return "gateway_signature_invalid", "gateway signature does not match payload"
+	}
 	return "", ""
+}
+
+func mapOrEmpty(in map[string]any) map[string]any {
+	if in == nil {
+		return map[string]any{}
+	}
+	return in
+}
+
+func canonicalGatewayEnvelope(payload map[string]any) ([]byte, error) {
+	clone := map[string]any{}
+	for key, value := range payload {
+		clone[key] = value
+	}
+	delete(clone, "gateway_signature")
+	if gatewayMeta, ok := clone["gateway_meta"].(map[string]any); ok {
+		metaClone := map[string]any{}
+		for key, value := range gatewayMeta {
+			if key == "request_hash" {
+				continue
+			}
+			metaClone[key] = value
+		}
+		clone["gateway_meta"] = metaClone
+	}
+	return json.Marshal(clone)
+}
+
+func gatewayMasterKey() []byte {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(os.Getenv("ZEN_CLAW_HMAC_MASTER_KEY"))))
+	return sum[:]
+}
+
+func verifyGatewaySignature(canonical []byte, signature string) bool {
+	key := gatewayMasterKey()
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write(canonical)
+	expected := fmt.Sprintf("%x", mac.Sum(nil))
+	return subtle.ConstantTimeCompare([]byte(strings.ToLower(strings.TrimSpace(signature))), []byte(expected)) == 1
 }
 
 func checkApproval(r *http.Request, c cfg, traceID, method, path string, bodyBytes []byte) bool {

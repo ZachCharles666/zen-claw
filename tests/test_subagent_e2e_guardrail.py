@@ -30,7 +30,6 @@ class _FakeSpawnManager:
 async def test_subagent_guardrail_blocks_spawn_end_to_end() -> None:
     policy = ToolPolicyConfig()
     policy.subagent.allow = ["*"]
-    policy.allow_subagent_sensitive_tools = False
 
     sub = SubagentManager(
         provider=_DummyProvider(),  # type: ignore[arg-type]
