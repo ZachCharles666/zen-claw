@@ -21,6 +21,7 @@ def _build_loop(tmp_path: Path, monkeypatch) -> AgentLoop:
 
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _NoopSessionManager)
     policy = ToolPolicyConfig()
+    policy.production_hardening = False
     policy.default_deny_tools = []
     policy.agent.allow = ["*"]
     policy.exec_allowed_working_dirs = [str(tmp_path)]

@@ -120,7 +120,7 @@ async def test_exec_tool_sidecar_timeout(monkeypatch) -> None:
     )
     assert result.ok is False
     assert result.error is not None
-    assert result.error.kind == ToolErrorKind.RETRYABLE
+    assert result.error.kind == ToolErrorKind.RUNTIME
     assert result.error.code == "exec_sidecar_timeout"
 
 

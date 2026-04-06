@@ -239,7 +239,7 @@ class _BrowserSidecarBase(Tool):
                 code="browser_unavailable_fallback_off",
             )
         return ToolResult.failure(
-            ToolErrorKind.RETRYABLE,
+            ToolErrorKind.RUNTIME,
             f"Browser sidecar health check failed with HTTP {status_code}",
             code="browser_sidecar_unhealthy",
         )
@@ -251,7 +251,7 @@ class _BrowserSidecarBase(Tool):
                 "browser automation unavailable (sidecar unreachable; fallback=off)",
                 code="browser_unavailable_fallback_off",
             )
-        return ToolResult.failure(ToolErrorKind.RETRYABLE, message, code=code)
+        return ToolResult.failure(ToolErrorKind.RUNTIME, message, code=code)
 
 
 class BrowserOpenTool(_BrowserSidecarBase):

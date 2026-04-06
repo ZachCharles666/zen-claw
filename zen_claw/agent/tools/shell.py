@@ -111,6 +111,14 @@ class ExecTool(Tool):
     async def _execute_local(
         self, command: str, cwd: str, env: dict[str, str] | None = None
     ) -> ToolResult:
+        # Phase 2-2: hard boundary — when mode is sidecar with no fallback,
+        # local execution must never be reachable regardless of code path.
+        if self.mode == "sidecar" and not self.sidecar_fallback_to_local:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "local execution is forbidden when sidecar mode is active without fallback",
+                code="exec_local_forbidden",
+            )
         try:
             process = await asyncio.create_subprocess_shell(
                 command,
@@ -275,7 +283,7 @@ class ExecTool(Tool):
                         if self.sidecar_fallback_to_local:
                             return await self._execute_local(command=command, cwd=cwd, env=env)
                         return ToolResult.failure(
-                            ToolErrorKind.RETRYABLE,
+                            ToolErrorKind.RUNTIME,
                             f"Sidecar health check failed with HTTP {health.status_code}",
                             code="exec_sidecar_unhealthy",
                         )
@@ -289,7 +297,7 @@ class ExecTool(Tool):
             if self.sidecar_fallback_to_local:
                 return await self._execute_local(command=command, cwd=cwd, env=env)
             return ToolResult.failure(
-                ToolErrorKind.RETRYABLE,
+                ToolErrorKind.RUNTIME,
                 f"Sidecar request timed out: {str(e)}",
                 code="exec_sidecar_timeout",
             )
@@ -297,7 +305,7 @@ class ExecTool(Tool):
             if self.sidecar_fallback_to_local:
                 return await self._execute_local(command=command, cwd=cwd, env=env)
             return ToolResult.failure(
-                ToolErrorKind.RETRYABLE,
+                ToolErrorKind.RUNTIME,
                 f"Sidecar request failed: {str(e)}",
                 code="exec_sidecar_unreachable",
             )

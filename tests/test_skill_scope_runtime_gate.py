@@ -23,6 +23,7 @@ def _make_loop(tmp_path: Path, monkeypatch, mode: str) -> AgentLoop:
 
     monkeypatch.setattr("zen_claw.agent.loop.SessionManager", _NoopSessionManager)
     policy = ToolPolicyConfig()
+    policy.production_hardening = False
     policy.default_deny_tools = []
     policy.agent.allow = ["*"]
     loop = AgentLoop(

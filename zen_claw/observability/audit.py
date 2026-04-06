@@ -1,15 +1,136 @@
 """Audit worker — writes structured JSONL audit records for all agent actions."""
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from loguru import logger
 
 from zen_claw.utils.crypto import sign_data, verify_signature
+
+
+# ---------------------------------------------------------------------------
+# Audit Sink Protocol + Implementations
+# ---------------------------------------------------------------------------
+
+@runtime_checkable
+class AuditSink(Protocol):
+    """Protocol for audit record destinations."""
+
+    async def emit(self, record: dict[str, Any]) -> bool:
+        """Emit one audit record. Returns True on success."""
+        ...  # pragma: no cover
+
+
+class LocalFileSink:
+    """Write audit records to local JSONL files (the default sink)."""
+
+    def __init__(self, data_dir: Path):
+        self._data_dir = data_dir
+        self._write_lock = asyncio.Lock()
+
+    async def emit(self, record: dict[str, Any]) -> bool:
+        path = self._audit_log_path()
+        try:
+            async with self._write_lock:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._append, path, record)
+            return True
+        except Exception as exc:
+            logger.warning(f"LocalFileSink write failed: {exc}")
+            return False
+
+    def _audit_log_path(self) -> Path:
+        day = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+        log_dir = self._data_dir / "audit_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return log_dir / f"{day}.jsonl"
+
+    @staticmethod
+    def _append(path: Path, record: dict[str, Any]) -> None:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+class HttpSink:
+    """Forward audit records to an HTTP endpoint (e.g. SIEM / log aggregator)."""
+
+    def __init__(self, endpoint: str, auth_token: str = "", batch_size: int = 1):
+        self._endpoint = endpoint
+        self._auth_token = auth_token
+        self._batch_size = max(1, batch_size)
+        self._buffer: list[dict[str, Any]] = []
+        self._lock = asyncio.Lock()
+
+    async def emit(self, record: dict[str, Any]) -> bool:
+        async with self._lock:
+            self._buffer.append(record)
+            if len(self._buffer) < self._batch_size:
+                return True
+            batch = list(self._buffer)
+            self._buffer.clear()
+        return await self._send(batch)
+
+    async def flush(self) -> bool:
+        async with self._lock:
+            if not self._buffer:
+                return True
+            batch = list(self._buffer)
+            self._buffer.clear()
+        return await self._send(batch)
+
+    async def _send(self, batch: list[dict[str, Any]]) -> bool:
+        try:
+            import httpx
+
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if self._auth_token:
+                headers["Authorization"] = f"Bearer {self._auth_token}"
+            body = json.dumps(batch, ensure_ascii=False)
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(self._endpoint, headers=headers, content=body)
+                if resp.status_code >= 400:
+                    logger.warning(f"HttpSink POST failed: HTTP {resp.status_code}")
+                    return False
+            return True
+        except Exception as exc:
+            logger.warning(f"HttpSink error: {exc}")
+            return False
+
+
+class SyslogSink:
+    """Forward audit records to syslog."""
+
+    def __init__(self, address: str):
+        self._address = address
+        self._handler = None
+
+    async def emit(self, record: dict[str, Any]) -> bool:
+        try:
+            if self._handler is None:
+                import logging.handlers
+
+                host, _, port_str = self._address.rpartition(":")
+                port = int(port_str) if port_str.isdigit() else 514
+                host = host or "localhost"
+                self._handler = logging.handlers.SysLogHandler(address=(host, port))
+            line = json.dumps(record, ensure_ascii=False)
+            import logging
+
+            log_record = logging.LogRecord(
+                name="zen_claw.audit", level=logging.INFO, pathname="", lineno=0,
+                msg=line, args=(), exc_info=None,
+            )
+            self._handler.emit(log_record)
+            return True
+        except Exception as exc:
+            logger.warning(f"SyslogSink error: {exc}")
+            return False
 
 
 class AuditWorker:
@@ -32,6 +153,7 @@ class AuditWorker:
         self,
         data_dir: Path | str | None = None,
         config: dict | None = None,
+        sinks: list[AuditSink] | None = None,
     ):
         self.config = config or {}
         self.cpu_limit = self.config.get("cpu_limit", "0.5")
@@ -40,9 +162,16 @@ class AuditWorker:
         self._data_dir = Path(data_dir) if data_dir else None
         self._write_lock = asyncio.Lock()
 
+        # Build sink chain: local file sink (always) + optional external sinks.
+        self._sinks: list[AuditSink] = []
+        if self._data_dir is not None:
+            self._sinks.append(LocalFileSink(self._data_dir))
+        if sinks:
+            self._sinks.extend(sinks)
+
         logger.info(
             f"AuditWorker initialized: data_dir={self._data_dir}, "
-            f"CPU={self.cpu_limit}, MEM={self.mem_limit}, ReadOnlyFS={self.readonly_fs}"
+            f"sinks={len(self._sinks)}, CPU={self.cpu_limit}, MEM={self.mem_limit}"
         )
 
     # ------------------------------------------------------------------
@@ -60,13 +189,12 @@ class AuditWorker:
                        content or tool parameters.
 
         Returns:
-            True on success or if no data_dir is configured.
+            True on success or if no sinks are configured.
         """
-        path = self._audit_log_path()
-        if path is None:
+        if not self._sinks:
             return True
 
-        prev_hash = self._latest_record_hash(path)
+        prev_hash = self._get_prev_hash()
         record = {
             "ts": datetime.now(tz=timezone.utc).isoformat(),
             "trace_id": trace_id,
@@ -77,33 +205,29 @@ class AuditWorker:
         record["hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         record["signature"] = sign_data(canonical)
 
-        try:
-            async with self._write_lock:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, self._append_record, path, record)
-        except Exception as exc:
-            logger.warning(f"audit_turn write failed (non-fatal): {exc}")
-            return False
-
-        return True
+        # Broadcast to all sinks — failure of external sinks is non-fatal.
+        results = await asyncio.gather(
+            *(sink.emit(record) for sink in self._sinks),
+            return_exceptions=True,
+        )
+        all_ok = all(r is True for r in results)
+        if not all_ok:
+            failed = [
+                type(s).__name__ for s, r in zip(self._sinks, results) if r is not True
+            ]
+            logger.warning(f"audit_turn: failed sinks: {failed}")
+        return all_ok
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _audit_log_path(self) -> Path | None:
+    def _get_prev_hash(self) -> str:
+        """Read the latest record hash from the local JSONL file for chain continuity."""
         if self._data_dir is None:
-            return None
+            return ""
         day = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
-        log_dir = self._data_dir / "audit_logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        return log_dir / f"{day}.jsonl"
-
-    def _append_record(self, path: Path, record: dict) -> None:
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    def _latest_record_hash(self, path: Path) -> str:
+        path = self._data_dir / "audit_logs" / f"{day}.jsonl"
         if not path.exists():
             return ""
         try:
