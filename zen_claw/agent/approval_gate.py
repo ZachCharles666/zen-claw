@@ -42,6 +42,7 @@ class PendingApproval:
     sidecar_target: str = ""
     actor: str = ""
     decision_basis: str = ""
+    policy_reason: dict[str, str] | None = None
     ttl_seconds: int = 0
     status: ApprovalStatus = ApprovalStatus.PENDING
     decided_at: str | None = None
@@ -64,11 +65,16 @@ class PendingApproval:
             args_preview = args_preview[:500] + "\n... (truncated)"
         identity = dict(self.security_context or {})
         resource_scope = dict(self.resource_scope or {})
+        display_reason = (
+            self.policy_reason["message"]
+            if self.policy_reason and self.policy_reason.get("message")
+            else self.reason
+        )
         return (
             f"⚠️ **[需要授权]** Agent 即将执行敏感操作，请确认:\n\n"
             f"**工具**: `{self.tool_name}`\n"
             f"**能力**: `{self.capability or self.tool_name}`\n"
-            f"**原因**: {self.reason}\n"
+            f"**原因**: {display_reason}\n"
             f"**身份**: `{identity.get('channel') or '-'} / {identity.get('sender_id') or '-'} / {identity.get('chat_id') or '-'} / {identity.get('tenant_id') or '-'} / {identity.get('workspace_id') or '-'}`\n"
             f"**来源**: `{identity.get('origin_surface') or '-'} / {identity.get('trust_level') or '-'}`\n"
             f"**资源范围**:\n```json\n{json.dumps(resource_scope, ensure_ascii=False, indent=2)}\n```\n"
@@ -148,6 +154,7 @@ class ApprovalGate:
         sidecar_target: str = "",
         actor: str = "",
         decision_basis: str = "",
+        policy_reason: dict[str, str] | None = None,
     ) -> PendingApproval:
         """Create and persist a new approval request, and optionally notify via bus."""
         approval_scope = dict(resource_scope or {})
@@ -181,6 +188,7 @@ class ApprovalGate:
             sidecar_target=str(sidecar_target or "").strip(),
             actor=str(actor or "").strip(),
             decision_basis=str(decision_basis or reason or "").strip(),
+            policy_reason=dict(policy_reason) if policy_reason else None,
             ttl_seconds=int(self._ttl),
         )
         self._pending[approval_id] = rec

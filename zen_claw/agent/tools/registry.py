@@ -297,9 +297,10 @@ class ToolRegistry:
         if not decision.allowed:
             result = ToolResult.failure(
                 ToolErrorKind.PERMISSION,
-                decision.reason,
+                str(decision.reason),
                 code=decision.code,
                 policy_scope=decision.scope or "",
+                policy_reason=decision.reason.to_dict(),
                 skill_names=self._active_skill_names,
                 skill_permissions_mode=self._skill_permissions_mode,
             )
