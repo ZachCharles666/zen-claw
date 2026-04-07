@@ -13,7 +13,6 @@ from loguru import logger
 
 from zen_claw.utils.crypto import sign_data, verify_signature
 
-
 # ---------------------------------------------------------------------------
 # Audit Sink Protocol + Implementations
 # ---------------------------------------------------------------------------

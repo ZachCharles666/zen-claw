@@ -3,13 +3,10 @@
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from zen_claw.agent.tools.capability_policy import (
     CapabilityPolicyEvaluator,
     CapabilityRequest,
 )
-from zen_claw.agent.tools.result import ToolErrorKind
 
 
 def _hardened_policy(**overrides: Any) -> SimpleNamespace:
