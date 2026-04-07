@@ -468,3 +468,82 @@ async def test_approval_notification_uses_correct_channel_and_chat_id(tmp_path: 
     assert len(outbound_msgs) == 1
     assert outbound_msgs[0].channel == "telegram"
     assert outbound_msgs[0].chat_id == "chat-42"
+
+
+# ── tests: policy_reason field ───────────────────────────────────────────────
+
+
+async def test_policy_reason_field_persists_to_disk(tmp_path: Path):
+    gate = _gate(tmp_path)
+    policy_reason = {
+        "code": "tool_policy_denied",
+        "tool": "exec",
+        "trigger": "session",
+        "message": "Tool 'exec' denied by policy scope 'session'",
+    }
+    rec = await gate.request_approval(
+        "sess-1", "exec", {"cmd": "ls"},
+        policy_reason=policy_reason,
+    )
+    assert rec.policy_reason == policy_reason
+
+    # Reload from disk
+    gate2 = _gate(tmp_path)
+    loaded = gate2.get(rec.approval_id)
+    assert loaded is not None
+    assert loaded.policy_reason == policy_reason
+
+
+async def test_policy_reason_none_by_default(tmp_path: Path):
+    gate = _gate(tmp_path)
+    rec = await gate.request_approval("sess-1", "exec", {"cmd": "ls"})
+    assert rec.policy_reason is None
+
+
+async def test_format_request_message_uses_policy_reason_message(tmp_path: Path):
+    gate = _gate(tmp_path)
+    policy_reason = {
+        "code": "tool_policy_denied",
+        "tool": "exec",
+        "trigger": "session",
+        "message": "Tool 'exec' denied by policy scope 'session'",
+    }
+    rec = await gate.request_approval(
+        "sess-1", "exec", {"cmd": "ls"},
+        reason="Sensitive operation",
+        policy_reason=policy_reason,
+    )
+    msg = rec.format_request_message()
+    # Should show the structured policy reason message, not the generic reason
+    assert "denied by policy scope 'session'" in msg
+    assert "Sensitive operation" not in msg
+
+
+async def test_format_request_message_falls_back_to_reason(tmp_path: Path):
+    gate = _gate(tmp_path)
+    rec = await gate.request_approval(
+        "sess-1", "exec", {"cmd": "ls"},
+        reason="Sensitive operation",
+    )
+    msg = rec.format_request_message()
+    assert "Sensitive operation" in msg
+
+
+async def test_policy_reason_in_to_dict_and_from_dict(tmp_path: Path):
+    gate = _gate(tmp_path)
+    policy_reason = {
+        "code": "tool_policy_default_deny",
+        "tool": "spawn",
+        "trigger": "default_deny",
+        "message": "Tool 'spawn' blocked by default deny policy",
+    }
+    rec = await gate.request_approval(
+        "sess-1", "spawn", {},
+        policy_reason=policy_reason,
+    )
+    d = rec.to_dict()
+    assert d["policy_reason"] == policy_reason
+
+    from zen_claw.agent.approval_gate import PendingApproval
+    restored = PendingApproval.from_dict(d)
+    assert restored.policy_reason == policy_reason

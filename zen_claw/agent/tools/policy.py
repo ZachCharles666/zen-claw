@@ -12,11 +12,27 @@ class ToolPolicyScope:
 
 
 @dataclass
+class PolicyReason:
+    """Structured rejection/approval reason from policy evaluation."""
+
+    code: str       # e.g. "tool_policy_denied", "tool_policy_default_deny"
+    tool: str       # normalized tool name that was evaluated
+    trigger: str    # what triggered the decision: scope name, "default_deny", "allow_list", etc.
+    message: str    # human-readable explanation
+
+    def __str__(self) -> str:
+        return self.message
+
+    def to_dict(self) -> dict[str, str]:
+        return {"code": self.code, "tool": self.tool, "trigger": self.trigger, "message": self.message}
+
+
+@dataclass
 class ToolPolicyDecision:
     """Policy decision for a tool execution attempt."""
 
     allowed: bool
-    reason: str
+    reason: PolicyReason
     code: str
     scope: str | None = None
 
@@ -58,7 +74,12 @@ class ToolPolicyEngine:
         if deny_scope:
             return ToolPolicyDecision(
                 allowed=False,
-                reason=f"Tool '{name}' denied by policy scope '{deny_scope}'",
+                reason=PolicyReason(
+                    code="tool_policy_denied",
+                    tool=name,
+                    trigger=deny_scope,
+                    message=f"Tool '{name}' denied by policy scope '{deny_scope}'",
+                ),
                 code="tool_policy_denied",
                 scope=deny_scope,
             )
@@ -70,27 +91,47 @@ class ToolPolicyEngine:
                 if "*" in scope.allow or name in scope.allow:
                     return ToolPolicyDecision(
                         allowed=True,
-                        reason="Allowed by explicit allow policy",
+                        reason=PolicyReason(
+                            code="tool_policy_allowed",
+                            tool=name,
+                            trigger="allow_list",
+                            message="Allowed by explicit allow policy",
+                        ),
                         code="tool_policy_allowed",
                     )
 
         if allow_defined:
             return ToolPolicyDecision(
                 allowed=False,
-                reason=f"Tool '{name}' not in allow policy",
+                reason=PolicyReason(
+                    code="tool_policy_not_allowlisted",
+                    tool=name,
+                    trigger="allow_list",
+                    message=f"Tool '{name}' not in allow policy",
+                ),
                 code="tool_policy_not_allowlisted",
             )
 
         if name in self.default_deny_tools:
             return ToolPolicyDecision(
                 allowed=False,
-                reason=f"Tool '{name}' blocked by default deny policy",
+                reason=PolicyReason(
+                    code="tool_policy_default_deny",
+                    tool=name,
+                    trigger="default_deny",
+                    message=f"Tool '{name}' blocked by default deny policy",
+                ),
                 code="tool_policy_default_deny",
             )
 
         return ToolPolicyDecision(
             allowed=True,
-            reason="Allowed by default policy",
+            reason=PolicyReason(
+                code="tool_policy_allowed",
+                tool=name,
+                trigger="default",
+                message="Allowed by default policy",
+            ),
             code="tool_policy_allowed",
         )
 

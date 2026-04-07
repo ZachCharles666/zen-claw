@@ -48,10 +48,32 @@ class CapabilityPolicyEvaluator:
                 else False,
             }
 
+    def _is_hardened(self) -> bool:
+        """Return True when production hardening is active."""
+        if self._policy is not None:
+            return bool(getattr(self._policy, "production_hardening", False))
+        return bool(self._policy_snapshot.get("production_hardening", False))
+
     def evaluate(self, request: CapabilityRequest | None) -> CapabilityPolicyDecision:
+        # GAP-3: null request must be denied under hardening.
         if request is None:
+            if self._is_hardened():
+                return self._deny(
+                    "",
+                    {},
+                    reason="capability request is required under production hardening",
+                    error_code="resource_scope_request_missing",
+                )
             return CapabilityPolicyDecision(allowed=True, capability="")
+        # GAP-2: missing policy object must be denied under hardening.
         if self._policy is None:
+            if self._is_hardened():
+                return self._deny(
+                    request.capability,
+                    request.resource_scope,
+                    reason="policy object missing under production hardening",
+                    error_code="resource_scope_policy_missing",
+                )
             return self._allow(request.capability, request.resource_scope)
         if bool(getattr(self._policy, "legacy_compat", False)):
             return self._allow(
@@ -76,6 +98,14 @@ class CapabilityPolicyEvaluator:
             return self._evaluate_message(scope)
         if capability.startswith("knowledge."):
             return self._evaluate_knowledge(capability, scope)
+        # GAP-1: unknown capability must be denied under hardening.
+        if self._is_hardened():
+            return self._deny(
+                capability,
+                scope,
+                reason="unknown capability is not permitted under production hardening",
+                error_code="resource_scope_capability_unknown",
+            )
         return self._allow(capability, scope)
 
     def denial_result(
@@ -141,7 +171,15 @@ class CapabilityPolicyEvaluator:
     def _evaluate_filesystem(self, scope: dict[str, Any]) -> CapabilityPolicyDecision:
         path_value = str(scope.get("filesystem_path") or "").strip()
         workspace_path = str(scope.get("workspace_path") or self._identity.get("workspace_path") or "").strip()
+        # GAP-4: missing path/workspace must be denied under hardening.
         if not path_value or not workspace_path:
+            if self._is_hardened():
+                return self._deny(
+                    "filesystem.access",
+                    scope,
+                    reason="filesystem path and workspace must be specified under production hardening",
+                    error_code="resource_scope_filesystem_path_missing",
+                )
             return self._allow("filesystem.access", scope)
         try:
             resolved = Path(path_value).expanduser().resolve()
@@ -354,17 +392,33 @@ class CapabilityPolicyEvaluator:
     ) -> CapabilityPolicyDecision:
         if capability == "network.fetch":
             allow_attr = "fetch_allowed_domains"
+            block_attr = "fetch_blocked_domains"
         elif capability == "network.search":
             allow_attr = "search_allowed_domains"
+            block_attr = "search_blocked_domains"
         else:
             allow_attr = "browser_allowed_domains"
+            block_attr = "browser_blocked_domains"
         allowed_domains = list(getattr(self._policy, allow_attr, []) or [])
+        blocked_domains = list(getattr(self._policy, block_attr, []) or [])
         hardening = bool(getattr(self._policy, "production_hardening", False))
         host = str(scope.get("domain") or "").strip().lower()
         url_value = str(scope.get("url") or "").strip()
         if not host and url_value:
             host = str(urlparse(url_value).hostname or "").strip().lower()
         normalized_scope = {**scope, "domain": host}
+
+        # GAP-8: check blocked_domains (deny-list) before allow-list.
+        if blocked_domains and host:
+            if any(host == d or host.endswith("." + d) for d in blocked_domains):
+                return self._deny(
+                    capability,
+                    normalized_scope,
+                    reason=f"domain '{host}' is blocked by policy",
+                    error_code="resource_scope_domain_blocked",
+                    matched_scope={"blocked_domains": blocked_domains},
+                )
+
         if allowed_domains:
             if not host:
                 return self._deny(
@@ -446,7 +500,7 @@ class CapabilityPolicyEvaluator:
         allowed_tenants = list(getattr(self._policy, "connector_allowed_tenants", []) or [])
         allowed_workspaces = list(getattr(self._policy, "connector_allowed_workspaces", []) or [])
         if not any([allowed_names, allowed_actions, allowed_targets, allowed_tenants, allowed_workspaces]):
-            if bool(getattr(self._policy, "production_hardening", False)):
+            if self._is_hardened():
                 return self._deny(
                     capability,
                     normalized_scope,
@@ -454,6 +508,27 @@ class CapabilityPolicyEvaluator:
                     error_code="resource_scope_connector_unconfigured",
                 )
             return self._allow(capability, normalized_scope)
+        # GAP-7: under hardening, all core dimensions (names, actions, targets)
+        # must be configured when at least one dimension is present.
+        if self._is_hardened():
+            missing_dims = []
+            if not allowed_names:
+                missing_dims.append("connector_allowed_names")
+            if not allowed_actions:
+                missing_dims.append("connector_allowed_actions")
+            if not allowed_targets:
+                missing_dims.append("connector_allowed_target_resources")
+            if missing_dims:
+                return self._deny(
+                    capability,
+                    normalized_scope,
+                    reason=(
+                        "connector policy is incomplete under production hardening; "
+                        f"missing: {', '.join(missing_dims)}"
+                    ),
+                    error_code="resource_scope_connector_incomplete",
+                    matched_scope={"missing_dimensions": missing_dims},
+                )
         if allowed_names and connector_name not in allowed_names:
             return self._deny(
                 capability,

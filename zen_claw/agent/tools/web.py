@@ -163,6 +163,14 @@ class WebSearchTool(Tool):
         return await self._search_local(query=query, count=count)
 
     async def _search_local(self, query: str, count: int | None = None) -> ToolResult:
+        # Phase 2-2: hard boundary — block local execution when proxy mode is
+        # active without fallback.
+        if self.mode == "proxy" and not self.proxy_fallback_to_local:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "local search is forbidden when proxy mode is active without fallback",
+                code="web_search_local_forbidden",
+            )
         if not self.api_key:
             return ToolResult.failure(
                 ToolErrorKind.RUNTIME,
@@ -314,7 +322,7 @@ class WebSearchTool(Tool):
                         if self.proxy_fallback_to_local:
                             return await self._search_local(query=query, count=count)
                         return ToolResult.failure(
-                            ToolErrorKind.RETRYABLE,
+                            ToolErrorKind.RUNTIME,
                             f"Net proxy health check failed with HTTP {health.status_code}",
                             code="web_search_proxy_unhealthy",
                         )
@@ -329,7 +337,7 @@ class WebSearchTool(Tool):
             if self.proxy_fallback_to_local:
                 return await self._search_local(query=query, count=count)
             return ToolResult.failure(
-                ToolErrorKind.RETRYABLE,
+                ToolErrorKind.RUNTIME,
                 str(e),
                 code="web_search_proxy_timeout",
             )
@@ -337,7 +345,7 @@ class WebSearchTool(Tool):
             if self.proxy_fallback_to_local:
                 return await self._search_local(query=query, count=count)
             return ToolResult.failure(
-                ToolErrorKind.RETRYABLE,
+                ToolErrorKind.RUNTIME,
                 str(e),
                 code="web_search_proxy_unreachable",
             )
@@ -436,6 +444,14 @@ class WebFetchTool(Tool):
         return await self._fetch_local(url=url, extract_mode=extractMode, max_chars=max_chars)
 
     async def _fetch_local(self, url: str, extract_mode: str, max_chars: int) -> ToolResult:
+        # Phase 2-2: hard boundary — block local execution when proxy mode is
+        # active without fallback.
+        if self.mode == "proxy" and not self.proxy_fallback_to_local:
+            return ToolResult.failure(
+                ToolErrorKind.PERMISSION,
+                "local fetch is forbidden when proxy mode is active without fallback",
+                code="web_fetch_local_forbidden",
+            )
         try:
             async with httpx.AsyncClient(
                 follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=30.0
@@ -621,7 +637,7 @@ class WebFetchTool(Tool):
                                 url=url, extract_mode=extract_mode, max_chars=max_chars
                             )
                         return ToolResult.failure(
-                            ToolErrorKind.RETRYABLE,
+                            ToolErrorKind.RUNTIME,
                             f"Net proxy health check failed with HTTP {health.status_code}",
                             code="web_fetch_proxy_unhealthy",
                         )
@@ -638,7 +654,7 @@ class WebFetchTool(Tool):
                     url=url, extract_mode=extract_mode, max_chars=max_chars
                 )
             return ToolResult.failure(
-                ToolErrorKind.RETRYABLE,
+                ToolErrorKind.RUNTIME,
                 str(e),
                 code="web_fetch_proxy_timeout",
             )
@@ -648,7 +664,7 @@ class WebFetchTool(Tool):
                     url=url, extract_mode=extract_mode, max_chars=max_chars
                 )
             return ToolResult.failure(
-                ToolErrorKind.RETRYABLE,
+                ToolErrorKind.RUNTIME,
                 str(e),
                 code="web_fetch_proxy_unreachable",
             )

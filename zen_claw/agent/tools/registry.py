@@ -297,9 +297,10 @@ class ToolRegistry:
         if not decision.allowed:
             result = ToolResult.failure(
                 ToolErrorKind.PERMISSION,
-                decision.reason,
+                str(decision.reason),
                 code=decision.code,
                 policy_scope=decision.scope or "",
+                policy_reason=decision.reason.to_dict(),
                 skill_names=self._active_skill_names,
                 skill_permissions_mode=self._skill_permissions_mode,
             )
@@ -370,10 +371,23 @@ class ToolRegistry:
             )
             return resource_decision
 
-        # Check Quota
+        # Check Quota (per-tool and per-capability).
         if self._quota_engine:
             tenant_id = trace_id.split(":")[0] if trace_id and ":" in trace_id else "default"
-            quota_ok = await self._quota_engine.check_quota(tenant_id, name)
+            cap_limit: int | None = None
+            cap_name = ""
+            identity_ctx = self._identity_context()
+            cap_request = capability_request_from_tool(name, params, identity_ctx)
+            if cap_request is not None:
+                cap_name = cap_request.capability
+                policy = self._security_policy
+                if policy is not None:
+                    quotas_cfg = getattr(policy, "capability_quotas", None)
+                    if quotas_cfg is not None:
+                        cap_limit = quotas_cfg.limit_for_capability(cap_name)
+            quota_ok = await self._quota_engine.check_quota(
+                tenant_id, name, capability=cap_name, capability_limit=cap_limit,
+            )
             if not quota_ok:
                 result = ToolResult.failure(
                     ToolErrorKind.RETRYABLE,
@@ -644,6 +658,17 @@ class ToolRegistry:
     def _evaluate_resource_policy(self, name: str, params: dict[str, Any]) -> ToolResult | None:
         policy = self._security_policy
         if policy is None:
+            # GAP-9: if request context indicates production hardening but no
+            # policy object is available, deny rather than silently allow.
+            identity_context = self._identity_context()
+            ps = dict(identity_context.get("policy_snapshot") or {})
+            if ps.get("production_hardening"):
+                return ToolResult.failure(
+                    ToolErrorKind.PERMISSION,
+                    "security policy not loaded under production hardening",
+                    code="resource_scope_policy_missing",
+                    policy_scope="resource",
+                )
             return None
         identity_context = self._identity_context()
         request = capability_request_from_tool(name, params, identity_context)

@@ -3,9 +3,19 @@
 import re
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _is_localhost_url(url: str) -> bool:
+    """Return True if URL targets 127.0.0.1 or localhost."""
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    return host in {"127.0.0.1", "localhost", "::1"}
 
 
 class WhatsAppConfig(BaseModel):
@@ -435,6 +445,15 @@ class SkillsMarketConfig(BaseModel):
     trusted_hosts: list[str] = Field(default_factory=list)
 
 
+class SidecarTLSConfig(BaseModel):
+    """TLS configuration for agent-to-sidecar communication."""
+
+    enabled: bool = False
+    cert_file: str = ""    # Client certificate for mTLS
+    key_file: str = ""     # Client private key
+    ca_file: str = ""      # CA certificate to verify sidecar identity
+
+
 class WebSearchConfig(BaseModel):
     """Web search tool configuration."""
 
@@ -446,6 +465,8 @@ class WebSearchConfig(BaseModel):
     proxy_approval_token: SecretStr = SecretStr("")
     proxy_healthcheck: bool = False
     proxy_fallback_to_local: bool = False
+    proxy_tls: SidecarTLSConfig = Field(default_factory=SidecarTLSConfig)
+    blocked_domains: list[str] = Field(default_factory=list)
 
 
 class WebFetchConfig(BaseModel):
@@ -457,6 +478,8 @@ class WebFetchConfig(BaseModel):
     proxy_approval_token: SecretStr = SecretStr("")
     proxy_healthcheck: bool = False
     proxy_fallback_to_local: bool = False
+    proxy_tls: SidecarTLSConfig = Field(default_factory=SidecarTLSConfig)
+    blocked_domains: list[str] = Field(default_factory=list)
 
 
 class ConnectorToolConfig(BaseModel):
@@ -467,6 +490,7 @@ class ConnectorToolConfig(BaseModel):
     sidecar_approval_mode: Literal["token", "hmac"] = "hmac"
     sidecar_approval_token: SecretStr = SecretStr("")
     proxy_healthcheck: bool = False
+    proxy_tls: SidecarTLSConfig = Field(default_factory=SidecarTLSConfig)
 
 
 class WebToolsConfig(BaseModel):
@@ -564,6 +588,7 @@ class BrowserToolConfig(BaseModel):
     sidecar_approval_token: SecretStr = SecretStr("")
     sidecar_healthcheck: bool = False
     sidecar_fallback_to_off: bool = False
+    sidecar_tls: SidecarTLSConfig = Field(default_factory=SidecarTLSConfig)
     allowed_domains: list[str] = Field(default_factory=list)
     blocked_domains: list[str] = Field(default_factory=list)
     max_steps: int = 20
@@ -580,6 +605,7 @@ class ExecToolConfig(BaseModel):
     sidecar_approval_token: SecretStr = SecretStr("")
     sidecar_fallback_to_local: bool = False
     sidecar_healthcheck: bool = False
+    sidecar_tls: SidecarTLSConfig = Field(default_factory=SidecarTLSConfig)
 
 
 class ToolPolicyLayerConfig(BaseModel):
@@ -611,6 +637,37 @@ class ToolPolicyLayerConfig(BaseModel):
         return out
 
 
+class CapabilityQuotaConfig(BaseModel):
+    """Per-capability rate limits (max calls per hour per tenant)."""
+
+    exec_max_per_hour: int = 50
+    fetch_max_per_hour: int = 200
+    search_max_per_hour: int = 100
+    browser_max_per_hour: int = 30
+    connector_write_max_per_hour: int = 50
+    message_max_per_hour: int = 100
+    sessions_max_per_hour: int = 50
+
+    def limit_for_capability(self, capability: str) -> int | None:
+        """Return the hourly limit for a capability, or None if uncapped."""
+        cap = (capability or "").strip().lower()
+        if cap == "exec.run":
+            return self.exec_max_per_hour
+        if cap == "network.fetch":
+            return self.fetch_max_per_hour
+        if cap == "network.search":
+            return self.search_max_per_hour
+        if cap == "network.browser":
+            return self.browser_max_per_hour
+        if cap.startswith("connector."):
+            return self.connector_write_max_per_hour
+        if cap == "message.send":
+            return self.message_max_per_hour
+        if cap.startswith("sessions."):
+            return self.sessions_max_per_hour
+        return None
+
+
 class ToolPolicyConfig(BaseModel):
     """Tool policy configuration."""
 
@@ -636,7 +693,9 @@ class ToolPolicyConfig(BaseModel):
     sessions_allowed_session_ops: list[str] = Field(default_factory=list)
     sessions_max_ttl_sec: int = 1800
     fetch_allowed_domains: list[str] = Field(default_factory=list)
+    fetch_blocked_domains: list[str] = Field(default_factory=list)
     search_allowed_domains: list[str] = Field(default_factory=list)
+    search_blocked_domains: list[str] = Field(default_factory=list)
     browser_allowed_domains: list[str] = Field(default_factory=list)
     message_allowed_channels: list[str] = Field(default_factory=list)
     knowledge_allowed_tenants: list[str] = Field(default_factory=list)
@@ -646,6 +705,8 @@ class ToolPolicyConfig(BaseModel):
     connector_allowed_target_resources: list[str] = Field(default_factory=list)
     connector_allowed_tenants: list[str] = Field(default_factory=list)
     connector_allowed_workspaces: list[str] = Field(default_factory=list)
+    capability_quotas: CapabilityQuotaConfig = Field(default_factory=CapabilityQuotaConfig)
+    capability_quotas_enabled: bool = False
     agent: ToolPolicyLayerConfig = Field(default_factory=lambda: ToolPolicyLayerConfig(allow=["*"]))
     subagent: ToolPolicyLayerConfig = Field(
         default_factory=lambda: ToolPolicyLayerConfig(
@@ -857,6 +918,10 @@ class ToolsConfig(BaseModel):
     sidecar_supervisor_fail_window_sec: int = 120
     sidecar_supervisor_fail_threshold: int = 5
     sidecar_supervisor_circuit_open_sec: int = 120
+    sidecar_sandbox_enabled: bool = True
+    sidecar_sandbox_max_memory_mb: int = 2048
+    sidecar_sandbox_max_processes: int = 256
+    sidecar_sandbox_max_open_files: int = 1024
     policy: ToolPolicyConfig = Field(default_factory=ToolPolicyConfig)
 
     @model_validator(mode="after")
@@ -926,6 +991,27 @@ class ToolsConfig(BaseModel):
         self.network.search.proxy_fallback_to_local = False
         self.network.fetch.proxy_fallback_to_local = False
         self.network.browser.sidecar_fallback_to_off = False
+
+        # GAP-5: Force health checks so sidecar outages fail-closed quickly.
+        self.network.exec.sidecar_healthcheck = True
+        self.network.search.proxy_healthcheck = True
+        self.network.fetch.proxy_healthcheck = True
+        self.network.browser.sidecar_healthcheck = True
+        self.network.connector.proxy_healthcheck = True
+
+        # Phase 2-1: require TLS for non-localhost sidecar endpoints.
+        for label, url, tls_cfg in [
+            ("exec", self.network.exec.sidecar_url, self.network.exec.sidecar_tls),
+            ("search", self.network.search.proxy_url, self.network.search.proxy_tls),
+            ("fetch", self.network.fetch.proxy_url, self.network.fetch.proxy_tls),
+            ("browser", self.network.browser.sidecar_url, self.network.browser.sidecar_tls),
+            ("connector", self.network.connector.proxy_url, self.network.connector.proxy_tls),
+        ]:
+            if not _is_localhost_url(url) and not tls_cfg.enabled:
+                raise ValueError(
+                    f"production_hardening requires TLS for non-localhost sidecar: "
+                    f"tools.network.{label} URL={url}"
+                )
         return self
 
     def effective_exec(self) -> ExecToolConfig:
@@ -945,6 +1031,18 @@ class ToolsConfig(BaseModel):
         return self.network.browser
 
 
+class AuditConfig(BaseModel):
+    """Audit log configuration with optional external sinks."""
+
+    enabled: bool = True
+    local_file: bool = True
+    http_endpoint: str = ""
+    http_auth_token: SecretStr = SecretStr("")
+    syslog_address: str = ""
+    batch_size: int = 50
+    flush_interval_sec: int = 5
+
+
 class Config(BaseSettings):
     """Root configuration for zen_claw."""
 
@@ -962,6 +1060,7 @@ class Config(BaseSettings):
     multitenant: MultiTenantConfig = Field(default_factory=MultiTenantConfig)
     skills_market: SkillsMarketConfig = Field(default_factory=SkillsMarketConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    audit: AuditConfig = Field(default_factory=AuditConfig)
 
     @property
     def workspace_path(self) -> Path:

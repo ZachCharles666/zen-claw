@@ -6,7 +6,7 @@ from zen_claw.agent.tools.capability_policy import (
     CapabilityRequest,
     connector_capability_request,
 )
-from zen_claw.agent.tools.policy import ToolPolicyEngine
+from zen_claw.agent.tools.policy import PolicyReason, ToolPolicyEngine
 from zen_claw.agent.tools.registry import ToolRegistry
 from zen_claw.agent.tools.result import ToolErrorKind
 from zen_claw.config.loader import convert_keys
@@ -492,3 +492,86 @@ def test_capability_policy_evaluator_denies_unconfigured_message_under_hardening
     )
     assert decision.allowed is False
     assert decision.error_code == "resource_scope_message_unconfigured"
+
+
+# ── tests: PolicyReason structured output ────────────────────────────────────
+
+
+def test_policy_reason_str_returns_message() -> None:
+    reason = PolicyReason(
+        code="tool_policy_denied",
+        tool="exec",
+        trigger="session",
+        message="Tool 'exec' denied by policy scope 'session'",
+    )
+    assert str(reason) == "Tool 'exec' denied by policy scope 'session'"
+
+
+def test_policy_reason_to_dict() -> None:
+    reason = PolicyReason(
+        code="tool_policy_denied",
+        tool="exec",
+        trigger="session",
+        message="Tool 'exec' denied by policy scope 'session'",
+    )
+    d = reason.to_dict()
+    assert d == {
+        "code": "tool_policy_denied",
+        "tool": "exec",
+        "trigger": "session",
+        "message": "Tool 'exec' denied by policy scope 'session'",
+    }
+
+
+def test_evaluate_returns_policy_reason_on_scope_deny() -> None:
+    engine = ToolPolicyEngine(default_deny_tools=set())
+    engine.set_scope("channel", deny={"exec"})
+
+    decision = engine.evaluate("exec")
+    assert isinstance(decision.reason, PolicyReason)
+    assert decision.reason.code == "tool_policy_denied"
+    assert decision.reason.tool == "exec"
+    assert decision.reason.trigger == "channel"
+    assert "denied by policy scope" in decision.reason.message
+
+
+def test_evaluate_returns_policy_reason_on_allowlist_allowed() -> None:
+    engine = ToolPolicyEngine(default_deny_tools=set())
+    engine.set_scope("session", allow={"read_file"})
+
+    decision = engine.evaluate("read_file")
+    assert isinstance(decision.reason, PolicyReason)
+    assert decision.reason.code == "tool_policy_allowed"
+    assert decision.reason.tool == "read_file"
+    assert decision.reason.trigger == "allow_list"
+
+
+def test_evaluate_returns_policy_reason_on_not_allowlisted() -> None:
+    engine = ToolPolicyEngine(default_deny_tools=set())
+    engine.set_scope("session", allow={"read_file"})
+
+    decision = engine.evaluate("web_fetch")
+    assert isinstance(decision.reason, PolicyReason)
+    assert decision.reason.code == "tool_policy_not_allowlisted"
+    assert decision.reason.tool == "web_fetch"
+    assert decision.reason.trigger == "allow_list"
+
+
+def test_evaluate_returns_policy_reason_on_default_deny() -> None:
+    engine = ToolPolicyEngine(default_deny_tools={"exec"})
+
+    decision = engine.evaluate("exec")
+    assert isinstance(decision.reason, PolicyReason)
+    assert decision.reason.code == "tool_policy_default_deny"
+    assert decision.reason.tool == "exec"
+    assert decision.reason.trigger == "default_deny"
+
+
+def test_evaluate_returns_policy_reason_on_default_allow() -> None:
+    engine = ToolPolicyEngine(default_deny_tools=set())
+
+    decision = engine.evaluate("read_file")
+    assert isinstance(decision.reason, PolicyReason)
+    assert decision.reason.code == "tool_policy_allowed"
+    assert decision.reason.tool == "read_file"
+    assert decision.reason.trigger == "default"

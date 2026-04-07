@@ -302,12 +302,39 @@ class SidecarSupervisor:
         self._circuit_open_sec = max(
             1, int(getattr(config.tools, "sidecar_supervisor_circuit_open_sec", 120))
         )
+        self._sandbox_enabled = bool(getattr(config.tools, "sidecar_sandbox_enabled", True))
+        self._sandbox_max_memory_mb = int(getattr(config.tools, "sidecar_sandbox_max_memory_mb", 2048))
+        self._sandbox_max_processes = int(getattr(config.tools, "sidecar_sandbox_max_processes", 256))
+        self._sandbox_max_open_files = int(getattr(config.tools, "sidecar_sandbox_max_open_files", 1024))
         self._procs: dict[str, subprocess.Popen[str]] = {}
         self._started_at: dict[str, int] = {}
         self._monitor_task: asyncio.Task | None = None
         self._restart_state: dict[str, dict[str, float]] = {}
         self._failure_history: dict[str, list[float]] = {}
         self._circuit_open_until: dict[str, float] = {}
+
+    def _build_sandbox_preexec(self):
+        """Build a preexec_fn for OS-level sidecar sandboxing (Linux only)."""
+        if not self._sandbox_enabled or os.name != "posix":
+            return None
+
+        max_mem = self._sandbox_max_memory_mb
+        max_procs = self._sandbox_max_processes
+        max_fds = self._sandbox_max_open_files
+
+        def _preexec():
+            import resource as _resource
+
+            mem_bytes = max_mem * 1024 * 1024
+            _resource.setrlimit(_resource.RLIMIT_AS, (mem_bytes, mem_bytes))
+            _resource.setrlimit(_resource.RLIMIT_NPROC, (max_procs, max_procs))
+            _resource.setrlimit(_resource.RLIMIT_NOFILE, (max_fds, max_fds))
+            # Drop privileges if running as root.
+            if os.getuid() == 0:
+                os.setgid(65534)  # nobody
+                os.setuid(65534)
+
+        return _preexec
 
     async def start(self) -> None:
         if not self._specs:
@@ -407,8 +434,8 @@ class SidecarSupervisor:
 
         env = os.environ.copy()
         env.update(spec.env)
-        proc_new = subprocess.Popen(
-            launch_cmd,
+        preexec = self._build_sandbox_preexec()
+        popen_kwargs: dict[str, Any] = dict(
             cwd=str(cwd),
             env=env,
             stdout=subprocess.PIPE,
@@ -416,6 +443,9 @@ class SidecarSupervisor:
             text=True,
             bufsize=1,  # line-buffered so audit events are forwarded promptly
         )
+        if preexec is not None:
+            popen_kwargs["preexec_fn"] = preexec
+        proc_new = subprocess.Popen(launch_cmd, **popen_kwargs)
         for _pipe, _is_err in ((proc_new.stdout, False), (proc_new.stderr, True)):
             if _pipe is not None:
                 threading.Thread(

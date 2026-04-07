@@ -2803,12 +2803,25 @@ class AgentLoop:
                                 },
                             )
                         if not approved:
+                            # Evaluate policy to enrich approval context
+                            _policy = getattr(self.tools, "_policy", None)
+                            if _policy is not None:
+                                _policy_decision = _policy.evaluate(tool_call.name)
+                                _policy_reason = _policy_decision.reason.to_dict()
+                                _approval_reason = (
+                                    _policy_decision.reason.message
+                                    if not _policy_decision.allowed
+                                    else "Sensitive operation"
+                                )
+                            else:
+                                _policy_reason = None
+                                _approval_reason = "Sensitive operation"
                             request_security_context = dict(self.tools._request_context)
                             approval = await self.approval_gate.request_approval(
                                 session_id=session_id,
                                 tool_name=tool_call.name,
                                 tool_args=call_args,
-                                reason="Sensitive operation",
+                                reason=_approval_reason,
                                 bus=self.bus,
                                 channel=channel,
                                 chat_id=chat_id,
@@ -2829,7 +2842,8 @@ class AgentLoop:
                                     if self.tools.has(tool_call.name)
                                     else ""
                                 ),
-                                decision_basis="Sensitive operation",
+                                decision_basis=_approval_reason,
+                                policy_reason=_policy_reason,
                             )
                             if self._audit_worker:
                                 await self._audit_worker.audit_turn(
