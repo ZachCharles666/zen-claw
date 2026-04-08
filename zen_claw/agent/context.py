@@ -64,6 +64,16 @@ class ContextBuilder:
                 recall_strategy = RagRecallStrategy(data_dir=get_data_dir(), notebook_id="default")
             except Exception:
                 recall_strategy = KeywordRecallStrategy()
+        elif memory_recall_mode == "ternary":
+            try:
+                from zen_claw.agent.memory_sqlite import SqliteVectorRecallStrategy
+                from zen_claw.agent.memory_ternary import TernaryRecallStrategy
+
+                primary = SqliteVectorRecallStrategy(workspace / "memory" / "memory.db")
+                recall_strategy = TernaryRecallStrategy(primary=primary)
+            except Exception as exc:
+                logger.debug("ternary memory recall unavailable, fallback to keyword: {}", exc)
+                recall_strategy = KeywordRecallStrategy()
         else:
             recall_strategy = KeywordRecallStrategy()
 
@@ -110,6 +120,8 @@ class ContextBuilder:
         memory = ""
         if self.memory_recall_mode == "recent":
             memory = self.memory.get_recent_memory_context(days=3, max_items=8, max_chars=1200)
+        elif memory_query and self.memory_recall_mode == "ternary":
+            memory = self.memory.get_ternary_memory_context(memory_query)
         elif memory_query and self.memory_recall_mode != "none":
             memory = self.memory.get_relevant_memory_context(memory_query)
         if not memory:

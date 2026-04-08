@@ -248,7 +248,7 @@ class AgentDefaults(BaseModel):
     stability_model: str = ""
     intent_model_overrides: dict[str, str] = Field(default_factory=dict)
     task_type_model_overrides: dict[str, str] = Field(default_factory=dict)
-    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "none"] = "sqlite"
+    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "ternary", "none"] = "sqlite"
     enable_planning: bool = True
     max_reflections: int = 1
     auto_parameter_rewrite: bool = False
@@ -284,7 +284,7 @@ class AgentProfileConfig(BaseModel):
     stability_model: str = ""
     intent_model_overrides: dict[str, str] = Field(default_factory=dict)
     task_type_model_overrides: dict[str, str] = Field(default_factory=dict)
-    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "none"] | None = None
+    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "ternary", "none"] | None = None
     enable_planning: bool | None = None
     max_reflections: int | None = None
     auto_parameter_rewrite: bool | None = None
