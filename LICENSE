@@ -4,8 +4,34 @@ Parameters
 
 Licensor:             zen-claw contributors
 Licensed Work:        zen-claw (小馋虾) version 0.1.3.post5 or later
-Additional Use Grant: You may use the Licensed Work solely for evaluation,
-                      testing, and non-production purposes.
+Additional Use Grant: You may use the Licensed Work for any purpose that does
+                      not constitute a "Commercial Production Use" as defined
+                      below.
+
+                      The following uses are expressly permitted without a
+                      commercial license and are NOT considered Commercial
+                      Production Use:
+
+                      (a) Personal use by individual developers;
+                      (b) Academic research and educational purposes;
+                      (c) Use within non-profit open-source projects;
+                      (d) Internal development, testing, evaluation, and
+                          staging environments within any organization;
+                      (e) Production use within an organization that does not
+                          constitute Commercial Production Use as defined below.
+
+                      "Commercial Production Use" means either of the following:
+
+                      (1) Offering the Licensed Work, or any derivative work, as
+                          a hosted or managed service (SaaS) to third parties,
+                          where the Licensed Work forms a material part of the
+                          value of such service; or
+                      (2) Embedding or distributing the Licensed Work, or any
+                          derivative work, as a component of a commercial product
+                          or solution sold or licensed to third parties.
+
+                      If your use constitutes Commercial Production Use, you must
+                      obtain a commercial license from the Licensor.
 Change Date:          2030-04-01
 Change License:       Apache License, Version 2.0
 
