@@ -389,13 +389,19 @@ class DeclarativeIntentEngine:
         matched_candidates = list(route_candidate.get("matched_candidates") or [])
         multiple_hits = len(matched_candidates) > 1
         has_pronoun_signal = _contains_pronoun_reference(content)
-        long_input = normalized_length >= 28
+        # Dynamic length-outlier threshold: adapts to typical pattern length of
+        # the matched intent; falls back to 28 chars if not available.
+        typical_input_length = int(extraction_trace.get("typical_input_length") or 0)
+        length_outlier_threshold = max(28, 2 * typical_input_length) if typical_input_length else 28
+        long_input = normalized_length >= length_outlier_threshold
 
         weighted_confidence = raw_confidence * history_confidence
         penalties = 0.0
         delegate_reason = ""
         if multiple_hits:
-            penalties += 0.45
+            # Reduced from 0.45: high-confidence single-domain requests were
+            # being over-penalised when two overlapping patterns fired.
+            penalties += 0.30
             delegate_reason = "safety_valve_multiple_candidates"
         if not delegate_reason and has_pronoun_signal:
             penalties += 0.25
@@ -408,6 +414,9 @@ class DeclarativeIntentEngine:
             penalties += 0.15
             if not delegate_reason:
                 delegate_reason = "safety_valve_length_outlier"
+        # Penalty stacking cap: prevents multiple weak signals from
+        # over-penalising an otherwise clear-cut request.
+        penalties = min(0.65, penalties)
         final_confidence = max(0.0, weighted_confidence - penalties)
         if not delegate_reason and final_confidence < self._SAFETY_VALVE_THRESHOLD:
             delegate_reason = "safety_valve_low_confidence"
@@ -423,6 +432,7 @@ class DeclarativeIntentEngine:
             "matched_candidates": matched_candidates,
             "has_context_pronoun": has_pronoun_signal,
             "length_outlier": long_input,
+            "length_outlier_threshold": length_outlier_threshold,
             "delegate_reason": delegate_reason or None,
         }
 

@@ -112,10 +112,20 @@ class IntentRouter(
                 try:
                     success = max(int(stats.get("success", 0) or 0), 0)
                     failure = max(int(stats.get("failure", 0) or 0), 0)
+                    recent_success = max(int(stats.get("recent_success", 0) or 0), 0)
+                    recent_failure = max(int(stats.get("recent_failure", 0) or 0), 0)
                 except (TypeError, ValueError):
                     continue
                 total = success + failure
-                history_confidence[str(intent_name)] = success / total if total > 0 else 1.0
+                recent_total = recent_success + recent_failure
+                lifetime_confidence = success / total if total > 0 else 1.0
+                recent_confidence = (
+                    recent_success / recent_total if recent_total > 0 else lifetime_confidence
+                )
+                # Blend recent (N=20 window) with lifetime history: 70% recent, 30% lifetime.
+                # This makes the confidence score react faster to recent routing outcomes.
+                blended = 0.7 * recent_confidence + 0.3 * lifetime_confidence
+                history_confidence[str(intent_name)] = blended
         emotion_signal = context.get("emotion_signal")
         identity_signal = context.get("identity_signal")
         return ControlSignals(

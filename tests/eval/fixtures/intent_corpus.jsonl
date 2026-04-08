@@ -1,0 +1,37 @@
+{"id": "w001", "content": "上海明天天气怎么样", "expected_gate1_intent": "weather", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "w002", "content": "北京今天下雨吗", "expected_gate1_intent": "weather", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "w003", "content": "What's the weather in Tokyo today?", "expected_gate1_intent": "weather", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "w004", "content": "帮我查深圳这周的天气预报", "expected_gate1_intent": "weather", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "t001", "content": "现在几点了", "expected_gate1_intent": "time", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "t002", "content": "What time is it now?", "expected_gate1_intent": "time", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "t003", "content": "北京现在是几点", "expected_gate1_intent": "time", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "e001", "content": "美元对人民币汇率", "expected_gate1_intent": "exchange_rate", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "e002", "content": "USD to EUR exchange rate", "expected_gate1_intent": "exchange_rate", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "e003", "content": "日元现在多少钱一个", "expected_gate1_intent": "exchange_rate", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "em001", "content": "帮我看一下有没有新邮件", "expected_gate1_intent": "email_check", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "em002", "content": "查一下张总发来的邮件", "expected_gate1_intent": "email_check", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "em003", "content": "Check my unread emails", "expected_gate1_intent": "email_check", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "cal001", "content": "今天有什么日程安排", "expected_gate1_intent": "calendar_check", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "cal002", "content": "明天下午有没有会议", "expected_gate1_intent": "calendar_check", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "cal003", "content": "What's on my calendar tomorrow?", "expected_gate1_intent": "calendar_check", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "r001", "content": "提醒我下午三点开会", "expected_gate1_intent": "reminder", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "r002", "content": "Remind me to call John at 5pm", "expected_gate1_intent": "reminder", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "r003", "content": "明天早上八点提醒我吃药", "expected_gate1_intent": "reminder", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "n001", "content": "帮我查一下Notion里的项目进度", "expected_gate1_intent": "notion_query", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "n002", "content": "查notion数据库里的任务列表", "expected_gate1_intent": "notion_query", "expected_gate1_status": "direct_success", "label": "gate1_route"}
+{"id": "sv001", "content": "那个邮件怎么说的", "expected_gate1_status": "needs_constrained_replan", "expected_delegate_reason": "safety_valve_context_pronoun", "label": "safety_valve_delegate", "note": "pronoun reference — should delegate"}
+{"id": "sv002", "content": "帮我查一下那个人发来的邮件然后回复他说我明天有空", "expected_gate1_status": "needs_constrained_replan", "label": "safety_valve_delegate", "note": "compound + pronoun — should delegate"}
+{"id": "sv003", "content": "Check my emails and summarize the action items and add them to my calendar", "expected_gate1_status": "needs_constrained_replan", "label": "safety_valve_delegate", "note": "compound multi-intent — should delegate"}
+{"id": "sv004", "content": "Actually change that to 3pm", "expected_gate1_status": "needs_constrained_replan", "expected_delegate_reason": "safety_valve_context_pronoun", "label": "safety_valve_delegate", "note": "correction pronoun reference"}
+{"id": "neg001", "content": "帮我写一篇关于AI的文章", "expected_gate1_status": "miss", "label": "negative", "note": "no router coverage — should miss"}
+{"id": "neg002", "content": "Summarize this PDF for me", "expected_gate1_status": "miss", "label": "negative", "note": "no router coverage — should miss"}
+{"id": "neg003", "content": "分析一下这份财报的风险点", "expected_gate1_status": "miss", "label": "negative", "note": "analytical task — no router coverage"}
+{"id": "neg004", "content": "帮我找一个排序算法的Python实现", "expected_gate1_status": "miss", "label": "negative", "note": "code search — no specific router"}
+{"id": "neg005", "content": "What are the best practices for microservices architecture?", "expected_gate1_status": "miss", "label": "negative", "note": "knowledge question — should miss"}
+{"id": "pen001", "content": "帮我查一下天气，然后顺便看看今天的日程", "expected_gate1_status": "needs_constrained_replan", "label": "penalty_test", "note": "compound weather+calendar — multiple candidates expected"}
+{"id": "pen002", "content": "今天天气怎么样，对了还有现在几点", "expected_gate1_status": "needs_constrained_replan", "label": "penalty_test", "note": "compound weather+time — multiple candidates"}
+{"id": "g2001", "content": "帮我查一下那个人发来的邮件", "expected_gate2_kind": "request_clarification", "label": "gate2_classify", "note": "missing sender — gate2 should clarify", "gate2_route_candidate": {"match": "", "source": ""}}
+{"id": "g2002", "content": "把这份合同做合规检查", "expected_gate2_kind": "select_skill", "expected_gate2_skill": "compliance_check", "label": "gate2_classify", "note": "skill fit", "gate2_route_candidate": {"match": "", "source": ""}}
+{"id": "g2003", "content": "帮我比较这两个技术方案并给出建议", "expected_gate2_kind": "unclassified", "label": "gate2_classify", "note": "complete but not covered", "gate2_route_candidate": {"match": "", "source": ""}}
+{"id": "g2004", "content": "上海今天天气", "expected_gate2_kind": "confirm_candidate", "expected_gate2_candidate": "weather", "label": "gate2_classify", "note": "confirm weather candidate", "gate2_route_candidate": {"match": "weather", "source": "declarative"}}
+{"id": "g2005", "content": "Check my emails and add action items to calendar", "expected_gate2_kind": "unclassified", "label": "gate2_classify", "note": "compound — do not confirm partial email match", "gate2_route_candidate": {"match": "email_check", "source": "declarative"}}

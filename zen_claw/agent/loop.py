@@ -1810,16 +1810,33 @@ class AgentLoop:
                 metadata["intent_router_history"] = history
             intent_history = history.get(intent_name)
             if not isinstance(intent_history, dict):
-                intent_history = {"success": 0, "failure": 0}
+                intent_history = {"success": 0, "failure": 0, "recent_success": 0, "recent_failure": 0}
                 history[intent_name] = intent_history
             success = max(int(intent_history.get("success", 0) or 0), 0)
             failure = max(int(intent_history.get("failure", 0) or 0), 0)
+            recent_success = max(int(intent_history.get("recent_success", 0) or 0), 0)
+            recent_failure = max(int(intent_history.get("recent_failure", 0) or 0), 0)
             if route_result.route_status == "direct_success":
                 success += 1
+                recent_success += 1
             else:
                 failure += 1
+                recent_failure += 1
+            # Rolling window of N=20: approximate FIFO by decrementing the
+            # older counter when the window is full.
+            recent_window = 20
+            if recent_success + recent_failure > recent_window:
+                # Remove oldest event: proxy by decrementing whichever counter
+                # has the higher ratio of lifetime vs recent (i.e. oldest events
+                # are most likely from the larger lifetime pool).
+                if success - recent_success >= failure - recent_failure:
+                    recent_success = max(0, recent_success - 1)
+                else:
+                    recent_failure = max(0, recent_failure - 1)
             intent_history["success"] = success
             intent_history["failure"] = failure
+            intent_history["recent_success"] = recent_success
+            intent_history["recent_failure"] = recent_failure
             metadata["intent_router_last_rule"] = {
                 "intent_name": intent_name,
                 "source": source,
