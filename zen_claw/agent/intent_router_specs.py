@@ -175,3 +175,76 @@ class IntentRouterSpecsMixin:
         failure_mode="runtime_direct",
     )
     _LOW_RISK_FETCH_RETRY = RetryPolicy(max_attempts=2)
+
+    # ── Stock / Crypto price lookup ────────────────────────────────────────────
+    _STOCK_ALIASES: dict[str, str] = {
+        # Chinese company names → US ticker
+        "苹果": "AAPL",
+        "微软": "MSFT",
+        "谷歌": "GOOGL",
+        "亚马逊": "AMZN",
+        "特斯拉": "TSLA",
+        "英伟达": "NVDA",
+        "脸书": "META",
+        "meta": "META",
+        "奈飞": "NFLX",
+        "netflix": "NFLX",
+        "台积电": "TSM",
+        "阿里巴巴": "BABA",
+        "腾讯": "0700.HK",
+        "京东": "JD",
+    }
+    # Map common crypto names/symbols → CoinGecko IDs
+    _CRYPTO_IDS: dict[str, str] = {
+        "btc": "bitcoin",
+        "bitcoin": "bitcoin",
+        "比特币": "bitcoin",
+        "eth": "ethereum",
+        "ethereum": "ethereum",
+        "以太坊": "ethereum",
+        "ether": "ethereum",
+        "sol": "solana",
+        "solana": "solana",
+        "bnb": "binancecoin",
+        "usdt": "tether",
+        "xrp": "ripple",
+        "ripple": "ripple",
+        "doge": "dogecoin",
+        "dogecoin": "dogecoin",
+        "狗狗币": "dogecoin",
+        "ada": "cardano",
+        "cardano": "cardano",
+        "avax": "avalanche-2",
+        "dot": "polkadot",
+        "polkadot": "polkadot",
+        "matic": "matic-network",
+        "polygon": "matic-network",
+        "link": "chainlink",
+        "chainlink": "chainlink",
+        "ltc": "litecoin",
+        "litecoin": "litecoin",
+    }
+    _STOCK_CONTRACT = IntentToolContract(
+        intent_name="stock_price",
+        intent_mode="router_first",
+        preferred_tools=["web_fetch"],
+        allowed_tools={"web_fetch"},
+        denied_tools={"exec", "spawn", "write_file", "edit_file"},
+        allow_constrained_replan=True,
+        allow_high_risk_escalation=False,
+        response_mode="direct",
+        failure_mode="runtime_direct",
+    )
+
+    # ── Quick note capture ─────────────────────────────────────────────────────
+    _QUICK_NOTE_CONTRACT = IntentToolContract(
+        intent_name="quick_note",
+        intent_mode="router_first",
+        preferred_tools=["write_file"],
+        allowed_tools={"write_file"},
+        denied_tools={"exec", "spawn", "web_fetch"},
+        allow_constrained_replan=False,
+        allow_high_risk_escalation=False,
+        response_mode="direct",
+        failure_mode="runtime_direct",
+    )
