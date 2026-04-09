@@ -94,23 +94,39 @@ class SkillsLoader:
         self._load_skill_mapping()
         self._journal_recovery()
 
-    async def search_skill(self, query: str) -> list[dict]:
-        """
-        Search for skills in the remote catalog and generate short-lived snapshots.
+    async def search_skill(
+        self,
+        query: str,
+        source: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[dict]:
+        """Search for skills across all configured sources.
+
+        Args:
+            query: Free-text search term matched against name and description.
+            source: Optional source name filter (e.g. "zen-claw-official").
+            tags: Optional tag filter; entries must match at least one tag.
 
         Returns:
-            List of skill metadata bits including a system-signed snapshot_id.
+            List of dicts with name, version, publisher, source, trust,
+            and a system-signed snapshot_id for staging/installing.
         """
-        rows = self._search_registry(query=query.strip())
+        rows = self._search_all_sources(
+            query=query.strip(), source_name=source, tags=tags
+        )
         now = self._now_ts()
         results: list[dict] = []
-        for entry in rows:
-            snapshot = {
+        for entry, src_name, src_trust, src_type, src_url in rows:
+            snapshot: dict[str, Any] = {
                 "name": entry.name,
                 "version": entry.version,
                 "digest": entry.sha256 or "",
                 "publisher": entry.author or "unknown",
                 "download_url": entry.download_url or "",
+                "source_name": src_name,
+                "source_trust": src_trust,
+                "source_type": src_type,
+                "source_url": src_url,
                 "issued_at": now,
                 "expires_at": now + self.MAX_SNAPSHOT_AGE,
                 "nonce": os.urandom(8).hex(),
@@ -122,6 +138,8 @@ class SkillsLoader:
                     "name": entry.name,
                     "version": entry.version,
                     "publisher": snapshot["publisher"],
+                    "source": src_name,
+                    "trust": src_trust,
                     "snapshot_id": snapshot_id,
                 }
             )
@@ -241,6 +259,245 @@ class SkillsLoader:
             f"Skill '{name}' installed from registry. Reloading context.",
             pins={name: name},
         )
+
+    # ------------------------------------------------------------------
+    # Staging API  (D3: download → sandbox → edit → install)
+    # ------------------------------------------------------------------
+
+    @property
+    def _staging_dir(self) -> Path:
+        return self.workspace / ".zen-claw" / "staging"
+
+    async def stage_skill(self, snapshot_id: str) -> tuple[bool, str]:
+        """Download and sanitize a skill into the staging area for review/editing.
+
+        Unlike install_skill_by_snapshot(), this does NOT install the skill —
+        it leaves the sanitized files in .zen-claw/staging/<name>/ so the user
+        can inspect and edit them before calling install_from_staging().
+
+        Supports registry, github, and local source types stored in the snapshot.
+        """
+        import hashlib as _hashlib
+
+        import httpx as _httpx
+
+        from zen_claw.agent.tools.web import _validate_url
+
+        async with self._install_mutex:
+            snapshot = self._snapshots.get(snapshot_id)
+            if not snapshot:
+                return False, "invalid or expired snapshot_id"
+            if self._sign_snapshot(snapshot) != snapshot_id:
+                del self._snapshots[snapshot_id]
+                return False, "invalid snapshot signature"
+            if self._now_ts() > snapshot["expires_at"]:
+                del self._snapshots[snapshot_id]
+                return False, "snapshot expired"
+
+            metadata = self._snapshots.pop(snapshot_id)
+            name = metadata["name"]
+            source_type = metadata.get("source_type", "registry")
+
+            staging_dst = self._staging_dir / name
+            if staging_dst.exists():
+                shutil.rmtree(staging_dst, ignore_errors=True)
+
+            # --- GitHub source: fetch individual files, build in-memory zip ---
+            if source_type == "github":
+                source_url = metadata.get("source_url", "")
+                source_name = metadata.get("source_name", "github")
+                from zen_claw.skills.sources import GitHubSkillSource
+
+                gh = GitHubSkillSource(source_url, source_name)
+                zip_bytes = gh.fetch_skill_zip(name)
+                if not zip_bytes:
+                    return False, f"GitHub: could not fetch skill '{name}' from {source_url}"
+                dl_dir = self.workspace / ".zen-claw" / "downloads"
+                dl_dir.mkdir(parents=True, exist_ok=True)
+                tmp_zip = dl_dir / f"_staging_{snapshot_id[:16]}.zip"
+                try:
+                    tmp_zip.write_bytes(zip_bytes)
+                    ok, err = self._sanitize_zip_to_staging(tmp_zip, name, staging_dst)
+                finally:
+                    try:
+                        tmp_zip.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                if not ok:
+                    return False, err
+                return True, f"staged '{name}' at {staging_dst} (from GitHub)"
+
+            # --- Local source: sanitize directly into staging ---
+            if source_type == "local":
+                src_path = Path(metadata.get("download_url", ""))
+                if not src_path.is_dir():
+                    return False, f"local source not found: {src_path}"
+                ok, err = self._sanitize_dir_to_staging(src_path, name, staging_dst)
+                if not ok:
+                    return False, err
+                return True, f"staged '{name}' at {staging_dst} (from local)"
+
+            # --- Registry source: download zip ---
+            download_url = str(metadata.get("download_url") or "").strip()
+            expected_digest = str(metadata.get("digest") or "").strip().lower()
+            if not download_url:
+                return False, "snapshot has no download_url"
+            url_ok, url_err = _validate_url(download_url)
+            if not url_ok:
+                return False, f"download_url rejected: {url_err}"
+            if download_url.split("://", 1)[0].lower() != "https":
+                return False, "download_url must use https"
+
+            dl_dir = self.workspace / ".zen-claw" / "downloads"
+            dl_dir.mkdir(parents=True, exist_ok=True)
+            tmp_zip = dl_dir / f"_staging_{snapshot_id[:16]}.zip"
+            try:
+                async with _httpx.AsyncClient(
+                    follow_redirects=True, timeout=30.0, proxy=None, trust_env=False
+                ) as client:
+                    async with client.stream("GET", download_url) as response:
+                        if response.status_code >= 400:
+                            return False, f"download failed: HTTP {response.status_code}"
+                        downloaded = 0
+                        hasher = _hashlib.sha256()
+                        with open(tmp_zip, "wb") as fh:
+                            async for chunk in response.aiter_bytes(chunk_size=65536):
+                                downloaded += len(chunk)
+                                if downloaded > self._zip_max_total_uncompressed_bytes:
+                                    return False, "download exceeds maximum allowed size"
+                                hasher.update(chunk)
+                                fh.write(chunk)
+                if expected_digest:
+                    actual = hasher.hexdigest().lower()
+                    if actual != expected_digest:
+                        return False, f"digest mismatch: expected {expected_digest}, got {actual}"
+                ok, err = self._sanitize_zip_to_staging(tmp_zip, name, staging_dst)
+            finally:
+                try:
+                    tmp_zip.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            if not ok:
+                return False, err
+            return True, f"staged '{name}' at {staging_dst}"
+
+    def _sanitize_zip_to_staging(
+        self, zip_path: Path, name: str, staging_dst: Path
+    ) -> tuple[bool, str]:
+        """Extract, sanitize, and copy a zip to the staging destination."""
+        with tempfile.TemporaryDirectory(prefix="zen-claw-skill-zip-") as tmp:
+            tmpdir = Path(tmp)
+            try:
+                with zipfile.ZipFile(zip_path, "r") as zf:
+                    ok, err = self._safe_extract_zip(zf, tmpdir)
+                    if not ok:
+                        return False, err
+            except zipfile.BadZipFile:
+                return False, "invalid zip archive"
+            candidates = [p.parent for p in tmpdir.rglob("SKILL.md") if p.is_file()]
+            unique = sorted(
+                {str(p.resolve()): p for p in candidates}.values(), key=lambda p: len(p.parts)
+            )
+            if not unique:
+                return False, "zip archive must contain SKILL.md"
+            if len(unique) != 1:
+                return False, "zip archive must contain exactly one skill directory"
+            return self._sanitize_dir_to_staging(unique[0], name, staging_dst)
+
+    def _sanitize_dir_to_staging(
+        self, src: Path, name: str, staging_dst: Path
+    ) -> tuple[bool, str]:
+        """Sanitize *src* directory and copy the result to *staging_dst*."""
+        with tempfile.TemporaryDirectory(prefix="zen-claw-skill-sanitize-") as tmp:
+            sandbox_root = Path(tmp) / name
+            try:
+                shutil.copytree(src, sandbox_root)
+            except Exception as exc:
+                return False, f"sanitize staging failed: {exc}"
+            ok, msg = self._sanitize_skill_dir(
+                sandbox_root, skill_name=name, require_manifest=False
+            )
+            if not ok:
+                return False, msg
+            staging_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(sandbox_root, staging_dst)
+        return True, f"sanitized to {staging_dst}"
+
+    def list_staged(self) -> list[dict]:
+        """Return metadata for all skills currently in the staging area."""
+        staging = self._staging_dir
+        if not staging.is_dir():
+            return []
+        results = []
+        for entry in sorted(staging.iterdir()):
+            if not entry.is_dir():
+                continue
+            skill_md = entry / "SKILL.md"
+            if not skill_md.exists():
+                continue
+            manifest: dict = {}
+            manifest_path = entry / "manifest.json"
+            if manifest_path.exists():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+            results.append(
+                {
+                    "name": entry.name,
+                    "version": manifest.get("version", "?"),
+                    "description": manifest.get("description", ""),
+                    "path": str(entry),
+                }
+            )
+        return results
+
+    def install_from_staging(
+        self, skill_name: str, overwrite: bool = False
+    ) -> None:
+        """Install a staged skill into the workspace and hot-swap.
+
+        The staged files are used as-is (the user may have edited them).
+        A lightweight manifest schema check is run; full content sanitization
+        is intentionally skipped so user edits are preserved.
+
+        Raises AgentMidTurnReloadException on success.
+        """
+        staging_path = self._staging_dir / skill_name
+        if not staging_path.is_dir():
+            raise ValueError(f"no staged skill named '{skill_name}'")
+        if not (staging_path / "SKILL.md").exists():
+            raise ValueError(f"staged skill '{skill_name}' is missing SKILL.md")
+
+        # Validate manifest schema only (no content scrubbing)
+        manifest_path = staging_path / "manifest.json"
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if not isinstance(manifest, dict):
+                    raise ValueError("manifest.json root must be an object")
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"manifest.json parse error: {exc}") from exc
+
+        ok, err = self._install_skill_tree(staging_path, skill_name=skill_name, overwrite=overwrite)
+        if not ok:
+            raise RuntimeError(f"install_from_staging failed: {err}")
+
+        # Clean up staging dir after successful install
+        shutil.rmtree(staging_path, ignore_errors=True)
+
+        raise AgentMidTurnReloadException(
+            f"Skill '{skill_name}' installed from staging area. Reloading context.",
+            pins={skill_name: skill_name},
+        )
+
+    def discard_staged(self, skill_name: str) -> tuple[bool, str]:
+        """Remove a skill from the staging area without installing it."""
+        staging_path = self._staging_dir / skill_name
+        if not staging_path.exists():
+            return False, f"no staged skill named '{skill_name}'"
+        shutil.rmtree(staging_path, ignore_errors=True)
+        return True, f"discarded staged skill '{skill_name}'"
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
@@ -1730,6 +1987,136 @@ class SkillsLoader:
         except RuntimeError as exc:
             logger.warning(f"Skill registry search failed: {exc}")
             return []
+
+    # --- Multi-source search helpers ---
+
+    def _resolve_all_sources(self) -> list[dict]:
+        """Return list of source config dicts from config, falling back to legacy single-source."""
+        sources: list[dict] = []
+        try:
+            from zen_claw.config.loader import load_config
+
+            cfg = load_config()
+            market = getattr(cfg, "skills_market", None)
+            if market is not None:
+                cfg_sources = getattr(market, "sources", None) or []
+                default_ttl = int(getattr(market, "cache_ttl_sec", 3600) or 3600)
+                default_hosts = list(getattr(market, "trusted_hosts", None) or [])
+                for s in cfg_sources:
+                    sources.append(
+                        {
+                            "name": s.name,
+                            "url": s.url,
+                            "type": s.type,
+                            "trust": s.trust,
+                            "enabled": s.enabled,
+                            "cache_ttl_sec": s.cache_ttl_sec if s.cache_ttl_sec is not None else default_ttl,
+                            "trusted_hosts": list(s.trusted_hosts) or default_hosts,
+                        }
+                    )
+        except Exception:
+            pass
+
+        if not sources:
+            # Fallback: wrap legacy single-source config
+            registry_url, _, cache_ttl, trusted_hosts = self._resolve_runtime_market_config()
+            sources.append(
+                {
+                    "name": "default",
+                    "url": registry_url,
+                    "type": "registry",
+                    "trust": "official",
+                    "enabled": True,
+                    "cache_ttl_sec": cache_ttl,
+                    "trusted_hosts": trusted_hosts,
+                }
+            )
+        return sources
+
+    def _search_source(
+        self, src: dict, query: str, tags: list[str] | None
+    ) -> list[RegistryEntry]:
+        """Query a single source config dict and return matching entries."""
+        src_type = src.get("type", "registry")
+        url = src["url"]
+        q = query.lower()
+
+        if src_type == "registry":
+            cache_path = (
+                self.workspace / ".zen-claw" / "skills" / f"{src['name']}_cache.json"
+            )
+            registry = SkillsRegistry(
+                registry_url=url,
+                cache_path=cache_path,
+                cache_ttl_sec=src.get("cache_ttl_sec", 3600),
+                trusted_hosts=src.get("trusted_hosts") or [],
+            )
+            try:
+                entries = registry.search(query=query, force_refresh=False)
+            except RuntimeError as exc:
+                logger.warning(f"Source '{src['name']}' search failed: {exc}")
+                entries = []
+
+        elif src_type == "github":
+            from zen_claw.skills.sources import GitHubSkillSource
+
+            gh = GitHubSkillSource(url, src["name"])
+            try:
+                entries = gh.list_entries()
+            except Exception as exc:
+                logger.warning(f"GitHub source '{src['name']}' failed: {exc}")
+                entries = []
+            if q:
+                entries = [
+                    e for e in entries if q in e.name.lower() or q in e.description.lower()
+                ]
+
+        elif src_type == "local":
+            from zen_claw.skills.sources import LocalDirSkillSource
+
+            local = LocalDirSkillSource(url, src["name"])
+            try:
+                entries = local.list_entries()
+            except Exception as exc:
+                logger.warning(f"Local source '{src['name']}' failed: {exc}")
+                entries = []
+            if q:
+                entries = [
+                    e for e in entries if q in e.name.lower() or q in e.description.lower()
+                ]
+
+        else:
+            logger.warning(f"Unknown source type '{src_type}' for source '{src['name']}'")
+            entries = []
+
+        if tags:
+            tag_set = {t.lower() for t in tags}
+            entries = [e for e in entries if any(t.lower() in tag_set for t in (e.tags or []))]
+
+        return entries
+
+    def _search_all_sources(
+        self,
+        query: str,
+        source_name: str | None = None,
+        tags: list[str] | None = None,
+    ) -> list[tuple[RegistryEntry, str, str, str, str]]:
+        """Query all enabled sources and return (entry, src_name, trust, type, url) tuples.
+
+        Results are returned in source priority order. Duplicate skill names across
+        sources are kept (the caller can choose which snapshot to stage).
+        """
+        all_sources = self._resolve_all_sources()
+        results: list[tuple[RegistryEntry, str, str, str, str]] = []
+        for src in all_sources:
+            if not src.get("enabled", True):
+                continue
+            if source_name and src["name"] != source_name:
+                continue
+            entries = self._search_source(src, query, tags)
+            for entry in entries:
+                results.append((entry, src["name"], src["trust"], src["type"], src["url"]))
+        return results
 
     def _resolve_runtime_market_config(self) -> tuple[str, str, int, list[str]]:
         """Load runtime market config, fallback to safe defaults."""

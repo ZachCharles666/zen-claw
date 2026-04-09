@@ -434,9 +434,24 @@ class MultiTenantConfig(BaseModel):
     )
 
 
+class SkillSourceConfig(BaseModel):
+    """Configuration for a single skill source."""
+
+    name: str
+    url: str
+    type: Literal["registry", "github", "local"] = "registry"
+    trust: Literal["official", "trusted", "untrusted"] = "untrusted"
+    enabled: bool = True
+    cache_ttl_sec: int | None = None  # overrides parent cache_ttl_sec when set
+    trusted_hosts: list[str] = Field(default_factory=list)
+
+
 class SkillsMarketConfig(BaseModel):
     """Skills market configuration."""
 
+    # Multi-source support. When non-empty, overrides registry_url.
+    sources: list[SkillSourceConfig] = Field(default_factory=list)
+    # Legacy single-source URL. Ignored when sources is set.
     registry_url: str = "https://zen-claw.github.io/skills-registry/index.json"
     cache_file: str = "registry_cache.json"
     cache_ttl_sec: int = 3600
