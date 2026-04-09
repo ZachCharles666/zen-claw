@@ -1,0 +1,13 @@
+{
+  "name": "browser_automation",
+  "version": "1.0.0",
+  "description": "Automate web browsers for scraping, form filling, and UI testing using Playwright or web_fetch.",
+  "permissions": [
+    "exec",
+    "web_fetch"
+  ],
+  "scopes": [
+    "exec",
+    "network"
+  ]
+}

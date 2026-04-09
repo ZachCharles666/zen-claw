@@ -1,0 +1,13 @@
+{
+  "name": "devops_monitor",
+  "version": "1.0.0",
+  "description": "Monitor CI/CD pipelines, containers, Kubernetes workloads, and service health endpoints.",
+  "permissions": [
+    "exec",
+    "web_fetch"
+  ],
+  "scopes": [
+    "exec",
+    "network"
+  ]
+}

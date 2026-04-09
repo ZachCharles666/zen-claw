@@ -1,0 +1,12 @@
+{
+  "name": "database_assistant",
+  "version": "1.0.0",
+  "description": "Query and explore databases using SQLite, PostgreSQL, MySQL, or MongoDB CLI tools.",
+  "permissions": [
+    "exec",
+    "read_file"
+  ],
+  "scopes": [
+    "exec"
+  ]
+}
