@@ -74,6 +74,16 @@ class ContextBuilder:
             except Exception as exc:
                 logger.debug("ternary memory recall unavailable, fallback to keyword: {}", exc)
                 recall_strategy = KeywordRecallStrategy()
+        elif memory_recall_mode == "trit":
+            try:
+                from zen_claw.agent.memory_sqlite import SqliteVectorRecallStrategy
+                from zen_claw.agent.memory_ternary import TriternaryRecallStrategy
+
+                primary = SqliteVectorRecallStrategy(workspace / "memory" / "memory.db")
+                recall_strategy = TriternaryRecallStrategy(primary=primary)
+            except Exception as exc:
+                logger.debug("trit memory recall unavailable, fallback to keyword: {}", exc)
+                recall_strategy = KeywordRecallStrategy()
         else:
             recall_strategy = KeywordRecallStrategy()
 

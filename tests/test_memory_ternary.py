@@ -6,6 +6,7 @@ from zen_claw.agent.memory_ternary import (
     TernaryRecallStrategy,
     TernaryResult,
     TernaryTier,
+    TriternaryRecallStrategy,
 )
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -312,3 +313,98 @@ def test_with_keyword_primary_and_secondary() -> None:
     texts = [t for _, t in result]
     if texts:
         assert texts[0] == "user prefers dark mode in settings"
+
+
+# ── TriternaryRecallStrategy ──────────────────────────────────────────────────
+
+
+class _FixedTriScorer:
+    """Deterministic scorer for TriternaryRecallStrategy tests."""
+
+    def __init__(self, scores: dict[str, float]):
+        self._scores = scores
+        self.calls: list[tuple[str, str]] = []
+
+    def score(self, query: str, candidate: str) -> float:
+        self.calls.append((query, candidate))
+        return self._scores.get(candidate, 0.0)
+
+
+def test_triternary_score_accept_tier() -> None:
+    primary = _FixedTriScorer({"a": 0.8})
+    strategy = TriternaryRecallStrategy(primary=primary)
+    assert strategy.score("q", "a") == 1.0
+
+
+def test_triternary_score_reject_tier() -> None:
+    primary = _FixedTriScorer({"a": 0.1})
+    strategy = TriternaryRecallStrategy(primary=primary)
+    assert strategy.score("q", "a") == -1.0
+
+
+def test_triternary_score_uncertain_tier() -> None:
+    primary = _FixedTriScorer({"a": 0.4})
+    strategy = TriternaryRecallStrategy(primary=primary)
+    assert strategy.score("q", "a") == 0.0
+
+
+def test_triternary_score_boundary_accept() -> None:
+    """Score exactly at accept_threshold should return ACCEPT."""
+    primary = _FixedTriScorer({"a": 0.6})
+    strategy = TriternaryRecallStrategy(primary=primary)
+    assert strategy.score("q", "a") == 1.0
+
+
+def test_triternary_score_boundary_reject() -> None:
+    """Score exactly at reject_threshold should return UNCERTAIN, not REJECT."""
+    primary = _FixedTriScorer({"a": 0.2})
+    strategy = TriternaryRecallStrategy(primary=primary, config=TernaryConfig(reject_threshold=0.2))
+    # raw >= reject_threshold → not < reject_threshold → UNCERTAIN
+    assert strategy.score("q", "a") == 0.0
+
+
+def test_triternary_custom_config() -> None:
+    cfg = TernaryConfig(reject_threshold=0.1, accept_threshold=0.5)
+    primary = _FixedTriScorer({"a": 0.5, "b": 0.3, "c": 0.05})
+    strategy = TriternaryRecallStrategy(primary=primary, config=cfg)
+    assert strategy.score("q", "a") == 1.0   # >= 0.5
+    assert strategy.score("q", "b") == 0.0   # 0.1 <= b < 0.5
+    assert strategy.score("q", "c") == -1.0  # < 0.1
+
+
+def test_triternary_recall_returns_only_accepted() -> None:
+    primary = _FixedTriScorer({"accept_me": 0.9, "maybe": 0.4, "reject_me": 0.05})
+    strategy = TriternaryRecallStrategy(primary=primary)
+    result = strategy.recall("q", ["accept_me", "maybe", "reject_me"])
+    assert result == ["accept_me"]
+    assert "maybe" not in result
+    assert "reject_me" not in result
+
+
+def test_triternary_recall_respects_max_results() -> None:
+    scores = {f"item_{i}": 0.9 for i in range(20)}
+    primary = _FixedTriScorer(scores)
+    strategy = TriternaryRecallStrategy(primary=primary)
+    result = strategy.recall("q", list(scores.keys()), max_results=5)
+    assert len(result) == 5
+
+
+def test_triternary_recall_empty_candidates() -> None:
+    primary = _FixedTriScorer({})
+    strategy = TriternaryRecallStrategy(primary=primary)
+    assert strategy.recall("q", []) == []
+
+
+def test_triternary_primary_score_is_called() -> None:
+    """Verify that the primary scorer's score() is invoked for each candidate."""
+    primary = _FixedTriScorer({"x": 0.7})
+    strategy = TriternaryRecallStrategy(primary=primary)
+    strategy.score("query", "x")
+    assert ("query", "x") in primary.calls
+
+
+def test_triternary_default_config_is_ternary_config_defaults() -> None:
+    primary = _FixedTriScorer({})
+    strategy = TriternaryRecallStrategy(primary=primary)
+    assert strategy._config.reject_threshold == 0.2
+    assert strategy._config.accept_threshold == 0.6

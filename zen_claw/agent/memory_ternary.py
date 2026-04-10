@@ -195,3 +195,44 @@ class TernaryRecallStrategy(MemoryRecallStrategy):
             if s > 0:
                 scored.append((s, c))
         return sorted(scored, key=lambda x: x[0], reverse=True)
+
+
+class TriternaryRecallStrategy(MemoryRecallStrategy):
+    """Native ternary scorer: score() returns {-1.0, 0.0, 1.0} directly.
+
+    Unlike TernaryRecallStrategy (which wraps a float scorer and classifies
+    the float output post-hoc, with secondary scoring for the uncertain band),
+    TriternaryRecallStrategy snaps the primary score to one of three discrete
+    values using TernaryConfig thresholds.  The discrete value is what callers
+    receive from score() — no further resolution step is performed.
+    """
+
+    def __init__(
+        self,
+        primary: MemoryRecallStrategy,
+        config: TernaryConfig | None = None,
+    ) -> None:
+        self._primary = primary
+        self._config = config or TernaryConfig()
+
+    def score(self, query: str, candidate: str) -> float:
+        """Return {-1.0, 0.0, 1.0} by snapping the primary float score."""
+        raw = self._primary.score(query, candidate)
+        if raw >= self._config.accept_threshold:
+            return float(TernaryTier.ACCEPT)    # 1.0
+        if raw < self._config.reject_threshold:
+            return float(TernaryTier.REJECT)    # -1.0
+        return float(TernaryTier.UNCERTAIN)     # 0.0
+
+    def recall(
+        self,
+        query: str,
+        candidates: list[str],
+        max_results: int = 10,
+    ) -> list[str]:
+        """Return only ACCEPT-tier candidates, up to max_results."""
+        accepted = [
+            c for c in candidates
+            if self.score(query, c) == float(TernaryTier.ACCEPT)
+        ]
+        return accepted[:max_results]
