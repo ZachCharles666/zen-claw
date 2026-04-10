@@ -971,6 +971,7 @@ class IntentRouterHandlersMixin:
                 intent_name="stock_price",
                 content=f"无法获取 {coin_id} 价格：{result.error.message if result.error else '网络错误'}",
                 contract=self._STOCK_CONTRACT,
+                diagnostic=f"crypto_fetch_failed:{coin_id}",
             )
         try:
             import json as _json
@@ -1063,6 +1064,7 @@ class IntentRouterHandlersMixin:
                 intent_name="quick_note",
                 content=f"记录失败：{err}（请检查 write_file 工具是否已配置，或 notes 目录 {notes_dir} 是否存在）",
                 contract=self._QUICK_NOTE_CONTRACT,
+                diagnostic="quick_note_write_failed",
             )
         return self._direct_success(
             intent_name="quick_note",

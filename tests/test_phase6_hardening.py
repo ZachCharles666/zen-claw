@@ -34,18 +34,22 @@ class _DummyProvider(LLMProvider):
 def test_search_skill_generates_signed_snapshot(tmp_path: Path, monkeypatch) -> None:
     loader = SkillsLoader(tmp_path)
     monkeypatch.setattr(loader, "_now_ts", lambda: 1_700_000_000.0)
+
+    _entry = RegistryEntry(
+        name="web-search",
+        version="1.0.0",
+        description="x",
+        author="team",
+        download_url="https://downloads.example.com/web-search.zip",
+        sha256="abc123",
+    )
+    # Patch _search_all_sources (the current multi-source entry point) instead of
+    # the removed _search_registry, so no real network call is made.
     monkeypatch.setattr(
         loader,
-        "_search_registry",
-        lambda query: [
-            RegistryEntry(
-                name="web-search",
-                version="1.0.0",
-                description="x",
-                author="team",
-                download_url="https://downloads.example.com/web-search.zip",
-                sha256="abc123",
-            )
+        "_search_all_sources",
+        lambda query, source_name=None, tags=None: [
+            (_entry, "default", "trusted", "registry", "https://example.com/index.json")
         ],
     )
 
