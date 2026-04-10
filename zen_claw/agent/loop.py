@@ -2824,12 +2824,34 @@ class AgentLoop:
                             _policy = getattr(self.tools, "_policy", None)
                             if _policy is not None:
                                 _policy_decision = _policy.evaluate(tool_call.name)
+                                # Short-circuit: policy already denied — skip ApprovalGate entirely
+                                if not _policy_decision.allowed:
+                                    _policy_reason = _policy_decision.reason.to_dict()
+                                    result = ToolResult.failure(
+                                        ToolErrorKind.PERMISSION,
+                                        _policy_decision.reason.message,
+                                        code=_policy_decision.reason.code,
+                                    )
+                                    if self._audit_worker:
+                                        await self._audit_worker.audit_turn(
+                                            trace_id,
+                                            {
+                                                "event_type": "tool.policy_denied",
+                                                "tool": tool_call.name,
+                                                "policy_reason": _policy_reason,
+                                                "identity": self.tools._audit_identity_summary(),
+                                            },
+                                        )
+                                    trace_summary["tool_failures"] = int(trace_summary.get("tool_failures", 0)) + 1
+                                    trace_summary["last_error_kind"] = ToolErrorKind.PERMISSION.value
+                                    trace_summary["last_error_code"] = _policy_decision.reason.code
+                                    tool_results.append(result)
+                                    messages = self.context.add_tool_result(
+                                        messages, tool_call.id, tool_call.name, result
+                                    )
+                                    continue
                                 _policy_reason = _policy_decision.reason.to_dict()
-                                _approval_reason = (
-                                    _policy_decision.reason.message
-                                    if not _policy_decision.allowed
-                                    else "Sensitive operation"
-                                )
+                                _approval_reason = "Sensitive operation"
                             else:
                                 _policy_reason = None
                                 _approval_reason = "Sensitive operation"
