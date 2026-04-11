@@ -142,6 +142,23 @@ class TestChatCompletions:
         content = resp.json()["choices"][0]["message"]["content"]
         assert "second" in content
 
+    def test_system_message_prepended_to_user_content(self, client):
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "zen-claw",
+                "messages": [
+                    {"role": "system", "content": "Answer with 最终答案:"},
+                    {"role": "user", "content": "What is 2+2?"},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["choices"][0]["message"]["content"]
+        # System message should be included in the content passed to agent
+        assert "最终答案:" in content
+        assert "What is 2+2?" in content
+
     def test_custom_model_name_echoed(self, client):
         resp = client.post(
             "/v1/chat/completions",

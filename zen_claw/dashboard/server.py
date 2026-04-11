@@ -3105,6 +3105,8 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
 
         cfg = load_config()
         connector_cfg = cfg.tools.network.connector
+        search_cfg = cfg.tools.effective_search()
+        fetch_cfg = cfg.tools.effective_fetch()
         provider_cfg = cfg.get_provider(cfg.agents.defaults.model)
         if not provider_cfg or not provider_cfg.api_key:
             return f"[echo] {message}"
@@ -3126,6 +3128,9 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             max_reflections=cfg.agents.defaults.max_reflections,
             auto_parameter_rewrite=cfg.agents.defaults.auto_parameter_rewrite,
             max_context_tokens=cfg.agents.defaults.max_tokens,
+            brave_api_key=search_cfg.api_key or None,
+            web_search_config=search_cfg,
+            web_fetch_config=fetch_cfg,
             connector_config=connector_cfg,
             compression_trigger_ratio=cfg.agents.defaults.compression_trigger_ratio,
             compression_hysteresis_ratio=cfg.agents.defaults.compression_hysteresis_ratio,

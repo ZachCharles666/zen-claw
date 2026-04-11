@@ -102,11 +102,28 @@ class ChatCompletionResponse(BaseModel):
 
 
 def _extract_user_content(messages: list[_ChatMessage]) -> str:
-    """Return the last user message content, falling back to empty string."""
-    for msg in reversed(messages):
-        if msg.role == "user" and msg.content:
-            return msg.content
-    return ""
+    """Build a single prompt string from the message list.
+
+    Strategy:
+    - If there is a system message, prepend it as context.
+    - Always use the last user message as the primary query.
+    - This allows evaluation harnesses to pass instructions via system
+      messages while zen-claw's agent loop processes a single content string.
+    """
+    system_parts: list[str] = []
+    last_user = ""
+    for msg in messages:
+        if msg.role == "system" and msg.content:
+            system_parts.append(msg.content)
+        elif msg.role == "user" and msg.content:
+            last_user = msg.content
+
+    if not last_user:
+        return ""
+
+    if system_parts:
+        return "\n\n".join(system_parts) + "\n\n" + last_user
+    return last_user
 
 
 def _make_completion_id() -> str:
