@@ -86,10 +86,12 @@ class IntentRouterClassifier:
             "recent_history": history_lines,
         }
         examples = [
+            # Chinese: weather query — confirm Gate 1 candidate
             {
                 "input": {"request": "帮我查一下上海明天的天气", "route_candidate": {"match": "weather", "source": "declarative"}},
                 "output": {"kind": "confirm_candidate", "candidate_name": "weather", "diagnostic": "candidate_covers_request"},
             },
+            # Chinese: pronoun reference with missing key object — clarify
             {
                 "input": {"request": "帮我查一下那个人发来的邮件", "route_candidate": {"match": "", "source": ""}},
                 "output": {
@@ -98,12 +100,38 @@ class IntentRouterClassifier:
                     "diagnostic": "missing_key_object",
                 },
             },
+            # Chinese: skill clearly best fit — select_skill
             {
                 "input": {"request": "把这段内容做成合规检查摘要", "route_candidate": {"match": "", "source": ""}},
                 "output": {"kind": "select_skill", "skill_name": "compliance_check", "diagnostic": "known_skill_best_fit"},
             },
+            # Chinese: complete request, not router-covered — unclassified
             {
                 "input": {"request": "帮我比较这两个方案的取舍并给一个执行建议", "route_candidate": {"match": "", "source": ""}},
+                "output": {"kind": "unclassified", "diagnostic": "complete_but_not_router_covered"},
+            },
+            # English: clear weather query — confirm candidate
+            {
+                "input": {"request": "What's the weather like in London tomorrow?", "route_candidate": {"match": "weather", "source": "declarative"}},
+                "output": {"kind": "confirm_candidate", "candidate_name": "weather", "diagnostic": "candidate_covers_request"},
+            },
+            # English: compound multi-intent request — unclassified (do NOT confirm partial match)
+            {
+                "input": {"request": "Check my emails, look at today's calendar, and then summarize the key action items", "route_candidate": {"match": "email_check", "source": "declarative"}},
+                "output": {"kind": "unclassified", "diagnostic": "compound_multi_intent_not_fully_covered"},
+            },
+            # English: pronoun correction reference — clarify
+            {
+                "input": {"request": "Actually, change that reminder to 3pm instead", "route_candidate": {"match": "reminder", "source": "declarative"}},
+                "output": {
+                    "kind": "request_clarification",
+                    "clarification_question": "Which reminder would you like to change to 3pm?",
+                    "diagnostic": "pronoun_reference_missing_target",
+                },
+            },
+            # English: complete request, tools exist but no specific skill covers it — unclassified
+            {
+                "input": {"request": "Search for the latest Python 3.13 release notes and give me a summary", "route_candidate": {"match": "", "source": ""}},
                 "output": {"kind": "unclassified", "diagnostic": "complete_but_not_router_covered"},
             },
         ]
@@ -119,7 +147,8 @@ class IntentRouterClassifier:
                     "Use request_clarification only when the user request is missing a key object, target, or action and cannot be executed safely. "
                     "If the request is complete but not covered by the current router candidate set, return unclassified instead of asking a clarification. "
                     "Prefer confirm_candidate when the route candidate already covers the full request. "
-                    "Prefer select_skill only when an available skill is a clearly better bounded fit."
+                    "Prefer select_skill only when an available skill is a clearly better bounded fit. "
+                    "If a request covers multiple intents (compound request), return unclassified — do not confirm a route candidate that only partially covers it."
                 ),
             },
             {

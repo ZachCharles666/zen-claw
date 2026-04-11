@@ -1,0 +1,14 @@
+{
+  "name": "gdrive",
+  "version": "1.0.0",
+  "description": "Interact with Google Drive — list, upload, download, and share files using gcloud or gdrive CLI.",
+  "permissions": [
+    "exec",
+    "read_file",
+    "write_file"
+  ],
+  "scopes": [
+    "exec",
+    "filesystem"
+  ]
+}

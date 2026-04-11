@@ -33,6 +33,8 @@ class IntentRouterHandlersMixin:
         IntentRegistryEntry("exchange_rate", "_extract_exchange_request", "_handle_exchange_request"),
         IntentRegistryEntry("fixed_site_fetch", "_extract_fixed_site_request", "_handle_fixed_site_request"),
         IntentRegistryEntry("time", "_extract_time_request", "_handle_time_request"),
+        IntentRegistryEntry("stock_price", "_extract_stock_request", "_handle_stock_request"),
+        IntentRegistryEntry("quick_note", "_extract_quick_note_request", "_handle_quick_note_request"),
         IntentRegistryEntry("direct_contracts", "_match_direct_contract", "_handle_direct_contract_request"),
     )
 
@@ -87,6 +89,16 @@ class IntentRouterHandlersMixin:
     ) -> IntentRouteResult:
         del tools, trace_id
         return self._route_time(request)
+
+    async def _handle_stock_request(
+        self, request: dict[str, str], *, tools: ToolRegistry, trace_id: str
+    ) -> IntentRouteResult:
+        return await self._route_stock(request, tools=tools, trace_id=trace_id)
+
+    async def _handle_quick_note_request(
+        self, request: dict[str, str], *, tools: ToolRegistry, trace_id: str
+    ) -> IntentRouteResult:
+        return await self._route_quick_note(request, tools=tools, trace_id=trace_id)
 
     def _handle_direct_contract_request(self, request, *, tools: ToolRegistry, trace_id: str) -> IntentRouteResult:
         del tools, trace_id
@@ -924,3 +936,153 @@ class IntentRouterHandlersMixin:
             "extract": extract,
             "_recovery_kind": "fallback_source",
         }
+
+    # ── Stock / Crypto price ───────────────────────────────────────────────────
+
+    async def _route_stock(
+        self,
+        request: dict[str, str],
+        *,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> IntentRouteResult:
+        symbol = str(request.get("symbol") or "").strip()
+        asset_type = str(request.get("asset_type") or "stock")
+        if not symbol:
+            return IntentRouteResult(handled=False)
+
+        if asset_type == "crypto":
+            return await self._route_crypto_price(symbol, tools=tools, trace_id=trace_id)
+        return await self._route_equity_price(symbol, tools=tools, trace_id=trace_id)
+
+    async def _route_crypto_price(
+        self, coin_id: str, *, tools: ToolRegistry, trace_id: str
+    ) -> IntentRouteResult:
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=usd,cny&include_24hr_change=true"
+        result = await tools.execute("web_fetch", {"url": url}, trace_id=trace_id)
+        if not result.ok:
+            if self.allow_runtime_constrained_replan and self._STOCK_CONTRACT.allow_constrained_replan:
+                return self._needs_constrained_replan(
+                    intent_name="stock_price",
+                    contract=self._STOCK_CONTRACT,
+                    diagnostic=f"crypto_fetch_failed:{coin_id}",
+                )
+            return self._direct_failed(
+                intent_name="stock_price",
+                content=f"无法获取 {coin_id} 价格：{result.error.message if result.error else '网络错误'}",
+                contract=self._STOCK_CONTRACT,
+                diagnostic=f"crypto_fetch_failed:{coin_id}",
+            )
+        try:
+            import json as _json
+            data = _json.loads(str(result.content or "{}"))
+            entry = data.get(coin_id, {})
+            usd = entry.get("usd")
+            cny = entry.get("cny")
+            change_24h = entry.get("usd_24h_change")
+            name = coin_id.replace("-", " ").title()
+            parts = [f"**{name}**"]
+            if usd is not None:
+                parts.append(f"USD {usd:,.4f}" if usd < 1 else f"USD ${usd:,.2f}")
+            if cny is not None:
+                parts.append(f"≈ ¥{cny:,.2f}")
+            if change_24h is not None:
+                sign = "▲" if change_24h >= 0 else "▼"
+                parts.append(f"{sign} {abs(change_24h):.2f}% (24h)")
+            content = "  ".join(parts)
+        except Exception:
+            content = str(result.content or "")[:300]
+        return self._direct_success(
+            intent_name="stock_price", content=content, contract=self._STOCK_CONTRACT
+        )
+
+    async def _route_equity_price(
+        self, symbol: str, *, tools: ToolRegistry, trace_id: str
+    ) -> IntentRouteResult:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d"
+        result = await tools.execute("web_fetch", {"url": url}, trace_id=trace_id)
+        if not result.ok:
+            return self._needs_constrained_replan(
+                intent_name="stock_price",
+                contract=self._STOCK_CONTRACT,
+                diagnostic=f"equity_fetch_failed:{symbol}",
+            )
+        try:
+            import json as _json
+            data = _json.loads(str(result.content or "{}"))
+            meta = data["chart"]["result"][0]["meta"]
+            price = meta.get("regularMarketPrice") or meta.get("previousClose")
+            currency = str(meta.get("currency") or "USD")
+            prev_close = meta.get("previousClose") or meta.get("chartPreviousClose")
+            sym = str(meta.get("symbol") or symbol)
+            parts = [f"**{sym}**  {currency} {price:,.2f}"]
+            if prev_close and price:
+                chg = price - prev_close
+                pct = chg / prev_close * 100
+                sign = "▲" if chg >= 0 else "▼"
+                parts.append(f"{sign} {abs(chg):.2f} ({abs(pct):.2f}%)")
+            content = "  ".join(parts)
+        except Exception:
+            content = str(result.content or "")[:300]
+        return self._direct_success(
+            intent_name="stock_price", content=content, contract=self._STOCK_CONTRACT
+        )
+
+    # ── Quick note capture ─────────────────────────────────────────────────────
+
+    async def _route_quick_note(
+        self,
+        request: dict[str, str],
+        *,
+        tools: ToolRegistry,
+        trace_id: str,
+    ) -> IntentRouteResult:
+        from datetime import UTC, datetime
+
+        note_content = str(request.get("note_content") or "").strip()
+        if not note_content:
+            return IntentRouteResult(handled=False)
+
+        now = datetime.now(UTC)
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M")
+
+        # Resolve notes inbox path from config or default
+        notes_dir = self._resolve_quick_note_dir()
+        note_file = str(notes_dir / f"{date_str}.md")
+
+        # Append formatted note entry
+        entry = f"\n- [{time_str}] {note_content}"
+        result = await tools.execute(
+            "write_file",
+            {"path": note_file, "content": entry, "mode": "append"},
+            trace_id=trace_id,
+        )
+        if not result.ok:
+            err = result.error.message if result.error else "write_file failed"
+            return self._direct_failed(
+                intent_name="quick_note",
+                content=f"记录失败：{err}（请检查 write_file 工具是否已配置，或 notes 目录 {notes_dir} 是否存在）",
+                contract=self._QUICK_NOTE_CONTRACT,
+                diagnostic="quick_note_write_failed",
+            )
+        return self._direct_success(
+            intent_name="quick_note",
+            content=f"已记录到 {note_file}：\n> {note_content}",
+            contract=self._QUICK_NOTE_CONTRACT,
+        )
+
+    def _resolve_quick_note_dir(self):
+        """Return Path for the notes inbox directory (configurable, default ~/notes/inbox/)."""
+        from pathlib import Path
+
+        try:
+            from zen_claw.config.loader import load_config
+
+            cfg = load_config()
+            notes_root = str(getattr(cfg, "notes_root", "") or "").strip()
+            if notes_root:
+                return Path(notes_root).expanduser() / "inbox"
+        except Exception:
+            pass
+        return Path("~/notes/inbox").expanduser()

@@ -14,6 +14,8 @@ def test_intent_registry_order_is_stable() -> None:
         "exchange_rate",
         "fixed_site_fetch",
         "time",
+        "stock_price",
+        "quick_note",
         "direct_contracts",
     ]
     assert [(entry.parser_name, entry.handler_name) for entry in entries] == [
@@ -22,6 +24,8 @@ def test_intent_registry_order_is_stable() -> None:
         ("_extract_exchange_request", "_handle_exchange_request"),
         ("_extract_fixed_site_request", "_handle_fixed_site_request"),
         ("_extract_time_request", "_handle_time_request"),
+        ("_extract_stock_request", "_handle_stock_request"),
+        ("_extract_quick_note_request", "_handle_quick_note_request"),
         ("_match_direct_contract", "_handle_direct_contract_request"),
     ]
 

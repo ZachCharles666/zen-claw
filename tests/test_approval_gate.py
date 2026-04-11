@@ -372,6 +372,77 @@ async def test_notification_failure_does_not_raise(tmp_path: Path):
     assert rec is not None
 
 
+# ── tests: C-1 — policy denied must short-circuit before ApprovalGate ────────
+
+
+async def test_policy_denied_does_not_create_pending_approval(tmp_path: Path):
+    """When ToolPolicyEngine denies a tool, AgentLoop must short-circuit before
+    calling request_approval() — no PendingApproval record should be created,
+    and the ToolResult must carry ToolErrorKind.PERMISSION (Phase C — C-1).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from zen_claw.agent.loop import AgentLoop
+    from zen_claw.agent.tools.policy import PolicyReason, ToolPolicyDecision
+    from zen_claw.bus.events import InboundMessage
+    from zen_claw.providers.base import LLMResponse, ToolCallRequest
+
+    gate = _gate(tmp_path)
+
+    bus = MagicMock()
+    bus.consume_inbound = AsyncMock()
+    bus.publish_outbound = AsyncMock()
+
+    # LLM requests a sensitive tool call
+    exec_call = ToolCallRequest(id="tc-1", name="exec", arguments={"command": "rm -rf /"})
+    provider = MagicMock()
+    provider.chat = AsyncMock(
+        side_effect=[
+            LLMResponse(content="", finish_reason="tool_calls", tool_calls=[exec_call]),
+            LLMResponse(content="policy denied", finish_reason="stop", tool_calls=[]),
+        ]
+    )
+
+    loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path)
+    loop.approval_gate = gate
+    loop.sessions.sessions_dir = tmp_path / "sessions"
+    loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
+    loop.execution.should_plan = lambda: False  # type: ignore[method-assign]
+
+    # Inject a policy engine that denies "exec"
+    denied_reason = PolicyReason(
+        code="tool_policy_denied",
+        tool="exec",
+        trigger="deny_list",
+        message="exec is not permitted by policy",
+    )
+    policy_mock = MagicMock()
+    policy_mock.evaluate.return_value = ToolPolicyDecision(
+        allowed=False,
+        reason=denied_reason,
+        code="tool_policy_denied",
+        scope=None,
+    )
+    loop.tools._policy = policy_mock  # type: ignore[attr-defined]
+
+    msg = InboundMessage(
+        channel="cli",
+        chat_id="direct",
+        sender_id="user",
+        content="run rm -rf /",
+    )
+    response = await loop._process_message(msg)
+
+    # No PendingApproval should have been created (policy short-circuit skips ApprovalGate)
+    pending = gate.list_pending()
+    assert len(pending) == 0, (
+        f"Expected 0 pending approvals after policy denial, got {len(pending)}"
+    )
+
+    # The loop should still return a response (LLM formats the denial)
+    assert response is not None
+
+
 # ── tests: MEDIUM-007 — consume_approved encapsulates _pending access ─────────
 
 
@@ -456,11 +527,14 @@ async def test_approval_notification_uses_correct_channel_and_chat_id(tmp_path: 
     loop.sessions.sessions_dir.mkdir(parents=True, exist_ok=True)
     loop.execution.should_plan = lambda: False  # type: ignore[method-assign]
 
+    # Use admin role so exec is not blocked by channel_role policy scope;
+    # this ensures the tool reaches request_approval() for the MEDIUM-006 test.
     msg = InboundMessage(
         channel="telegram",
         chat_id="chat-42",
         sender_id="user",
         content="run ls",
+        metadata={"channel_role": "admin"},
     )
     await loop._process_message(msg)
 

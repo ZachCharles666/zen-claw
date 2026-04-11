@@ -385,6 +385,89 @@ class IntentRouterParsersMixin:
             return f"{label}今天是：{weekday_map[now.weekday()]}"
         return f"{label}当前时间：{now:%Y-%m-%d %H:%M:%S %Z}"
 
+    @classmethod
+    def _extract_stock_request(cls, content: str) -> dict[str, str] | None:
+        """Return {symbol, asset_type, content} for stock/crypto price queries, or None."""
+        text = str(content or "").strip()
+        if not text:
+            return None
+        lowered = text.lower()
+
+        # Gate: must contain a price-related keyword
+        price_keywords = (
+            "股价", "价格", "多少钱", "涨了", "跌了", "涨跌", "行情",
+            "price", "stock", "share", "market cap", "值多少",
+        )
+        crypto_keywords = (
+            "币价", "加密货币", "crypto", "coin",
+        )
+        is_price_query = any(k in lowered for k in price_keywords + crypto_keywords)
+
+        # Reject trading commands
+        trade_keywords = (
+            "买入", "卖出", "购买", "出售", "buy", "sell", "short", "long",
+            "做空", "做多", "期权", "option", "合约",
+        )
+        if any(k in lowered for k in trade_keywords):
+            return None
+
+        # 1. Check crypto aliases first (higher priority)
+        for alias, coin_id in cls._CRYPTO_IDS.items():
+            if alias in lowered:
+                return {"symbol": coin_id, "asset_type": "crypto", "content": text}
+
+        # 2. Check company name aliases
+        for cn_name, ticker in cls._STOCK_ALIASES.items():
+            if cn_name in text:
+                return {"symbol": ticker, "asset_type": "stock", "content": text}
+
+        # 3. Extract explicit ticker symbols: 1–5 uppercase letters, optionally with .HK/.SS/.SZ
+        if is_price_query:
+            ticker_match = re.search(
+                r"\b([A-Z]{1,5}(?:\.[A-Z]{1,2})?)\b",
+                text,
+            )
+            if ticker_match:
+                symbol = ticker_match.group(1)
+                return {"symbol": symbol, "asset_type": "stock", "content": text}
+
+        return None
+
+    @staticmethod
+    def _extract_quick_note_request(content: str) -> dict[str, str] | None:
+        """Return {note_content} for quick-capture note requests, or None."""
+        text = str(content or "").strip()
+        if not text:
+            return None
+
+        patterns = (
+            # Chinese: 记一下/记下来/记录一下
+            r"(?:帮我?)?(?:记一下|记下来|记录一下|记录下来)\s*[：:，,]?\s*(.{2,500})",
+            # Chinese: 备忘/备注
+            r"(?:加个|加一条|新建)?(?:备忘|备注)\s*[：:，,]?\s*(.{2,500})",
+            # Chinese: 帮我记住
+            r"(?:帮我?)?记住\s*[：:，,]?\s*(.{2,500})",
+            # English: note: / note down / jot down / write down
+            r"(?:quick\s+)?note\s*[:：]\s*(.{2,500})",
+            r"(?:note|jot|write)\s+(?:down|this)\s*[：:，,]?\s*(.{2,500})",
+            r"remember\s+(?:this\s*[：:]?\s*)?(.{2,500})",
+        )
+        negative_keywords = (
+            "笔记里", "笔记中", "from notes", "in notes",  # search, not capture
+            "搜索", "查找", "search", "find",
+        )
+        lowered = text.lower()
+        if any(kw in lowered for kw in negative_keywords):
+            return None
+
+        for pattern in patterns:
+            match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                note_content = match.group(1).strip()
+                if len(note_content) >= 2:
+                    return {"note_content": note_content}
+        return None
+
     @staticmethod
     def _match_direct_contract(content: str):
         from zen_claw.agent.direct_contracts import route as _route_direct

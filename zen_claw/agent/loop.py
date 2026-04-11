@@ -1810,16 +1810,33 @@ class AgentLoop:
                 metadata["intent_router_history"] = history
             intent_history = history.get(intent_name)
             if not isinstance(intent_history, dict):
-                intent_history = {"success": 0, "failure": 0}
+                intent_history = {"success": 0, "failure": 0, "recent_success": 0, "recent_failure": 0}
                 history[intent_name] = intent_history
             success = max(int(intent_history.get("success", 0) or 0), 0)
             failure = max(int(intent_history.get("failure", 0) or 0), 0)
+            recent_success = max(int(intent_history.get("recent_success", 0) or 0), 0)
+            recent_failure = max(int(intent_history.get("recent_failure", 0) or 0), 0)
             if route_result.route_status == "direct_success":
                 success += 1
+                recent_success += 1
             else:
                 failure += 1
+                recent_failure += 1
+            # Rolling window of N=20: approximate FIFO by decrementing the
+            # older counter when the window is full.
+            recent_window = 20
+            if recent_success + recent_failure > recent_window:
+                # Remove oldest event: proxy by decrementing whichever counter
+                # has the higher ratio of lifetime vs recent (i.e. oldest events
+                # are most likely from the larger lifetime pool).
+                if success - recent_success >= failure - recent_failure:
+                    recent_success = max(0, recent_success - 1)
+                else:
+                    recent_failure = max(0, recent_failure - 1)
             intent_history["success"] = success
             intent_history["failure"] = failure
+            intent_history["recent_success"] = recent_success
+            intent_history["recent_failure"] = recent_failure
             metadata["intent_router_last_rule"] = {
                 "intent_name": intent_name,
                 "source": source,
@@ -2807,12 +2824,34 @@ class AgentLoop:
                             _policy = getattr(self.tools, "_policy", None)
                             if _policy is not None:
                                 _policy_decision = _policy.evaluate(tool_call.name)
+                                # Short-circuit: policy already denied — skip ApprovalGate entirely
+                                if not _policy_decision.allowed:
+                                    _policy_reason = _policy_decision.reason.to_dict()
+                                    result = ToolResult.failure(
+                                        ToolErrorKind.PERMISSION,
+                                        _policy_decision.reason.message,
+                                        code=_policy_decision.reason.code,
+                                    )
+                                    if self._audit_worker:
+                                        await self._audit_worker.audit_turn(
+                                            trace_id,
+                                            {
+                                                "event_type": "tool.policy_denied",
+                                                "tool": tool_call.name,
+                                                "policy_reason": _policy_reason,
+                                                "identity": self.tools._audit_identity_summary(),
+                                            },
+                                        )
+                                    trace_summary["tool_failures"] = int(trace_summary.get("tool_failures", 0)) + 1
+                                    trace_summary["last_error_kind"] = ToolErrorKind.PERMISSION.value
+                                    trace_summary["last_error_code"] = _policy_decision.reason.code
+                                    tool_results.append(result)
+                                    messages = self.context.add_tool_result(
+                                        messages, tool_call.id, tool_call.name, result
+                                    )
+                                    continue
                                 _policy_reason = _policy_decision.reason.to_dict()
-                                _approval_reason = (
-                                    _policy_decision.reason.message
-                                    if not _policy_decision.allowed
-                                    else "Sensitive operation"
-                                )
+                                _approval_reason = "Sensitive operation"
                             else:
                                 _policy_reason = None
                                 _approval_reason = "Sensitive operation"

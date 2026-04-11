@@ -248,7 +248,7 @@ class AgentDefaults(BaseModel):
     stability_model: str = ""
     intent_model_overrides: dict[str, str] = Field(default_factory=dict)
     task_type_model_overrides: dict[str, str] = Field(default_factory=dict)
-    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "none"] = "sqlite"
+    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "ternary", "trit", "none"] = "sqlite"
     enable_planning: bool = True
     max_reflections: int = 1
     auto_parameter_rewrite: bool = False
@@ -284,7 +284,7 @@ class AgentProfileConfig(BaseModel):
     stability_model: str = ""
     intent_model_overrides: dict[str, str] = Field(default_factory=dict)
     task_type_model_overrides: dict[str, str] = Field(default_factory=dict)
-    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "none"] | None = None
+    memory_recall_mode: Literal["keyword", "recent", "sqlite", "rag", "ternary", "trit", "none"] | None = None
     enable_planning: bool | None = None
     max_reflections: int | None = None
     auto_parameter_rewrite: bool | None = None
@@ -434,9 +434,24 @@ class MultiTenantConfig(BaseModel):
     )
 
 
+class SkillSourceConfig(BaseModel):
+    """Configuration for a single skill source."""
+
+    name: str
+    url: str
+    type: Literal["registry", "github", "local"] = "registry"
+    trust: Literal["official", "trusted", "untrusted"] = "untrusted"
+    enabled: bool = True
+    cache_ttl_sec: int | None = None  # overrides parent cache_ttl_sec when set
+    trusted_hosts: list[str] = Field(default_factory=list)
+
+
 class SkillsMarketConfig(BaseModel):
     """Skills market configuration."""
 
+    # Multi-source support. When non-empty, overrides registry_url.
+    sources: list[SkillSourceConfig] = Field(default_factory=list)
+    # Legacy single-source URL. Ignored when sources is set.
     registry_url: str = "https://zen-claw.github.io/skills-registry/index.json"
     cache_file: str = "registry_cache.json"
     cache_ttl_sec: int = 3600

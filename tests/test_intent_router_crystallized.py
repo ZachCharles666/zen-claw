@@ -112,11 +112,16 @@ async def test_process_direct_retires_crystallized_route_after_failures(
 
     first = await loop.process_direct("帮我看看收件箱", channel="cli", chat_id="direct")
     session = loop.sessions.get_or_create("cli:direct")
+    # Reset both lifetime and recency counters (recency fields added in Workstream 2).
     session.metadata["intent_router_history"]["email_check"]["success"] = 1
     session.metadata["intent_router_history"]["email_check"]["failure"] = 0
+    session.metadata["intent_router_history"]["email_check"]["recent_success"] = 1
+    session.metadata["intent_router_history"]["email_check"]["recent_failure"] = 0
     second = await loop.process_direct("帮我看看收件箱", channel="cli", chat_id="direct")
     session.metadata["intent_router_history"]["email_check"]["success"] = 1
     session.metadata["intent_router_history"]["email_check"]["failure"] = 0
+    session.metadata["intent_router_history"]["email_check"]["recent_success"] = 1
+    session.metadata["intent_router_history"]["email_check"]["recent_failure"] = 0
     third = await loop.process_direct("帮我看看收件箱", channel="cli", chat_id="direct")
 
     assert "mail backend failed" in first

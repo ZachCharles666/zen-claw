@@ -158,20 +158,12 @@ class MemoryStore:
 
         return "\n\n".join(parts) if parts else ""
 
-    def get_relevant_memory_context(
+    def _gather_memory_candidates(
         self,
-        query: str,
         days: int = 7,
-        max_items: int = 8,
         max_chars: int = 1200,
-    ) -> str:
-        """
-        Retrieve query-relevant memory snippets using pluggable recall strategy.
-        """
-        query = (query or "").strip()
-        if not query:
-            return ""
-
+    ) -> list[tuple[str, str]]:
+        """Collect (source, text) candidate pairs from long-term and recent memory files."""
         candidates: list[tuple[str, str]] = []
 
         long_term = self.read_long_term()
@@ -187,6 +179,48 @@ class MemoryStore:
                 text = line.strip().lstrip("-").strip()
                 if text and not text.startswith("#"):
                     candidates.append(("recent", text))
+
+        return candidates
+
+    @staticmethod
+    def _select_from_scored(
+        scored: list[tuple[float, str]],
+        max_items: int,
+        max_chars: int,
+    ) -> list[str]:
+        """Deduplicate, apply budget, and return top-N text snippets."""
+        scored_sorted = sorted(scored, key=lambda x: x[0], reverse=True)
+        selected: list[str] = []
+        seen: set[str] = set()
+        total = 0
+        for _, text in scored_sorted:
+            if len(selected) >= max_items:
+                break
+            norm = " ".join(text.split()).strip().lower()
+            if not norm or norm in seen:
+                continue
+            if total + len(text) > max_chars:
+                continue
+            seen.add(norm)
+            selected.append(text)
+            total += len(text)
+        return selected
+
+    def get_relevant_memory_context(
+        self,
+        query: str,
+        days: int = 7,
+        max_items: int = 8,
+        max_chars: int = 1200,
+    ) -> str:
+        """Retrieve query-relevant memory snippets using pluggable recall strategy."""
+        query = (query or "").strip()
+        if not query:
+            return ""
+
+        candidates = self._gather_memory_candidates(days=days, max_chars=max_chars)
+        if not candidates:
+            return ""
 
         scored: list[tuple[float, str]] = []
         if hasattr(self.recall_strategy, "bulk_score"):
@@ -205,25 +239,53 @@ class MemoryStore:
                         score += 0.05
                     scored.append((score, c))
 
-        if not scored:
+        selected = self._select_from_scored(scored, max_items, max_chars)
+        if not selected:
+            return ""
+        return "## Relevant Memory\n" + "\n".join(f"- {s}" for s in selected)
+
+    def get_ternary_memory_context(
+        self,
+        query: str,
+        days: int = 7,
+        max_items: int = 8,
+        max_chars: int = 1200,
+    ) -> str:
+        """Retrieve memory using ternary three-tier classification.
+
+        Requires ``self.recall_strategy`` to be a ``TernaryRecallStrategy``.
+        Falls back to ``get_relevant_memory_context`` if strategy does not
+        support the ternary API.
+        """
+        from zen_claw.agent.memory_ternary import TernaryRecallStrategy
+
+        if not isinstance(self.recall_strategy, TernaryRecallStrategy):
+            return self.get_relevant_memory_context(
+                query, days=days, max_items=max_items, max_chars=max_chars
+            )
+
+        query = (query or "").strip()
+        if not query:
             return ""
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        selected: list[str] = []
-        seen: set[str] = set()
-        total = 0
-        for _, text in scored:
-            if len(selected) >= max_items:
-                break
-            norm = " ".join(text.split()).strip().lower()
-            if not norm or norm in seen:
-                continue
-            if total + len(text) > max_chars:
-                continue
-            seen.add(norm)
-            selected.append(text)
-            total += len(text)
+        candidates = self._gather_memory_candidates(days=days, max_chars=max_chars)
+        if not candidates:
+            return ""
 
+        source_map = {c: s for s, c in candidates}
+        candidates_only = [c for _, c in candidates]
+
+        # Full ternary pipeline: score → classify → resolve uncertain
+        accepted_and_promoted = self.recall_strategy.ternary_recall(query, candidates_only)
+
+        # Apply recency boost to accepted/promoted candidates
+        scored: list[tuple[float, str]] = []
+        for score, text in accepted_and_promoted:
+            if source_map.get(text) == "recent":
+                score += 0.05
+            scored.append((score, text))
+
+        selected = self._select_from_scored(scored, max_items, max_chars)
         if not selected:
             return ""
         return "## Relevant Memory\n" + "\n".join(f"- {s}" for s in selected)
