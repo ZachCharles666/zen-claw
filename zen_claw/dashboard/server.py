@@ -3768,6 +3768,14 @@ X-API-Key: nc-xxxxxxxxxxxxxxxx
     except Exception:
         pass
 
+    # ── OpenAI-compatible API (xbench / external eval harnesses) ─────────
+    try:
+        from zen_claw.api.openai_compat import openai_router
+
+        api_app.include_router(openai_router)
+    except Exception:
+        pass
+
     @api_app.get("/chat", response_class=HTMLResponse)
     async def chat_ui():
         if _CHAT_HTML_PATH.exists():
