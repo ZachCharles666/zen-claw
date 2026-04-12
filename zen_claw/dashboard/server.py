@@ -3132,6 +3132,7 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             web_search_config=search_cfg,
             web_fetch_config=fetch_cfg,
             connector_config=connector_cfg,
+            tool_policy_config=cfg.tools.policy,
             compression_trigger_ratio=cfg.agents.defaults.compression_trigger_ratio,
             compression_hysteresis_ratio=cfg.agents.defaults.compression_hysteresis_ratio,
             compression_cooldown_turns=cfg.agents.defaults.compression_cooldown_turns,

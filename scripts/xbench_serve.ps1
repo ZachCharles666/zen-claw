@@ -50,7 +50,7 @@ if ($LASTEXITCODE -ne 0) {
 # ── Start dashboard in background ────────────────────────────────────────
 Write-Host "[2/3] Starting dashboard on ${Host}:${Port}..." -ForegroundColor Cyan
 $proc = Start-Process -FilePath $VenvPython `
-    -ArgumentList "-m", "zen_claw", "dashboard", "--host", $Host, "--port", $Port `
+    -ArgumentList "$RepoRoot\scripts\xbench_api_server.py", "--host", $Host, "--port", $Port `
     -PassThru -NoNewWindow
 
 # ── Wait for health check ────────────────────────────────────────────────

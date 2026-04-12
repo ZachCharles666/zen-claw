@@ -25,9 +25,10 @@ def _patch(lm_path: Path, base_url: str) -> bool:
     # ── 1. API_ENDPOINTS ────────────────────────────────────────────────────
     endpoint_marker = '"zen-claw"'
     if endpoint_marker not in src:
-        # Insert before the closing brace of API_ENDPOINTS dict
-        pattern = r"(API_ENDPOINTS\s*=\s*\{[^}]*?)\n(\})"
-        replacement = rf'\1\n    "zen-claw": "{base_url}",\n\2'
+        # Insert before the closing brace of API_ENDPOINTS dict.
+        # The last existing entry may or may not have a trailing comma.
+        pattern = r'("[\w-]+"\s*:\s*"[^"]+")(\s*\n\})'
+        replacement = rf'\1,\n    "zen-claw": "{base_url}",\2'
         new_src = re.sub(pattern, replacement, src, count=1, flags=re.DOTALL)
         if new_src != src:
             src = new_src
@@ -83,9 +84,9 @@ def _patch(lm_path: Path, base_url: str) -> bool:
 
     if changed:
         lm_path.write_text(src, encoding="utf-8")
-        print(f"\n✓ Patched {lm_path}")
+        print(f"\nOK: Patched {lm_path}")
     else:
-        print("\n✓ No changes needed — already patched")
+        print("\nOK: No changes needed — already patched")
 
     return changed
 

@@ -416,11 +416,12 @@ _JSON_BODY = re.compile(r"(\{.*\}|\[.*\])", re.DOTALL)
 def _extract_json_format(content: str) -> tuple[str, str] | None:
     """Return (action, json_string) or None."""
     trig = _JSON_TRIGGER.search(content)
+    if not trig:
+        return None
     body = _JSON_BODY.search(content)
     if not body:
         return None
-    action = trig.group(1).lower() if trig else "format"
-    return action, body.group(1)
+    return trig.group(1).lower(), body.group(1)
 
 
 def _handle_json_format(action: str, json_str: str) -> str:

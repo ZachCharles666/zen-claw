@@ -2993,6 +2993,34 @@ class AgentLoop:
                 messages.append({"role": "user", "content": reflection_prompt})
                 continue
             trace_summary["reflections_used"] = reflections_used
+
+        # If max_iterations was exhausted and the model never produced a text response,
+        # make one final synthesis call without tools to force an answer.
+        if final_content is None and iteration >= self.max_iterations:
+            try:
+                synthesis_prompt = (
+                    "IMPORTANT: Stop searching now. Based on all search results above, "
+                    "provide your final answer as plain text. Do NOT call any tools. "
+                    "Do NOT output XML tags or function calls. Just answer directly."
+                )
+                synthesis_response = await self.provider.chat(
+                    messages + [{"role": "user", "content": synthesis_prompt}],
+                    tools=None,
+                    model=active_model,
+                    max_tokens=1024,
+                    temperature=0.3,
+                )
+                raw = synthesis_response.content or ""
+                # Strip any native tool-call XML the model may have emitted as text
+                import re as _re
+                raw = _re.sub(r"<tool_call>.*?</tool_call>", "", raw, flags=_re.DOTALL).strip()
+                raw = _re.sub(r"<function=\w+>.*?</function>", "", raw, flags=_re.DOTALL).strip()
+                raw = _re.sub(r"<[^>]+>", "", raw).strip()
+                final_content = raw or None
+                trace_summary["forced_synthesis"] = True
+            except Exception as e:
+                logger.warning(f"Forced synthesis call failed: {e}")
+
         self._last_execution_trace_summary = dict(trace_summary)
         return final_content, messages
 
