@@ -70,8 +70,14 @@ class LiteLLMProvider(LLMProvider):
         # Detect AiHubMix by api_base
         self.is_aihubmix = bool(api_base and "aihubmix" in api_base)
 
+        # Detect ZhipuAI / BigModel by api_base or model name
+        self.is_zhipu = bool(
+            (api_base and "bigmodel" in api_base)
+            or (default_model and any(kw in default_model.lower() for kw in ("glm", "zhipu")))
+        )
+
         # Track if using custom endpoint (vLLM, etc.)
-        self.is_vllm = bool(api_base) and not self.is_openrouter and not self.is_aihubmix
+        self.is_vllm = bool(api_base) and not self.is_openrouter and not self.is_aihubmix and not self.is_zhipu
 
         # Configure LiteLLM based on provider
         if api_key:
@@ -93,10 +99,11 @@ class LiteLLMProvider(LLMProvider):
             elif "gemini" in default_model.lower():
                 os.environ.setdefault("GEMINI_API_KEY", api_key)
             elif "zhipu" in default_model or "glm" in default_model or "zai" in default_model:
-                os.environ.setdefault("ZAI_API_KEY", api_key)
-                os.environ.setdefault("ZHIPUAI_API_KEY", api_key)
+                os.environ["ZAI_API_KEY"] = api_key
+                os.environ["ZHIPUAI_API_KEY"] = api_key
+                os.environ["OPENAI_API_KEY"] = api_key
             elif "dashscope" in default_model or "qwen" in default_model.lower():
-                os.environ.setdefault("DASHSCOPE_API_KEY", api_key)
+                os.environ["DASHSCOPE_API_KEY"] = api_key
             elif "groq" in default_model:
                 os.environ.setdefault("GROQ_API_KEY", api_key)
             elif "moonshot" in default_model or "kimi" in default_model:
@@ -135,7 +142,7 @@ class LiteLLMProvider(LLMProvider):
         # Auto-prefix model names for known providers
         # (keywords, target_prefix, skip_if_starts_with)
         _prefix_rules = [
-            (("glm", "zhipu"), "zai", ("zhipu/", "zai/", "openrouter/", "hosted_vllm/")),
+            (("glm", "zhipu"), "openai", ("zhipu/", "zai/", "openai/", "openrouter/", "hosted_vllm/")),
             (("qwen", "dashscope"), "dashscope", ("dashscope/", "openrouter/")),
             (("moonshot", "kimi"), "moonshot", ("moonshot/", "openrouter/")),
             (("gemini",), "gemini", ("gemini/",)),

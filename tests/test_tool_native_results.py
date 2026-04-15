@@ -33,7 +33,7 @@ async def test_web_tools_return_structured_errors_for_invalid_inputs() -> None:
     result = await search.execute("hello")
     assert result.ok is False
     assert result.error is not None
-    assert result.error.code == "brave_api_key_missing"
+    assert result.error.code == "search_api_key_missing"
 
     fetch = WebFetchTool()
     bad = await fetch.execute("ftp://example.com")
