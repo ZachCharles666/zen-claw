@@ -150,6 +150,7 @@ class AgentLoop:
         agent_id: str = "default",
         dev_profile: bool = False,
         trusted_local_only: bool = False,
+        temperature: float = 0.7,
     ):
         from zen_claw.config.schema import (
             BrowserToolConfig,
@@ -180,6 +181,7 @@ class AgentLoop:
         self.memory_recall_mode = memory_recall_mode
         self.enable_planning = enable_planning
         self.max_reflections = max_reflections
+        self.temperature = float(temperature)
         self.auto_parameter_rewrite = auto_parameter_rewrite
         self.max_context_tokens = max_context_tokens
         self.compression_trigger_ratio = min(0.99, max(0.1, float(compression_trigger_ratio)))
@@ -407,6 +409,7 @@ class AgentLoop:
             WebSearchTool(
                 api_key=self.brave_api_key,
                 max_results=self.web_search_config.max_results,
+                provider=getattr(self.web_search_config, "provider", "brave"),
                 mode=self.web_search_config.mode,
                 proxy_url=self.web_search_config.proxy_url,
                 proxy_approval_mode=self.web_search_config.proxy_approval_mode,
@@ -2645,6 +2648,7 @@ class AgentLoop:
             messages=messages,
             tools=tools,
             model=model,
+            temperature=self.temperature,
         )
         if (
             response.finish_reason != "error"
@@ -2712,13 +2716,27 @@ class AgentLoop:
             "last_error_code": "",
         }
         self._last_execution_trace_summary = None
+        _session_queries: list[str] = []
+        _session_urls: list[str] = []
+        _web_fetch_tool = self.tools.get("web_fetch") if hasattr(self.tools, "get") else None
+        if _web_fetch_tool is not None and hasattr(_web_fetch_tool, "clear_session_cache"):
+            _web_fetch_tool.clear_session_cache()
 
         while iteration < self.max_iterations:
             iteration += 1
             trace_summary["iterations"] = iteration
             try:
+                messages_for_llm = messages
+                if iteration > 1 and (_session_queries or _session_urls):
+                    parts = ["[已完成的搜索记录]"]
+                    if _session_queries:
+                        parts.append(f"已搜索：{_session_queries}")
+                    if _session_urls:
+                        parts.append(f"已读取：{_session_urls}")
+                    parts.append("请勿重复以上搜索，继续探索新方向。")
+                    messages_for_llm = messages + [{"role": "user", "content": "\n".join(parts)}]
                 response, used_model, fallback_state = await self._chat_with_optional_fallback(
-                    messages=messages,
+                    messages=messages_for_llm,
                     tools=tool_definitions
                     if tool_definitions is not None
                     else (
@@ -2959,6 +2977,14 @@ class AgentLoop:
                         trace_summary["tool_successes"] = (
                             int(trace_summary.get("tool_successes", 0)) + 1
                         )
+                        if tool_call.name == "web_search":
+                            _q = call_args.get("query", "")
+                            if _q and _q not in _session_queries:
+                                _session_queries.append(_q)
+                        elif tool_call.name == "web_fetch":
+                            _u = call_args.get("url", "")
+                            if _u and _u not in _session_urls:
+                                _session_urls.append(_u)
                     else:
                         trace_summary["tool_failures"] = (
                             int(trace_summary.get("tool_failures", 0)) + 1
@@ -2993,6 +3019,37 @@ class AgentLoop:
                 messages.append({"role": "user", "content": reflection_prompt})
                 continue
             trace_summary["reflections_used"] = reflections_used
+
+        # If max_iterations was exhausted and the model never produced a text response,
+        # make one final synthesis call without tools to force an answer.
+        if final_content is None and iteration >= self.max_iterations:
+            try:
+                synthesis_prompt = (
+                    "\u57fa\u4e8e\u4ee5\u4e0a\u6240\u6709\u641c\u7d22\u7ed3\u679c\u548c\u7f51\u9875\u5185\u5bb9\uff0c\u8bf7\u7efc\u5408\u5206\u6790\u5e76\u7ed9\u51fa\u6700\u7cbe\u786e\u7684\u7b54\u6848\u3002\n"
+                    "\u8981\u6c42\uff1a\n"
+                    "- \u4e0d\u8981\u518d\u8c03\u7528\u4efb\u4f55\u5de5\u5177\uff0c\u76f4\u63a5\u7ed9\u51fa\u6587\u5b57\u7b54\u6848\n"
+                    "- \u5982\u679c\u7b54\u6848\u662f\u6570\u5b57\uff0c\u7ed9\u51fa\u7cbe\u786e\u6570\u503c\uff08\u6ce8\u610f\u5355\u4f4d\u548c\u5c0f\u6570\u4f4d\uff09\n"
+                    "- \u5982\u679c\u7b54\u6848\u662f\u4eba\u540d/\u5730\u540d\uff0c\u4f7f\u7528\u6765\u6e90\u4e2d\u7684\u539f\u59cb\u5199\u6cd5\n"
+                    "- \u5982\u679c\u591a\u4e2a\u6765\u6e90\u77db\u76fe\uff0c\u4ee5\u6700\u6743\u5a01\u7684\u6765\u6e90\u4e3a\u51c6\n"
+                    "- \u56de\u7b54\u5fc5\u987b\u4ee5'\u6700\u7ec8\u7b54\u6848\uff1a'\u5f00\u5934\uff0c\u7ed9\u51fa\u7cbe\u786e\u7b80\u6d01\u7684\u7b54\u6848"
+                )
+                synthesis_response = await self.provider.chat(
+                    messages + [{"role": "user", "content": synthesis_prompt}],
+                    tools=None,
+                    model=active_model,
+                    max_tokens=2048,
+                    temperature=0.1,
+                )
+                raw = synthesis_response.content or ""
+                # Strip any native tool-call XML the model may have emitted as text
+                import re as _re
+                raw = _re.sub(r"<tool_call>.*?</tool_call>", "", raw, flags=_re.DOTALL).strip()
+                raw = _re.sub(r"<function=\w+>.*?</function>", "", raw, flags=_re.DOTALL).strip()
+                raw = _re.sub(r"<[^>]+>", "", raw).strip()
+                final_content = raw or None
+                trace_summary["forced_synthesis"] = True
+            except Exception as e:
+                logger.warning(f"Forced synthesis call failed: {e}")
         self._last_execution_trace_summary = dict(trace_summary)
         return final_content, messages
 

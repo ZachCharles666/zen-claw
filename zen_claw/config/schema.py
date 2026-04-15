@@ -472,7 +472,8 @@ class SidecarTLSConfig(BaseModel):
 class WebSearchConfig(BaseModel):
     """Web search tool configuration."""
 
-    api_key: str = ""  # Brave Search API key
+    api_key: str = ""  # Brave Search API key (provider=brave), Tavily API key (provider=tavily), or empty for DuckDuckGo (provider=ddg)
+    provider: Literal["brave", "tavily", "ddg"] = "brave"
     max_results: int = 5
     mode: Literal["local", "proxy"] = "proxy"
     proxy_url: str = "http://127.0.0.1:4499/v1/search"

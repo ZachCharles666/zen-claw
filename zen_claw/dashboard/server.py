@@ -3095,6 +3095,43 @@ def revoke_api_key_by_prefix(prefix: str) -> bool:
     return found
 
 
+_DEEPSEARCH_SYSTEM_PROMPT = """## 深度搜索策略
+
+你正在参加信息检索评测任务。对每个问题，严格遵循以下三步流程：
+
+**第一步：搜索规划（先想后搜）**
+在调用任何工具前，先用1-2句话说明你的搜索计划：打算搜什么关键词、为什么这样搜。
+
+**第二步：执行搜索**
+1. **分解问题**：将复杂问题拆解为2-3个可搜索的子问题
+2. **多轮搜索**：对每个子问题执行 web_search，尝试不同关键词（中文、英文、缩写、同义词）
+3. **深读原文**：对搜索结果中最相关的URL，使用 web_fetch 获取完整页面内容——摘要往往不含精确数据
+4. **交叉验证**：从多个来源确认关键事实
+
+**第三步：给出答案（必须包含证据）**
+答案格式必须严格遵循：
+```
+证据来源：[URL] - [从该页面找到的支持答案的原文句子]
+最终答案：[精确简洁的答案]
+```
+
+**关键规则**：
+- 如果你无法填写"证据来源"中的具体URL，说明你还没有真正搜索，必须先搜索再回答
+- 搜索无果时，必须换关键词重试（换语言、换表述、拆分问题）
+- 当已找到高置信度答案时，立即输出，不要继续搜索"再验证"
+- 数字类：给出精确数值，保留来源中的原始精度，注意单位
+- 人名/地名/论文标题：必须使用来源页面中的原始写法，禁止意译或简化
+
+**禁止行为**：
+- 禁止跳过搜索直接从记忆或训练数据回答
+- 禁止重复搜索已经搜过的相同或相似查询词
+
+**⚠️ 强制输出要求（不得省略）**：
+无论何种情况，你的回答最后一行必须单独成行，格式为：
+最终答案：[精确简洁的答案]
+即使搜索失败或无法确定，也必须写：最终答案：无"""
+
+
 async def _invoke_agent_text(message: str, session_id: str) -> str:
     # Graceful fallback keeps API usable in unconfigured/dev environments.
     try:
@@ -3141,12 +3178,16 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             intent_model_overrides=cfg.agents.defaults.intent_model_overrides,
             skill_permissions_mode=cfg.agents.defaults.skill_permissions_mode,
             allowed_models=cfg.agents.defaults.allowed_models,
+            system_prompt_override=_DEEPSEARCH_SYSTEM_PROMPT,
+            temperature=cfg.agents.defaults.temperature,
         )
         return await loop.process_direct(
             content=message, session_key=f"web:{session_id}", channel="web_chat", chat_id=session_id
         )
-    except Exception:
-        return f"[echo] {message}"
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("_invoke_agent_text failed: %s", e)
+        return f"[error] Agent failed ({type(e).__name__}): {e}"
 
 
 class _WebChatRuntime:

@@ -115,7 +115,7 @@ class WebSearchTool(Tool):
     """Search the web using Brave Search API."""
 
     name = "web_search"
-    description = "Search the web. Returns titles, URLs, and snippets."
+    description = "Search the web using Brave Search. Returns titles, URLs, and snippets for up to 10 results. Use this to find facts, verify claims, and discover relevant pages. For detailed content, follow up with web_fetch on the most relevant URLs."
     parameters = {
         "type": "object",
         "properties": {
@@ -134,6 +134,7 @@ class WebSearchTool(Tool):
         self,
         api_key: str | None = None,
         max_results: int = 5,
+        provider: str = "brave",
         mode: str = "local",
         proxy_url: str = "http://127.0.0.1:4499/v1/search",
         proxy_approval_mode: str = "hmac",
@@ -141,6 +142,7 @@ class WebSearchTool(Tool):
         proxy_healthcheck: bool = False,
         proxy_fallback_to_local: bool = False,
     ):
+        self.provider = provider
         self.api_key = api_key or os.environ.get("BRAVE_API_KEY", "")
         self.max_results = max_results
         self.mode = mode
@@ -171,13 +173,22 @@ class WebSearchTool(Tool):
                 "local search is forbidden when proxy mode is active without fallback",
                 code="web_search_local_forbidden",
             )
+
+        if self.provider == "ddg":
+            return await self._search_ddg(query=query, count=count)
+
         if not self.api_key:
             return ToolResult.failure(
                 ToolErrorKind.RUNTIME,
-                "BRAVE_API_KEY not configured",
-                code="brave_api_key_missing",
+                "Search API key not configured",
+                code="search_api_key_missing",
             )
 
+        if self.provider == "tavily":
+            return await self._search_tavily(query=query, count=count)
+        return await self._search_brave(query=query, count=count)
+
+    async def _search_brave(self, query: str, count: int | None = None) -> ToolResult:
         try:
             n = min(max(count or self.max_results, 1), 10)
             async with httpx.AsyncClient() as client:
@@ -200,17 +211,81 @@ class WebSearchTool(Tool):
                     lines.append(f"   {desc}")
             return ToolResult.success("\n".join(lines))
         except httpx.TimeoutException as e:
-            return ToolResult.failure(
-                ToolErrorKind.RETRYABLE,
-                str(e),
-                code="web_search_timeout",
-            )
+            return ToolResult.failure(ToolErrorKind.RETRYABLE, str(e), code="web_search_timeout")
         except httpx.RequestError as e:
+            return ToolResult.failure(ToolErrorKind.RETRYABLE, str(e), code="web_search_request_failed")
+
+    async def _search_ddg(self, query: str, count: int | None = None) -> ToolResult:
+        try:
+            import asyncio
+            import time
+
+            from ddgs import DDGS
+
+            n = min(max(count or self.max_results, 1), 10)
+
+            def _do_search() -> list[dict]:
+                last_exc: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        with DDGS() as ddgs:
+                            return list(ddgs.text(query, max_results=n))
+                    except Exception as exc:
+                        last_exc = exc
+                        # Rate-limit or transient error — wait before retrying
+                        delay = 2 ** attempt * 2  # 2s, 4s, 8s
+                        time.sleep(delay)
+                raise last_exc  # type: ignore[misc]
+
+            results = await asyncio.to_thread(_do_search)
+
+            if not results:
+                return ToolResult.success(f"No results for: {query}")
+
+            lines = [f"Results for: {query}\n"]
+            for i, item in enumerate(results[:n], 1):
+                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('href', '')}")
+                if snippet := item.get("body"):
+                    lines.append(f"   {snippet[:300]}")
+            return ToolResult.success("\n".join(lines))
+        except ImportError:
+            return ToolResult.failure(
+                ToolErrorKind.RUNTIME,
+                "ddgs package not installed. Run: pip install ddgs",
+                code="ddg_not_installed",
+            )
+        except Exception as e:
             return ToolResult.failure(
                 ToolErrorKind.RETRYABLE,
                 str(e),
-                code="web_search_request_failed",
+                code="web_search_ddg_failed",
             )
+
+    async def _search_tavily(self, query: str, count: int | None = None) -> ToolResult:
+        try:
+            n = min(max(count or self.max_results, 1), 10)
+            async with httpx.AsyncClient() as client:
+                r = await client.post(
+                    "https://api.tavily.com/search",
+                    json={"api_key": self.api_key, "query": query, "max_results": n},
+                    timeout=15.0,
+                )
+                r.raise_for_status()
+
+            results = r.json().get("results", [])
+            if not results:
+                return ToolResult.success(f"No results for: {query}")
+
+            lines = [f"Results for: {query}\n"]
+            for i, item in enumerate(results[:n], 1):
+                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
+                if snippet := item.get("content"):
+                    lines.append(f"   {snippet[:300]}")
+            return ToolResult.success("\n".join(lines))
+        except httpx.TimeoutException as e:
+            return ToolResult.failure(ToolErrorKind.RETRYABLE, str(e), code="web_search_timeout")
+        except httpx.RequestError as e:
+            return ToolResult.failure(ToolErrorKind.RETRYABLE, str(e), code="web_search_request_failed")
         except Exception as e:
             return ToolResult.failure(
                 ToolErrorKind.RUNTIME,
@@ -383,7 +458,7 @@ class WebFetchTool(Tool):
     """Fetch and extract content from a URL using Readability."""
 
     name = "web_fetch"
-    description = "Fetch URL and extract readable content (HTML or markdown/text)."
+    description = "Fetch a web page and extract its full readable content as markdown or text. Use this after web_search to read the complete content of relevant pages — search snippets often lack the precise details needed for accurate answers."
     parameters = {
         "type": "object",
         "properties": {
@@ -411,6 +486,11 @@ class WebFetchTool(Tool):
         self.proxy_approval_token = proxy_approval_token
         self.proxy_healthcheck = proxy_healthcheck
         self.proxy_fallback_to_local = proxy_fallback_to_local
+        self._fetch_cache: dict[str, "ToolResult"] = {}
+
+    def clear_session_cache(self) -> None:
+        """Clear per-session URL cache. Call at the start of each agent task."""
+        self._fetch_cache.clear()
 
     async def execute(  # noqa: N803
         self,
@@ -423,6 +503,10 @@ class WebFetchTool(Tool):
         trace_id = str(kwargs.get("trace_id") or "")
         security_context = dict(kwargs.get("security_context") or {})
 
+        # Session-level URL dedup: return cached result for already-fetched URLs
+        if url in self._fetch_cache:
+            return self._fetch_cache[url]
+
         # Validate URL before fetching
         is_valid, error_msg = _validate_url(url)
         if not is_valid:
@@ -433,15 +517,19 @@ class WebFetchTool(Tool):
             )
 
         if self.mode == "proxy":
-            return await self._fetch_via_proxy(
+            result = await self._fetch_via_proxy(
                 url=url,
                 extract_mode=extractMode,
                 max_chars=max_chars,
                 trace_id=trace_id,
                 security_context=security_context,
             )
+        else:
+            result = await self._fetch_local(url=url, extract_mode=extractMode, max_chars=max_chars)
 
-        return await self._fetch_local(url=url, extract_mode=extractMode, max_chars=max_chars)
+        if result.ok:
+            self._fetch_cache[url] = result
+        return result
 
     async def _fetch_local(self, url: str, extract_mode: str, max_chars: int) -> ToolResult:
         # Phase 2-2: hard boundary — block local execution when proxy mode is
