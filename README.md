@@ -1,404 +1,369 @@
 # zen-claw · 小馋虾
 
-[中文版](#中文版)
+> 本地优先、可审计、面向实际执行的 AI Agent 平台。
 
-**中文名：小馋虾** — 本地优先的企业级 AI Agent 框架
+[English summary](#english-summary)
 
-zen-claw is a local-first AI agent framework for developers who need controllable tool execution, multi-agent orchestration, multi-channel delivery, and traceable operator workflows in one codebase.
+zen-claw 不是一个只负责把消息转发给大模型的聊天壳。当前代码库已经实现了一套 Alpha 阶段的 Agent 平台基线：多 Agent 路由、分层意图执行、工具与技能治理、知识库、多渠道接入、控制面 API，以及隔离高风险能力的安全 sidecar。
 
-## What This Project Is
+- 当前版本：`0.1.3.post5`
+- 运行环境：Python `>=3.11`，主 CI 使用 Python `3.12` / Windows
+- 许可证：Business Source License 1.1
 
-zen-claw is not just a chat wrapper around an LLM. The current repository already combines:
+## 项目判断
 
-- An agent runtime with direct-intent handling, tool invocation, approval-aware execution, and recovery-aware routing
-- Multi-agent profile routing with isolated workspaces, route preview, sticky bindings, and profile-level model/prompt/tool controls
-- A knowledge and RAG stack with notebook management, retention, tenant-aware storage policy, and operator-facing APIs
-- A skills system with inventory, preflight, enable/disable, export/restore, and built-in business-skill foundations
-- A FastAPI dashboard/control plane for agents, skills, ops summary, model routing, RAG, and crawler management
-- Multi-channel integrations and webhook-style entrypoints for practical deployment scenarios
+| 维度 | 当前代码状态 |
+| --- | --- |
+| 产品阶段 | Alpha。核心运行链路和治理能力已有较广测试覆盖，但各子系统成熟度不完全一致 |
+| 核心优势 | 本地优先、执行路径可解释、高风险工具受策略与 sidecar 约束、控制面与审计能力完整度较高 |
+| 主要形态 | Python 主运行时 + FastAPI 控制面 + 可选 Node/Go sidecar |
+| 适合场景 | 私有 Agent 平台原型、个人/团队助手、多渠道 Bot、需要审批和审计的工具执行、RAG 与业务技能实验 |
+| 当前边界 | 仍需自行配置模型、渠道和外部服务；生产部署需要按场景完成凭证、网络、存储和 sidecar 加固 |
 
-## Design Background
+## 已实现的核心架构
 
-Several core design decisions in zen-claw are informed by recent quantization and attention research — specifically BitNet b1.58 and multi-head routing ideas. The goal is not to reproduce academic models, but to apply their structural intuitions (ternary classification, parallel candidate heads, gated structured output) to the practical problems of agent memory, intent routing, and execution control.
+```text
+CLI / Channels / Webhooks / OpenAI-compatible API
+                         |
+                  AgentRouter / AgentPool
+                         |
+          Intent routing -> execution handoff -> AgentLoop
+                         |
+       Skills / Tools / RAG / Sessions / Cron / Subagents
+                         |
+       Policy / Approval / Gateway / Audit / Sidecars
+                         |
+             Providers and external systems
+```
 
-The design is structured as three layers:
+### 1. Agent 运行时与路由
 
-### Layer 1 — b1.58 Retrieval (Implemented)
+- `AgentLoop` 负责模型调用、工具迭代、规划、反思、上下文压缩和执行结果记录。
+- 意图执行区分直达执行、受约束重规划、技能路径、自由规划、澄清和审批等待。
+- `AgentRouter` 支持显式 Agent、会话绑定、关键词、渠道默认 Agent 和默认回退。
+- `AgentPool` 为不同 Agent profile 解析独立工作区、模型、Prompt、技能和工具策略。
+- 支持视觉模型、思考模型、回退模型、成本模型、稳定性模型和按意图/任务类型覆盖模型。
 
-**Memory recall as ternary classification instead of top-k float ranking.**
+代码入口：
 
-Standard memory recall returns the top-N candidates by cosine similarity, which forces the agent to consume a fixed budget of context regardless of whether the candidates are actually relevant. Inspired by b1.58 ternary weights {-1, 0, +1}, zen-claw replaces the float-rank cutoff with a three-tier gate:
+- `zen_claw/agent/loop.py`
+- `zen_claw/agent/orchestration.py`
+- `zen_claw/agent/router.py`
+- `zen_claw/agent/pool.py`
 
-| Tier | Score range | Action |
-|------|-------------|--------|
-| Accept (+1) | ≥ 0.6 | Inject into context immediately |
-| Uncertain (0) | 0.2 – 0.6 | Promote via secondary scoring pass |
-| Reject (−1) | < 0.2 | Drop silently |
+### 2. 工具执行与安全治理
 
-This is implemented as `TernaryRecallStrategy` in `zen_claw/agent/memory_ternary.py`, wired into `ContextBuilder` via `memory_recall_mode = "ternary"` in config.
+- 工具策略支持默认拒绝、profile 级 allow/deny、渠道约束、能力配额和生产加固校验。
+- 高风险执行链路支持显式审批、HMAC 授权信封、审计事件和 sidecar 隔离。
+- 网络搜索、抓取、浏览器、连接器和命令执行拥有独立配置与策略边界。
+- Go sidecar 提供安全命令执行与网络代理；Node sidecar 提供浏览器自动化和 WhatsApp bridge。
+- 配置默认启用 `production_hardening`，并拒绝不符合要求的 legacy compatibility 或非 HMAC sidecar 配置。
 
-### Layer 2 — MHA Routing (Planned)
+代码入口：
 
-**Intent candidate ranking as multi-head scoring instead of first-match priority.**
+- `zen_claw/config/schema.py`
+- `zen_claw/agent/approval_gate.py`
+- `zen_claw/agent/tools/policy.py`
+- `zen_claw/agent/tools/capability_policy.py`
+- `zen_claw/gateway/`
+- `go/sec-execd/`
+- `go/net-proxy/`
+- `browser/sidecar/`
 
-Gate 1 currently runs three candidate sources in sequence — crystallized pipeline, declarative intent, and native handler — and returns the first match. The planned extension is to score all three heads in parallel and combine their scores before selecting a candidate, analogous to multi-head attention aggregating from different representation subspaces.
+### 3. Skills 与业务能力
 
-Insertion point: `IntentRouter` candidate ranking + `RouteCandidate` scoring in `orchestration.py`.  
-Risk: medium — requires offline routing eval data to validate ranking quality.
+Skills 系统已实现：
 
-### Layer 3 — b1.58 Gating (Planned)
+- 内置技能、工作区技能和多来源技能发现
+- 启用、禁用、验证、测试、完整性校验、安装、卸载、导出和 SBOM
+- Skills market 搜索、签名/哈希检查、版本降级防护和可信时间缓存
+- profile 级技能预加载与运行时权限门
 
-**Unified structured rejection output from the approval gate.**
+仓库中的内置技能包括内容生成、合规检查、Crawler、RAG 检索、数据库助手、浏览器自动化、知识管理、GDrive、天气等。具体可用性取决于对应依赖、凭证和运行环境。
 
-Currently, `ApprovalGate` and `tool_policy.py` produce refusals through separate code paths with inconsistent reason fields. The planned work is to apply a ternary gate at the top of the execution decision: approve / uncertain (escalate) / reject, writing a normalized `RoutingDecision.reason` on every rejection so the audit trail and dashboard always see the same structured shape.
+```powershell
+zen-claw skills list
+zen-claw skills test content_gen
+zen-claw skills verify-integrity
+```
 
-Insertion point: `ApprovalGate` rejection path → `RoutingDecision.reason`.  
-Risk: low — mostly field standardization with no behavior change.
+### 4. Knowledge / RAG
 
----
+- `RAGPipeline` 提供 ingest、search、document lifecycle、retention 和 stats。
+- 支持 notebook、tenant、稳定 document ID、元数据过滤和后端策略。
+- 当前向量存储实现包括 Chroma 和内存存储。
+- 提供 CLI、Dashboard 和 API 操作面。
 
-## Current Implemented Capability Areas
+RAG 的完整依赖不在基础安装中，需要安装 `rag` extra。
 
-### Agent Runtime And Routing
+```powershell
+python -m pip install -e ".[rag]"
+zen-claw rag ingest .\docs --notebook project
+zen-claw rag search "执行策略" --notebook project
+zen-claw rag stats
+```
 
-- Direct-intent routes for time, weather, exchange rate, stock price, quick note, and fixed-site lookup
-- Tool-calling runtime with approval-aware execution and structured recovery outcomes
-- Gate 1/2/3 routing architecture:
-  - Gate 1: rule-based candidate matching (crystallized, declarative, native handler)
-  - Gate 2: lightweight LLM arbitration (confirm / select-skill / clarify / unclassified)
-  - Gate 3: free planning via full agent loop
-- Ternary memory recall (`TernaryRecallStrategy`) — b1.58-inspired three-tier context injection
-- Multi-agent profile registry with profile-level workspace/model/planning overrides, prompt binding, tool allow/deny policy, route preview, route bind, and route clear
+### 5. 渠道、Webhook 与控制面
 
-### Skills And Tools
+共享渠道注册表当前包含：
 
-- Structured skill inventory and loader/runtime integration
-- Preflight and validation flows via `zen-claw skills test <name>`
-- Skill enable/disable, export/restore, package policy, and batch operations
-- Multi-source skill registry (GitHub, local directory, central HTTPS registry) with staging sandbox
-- Built-in business-facing skill foundations: `content_gen`, `compliance_check`, `rag_retrieve`, `crawler`, `database_assistant`, `browser_automation`, `devops_monitor`, `knowledge_management`, `gdrive`
+- WebChat
+- Webhook Trigger
+- WhatsApp
+- Telegram
+- Discord
+- Slack
+- Signal
+- Matrix
+- Feishu
+- WeChat MP
+- WeCom
+- DingTalk
 
-### Knowledge And RAG
+各渠道实现的认证方式、媒体能力、运行时控制方式和外部依赖不同。WebChat 支持进程内启动、停止、重启和 apply；其他渠道中的部分操作目前是配置或审计层操作。
 
-- Shared `RAGPipeline` abstraction for ingest, search, stats, retention, and document lifecycle
-- Notebook-level and tenant-level backend policy
-- Metadata-aware ingestion and exact-match search filters
-- Tenant-aware API and CLI surfaces for RAG operations
-- Dashboard/API management for notebooks, repair, policy history, activity history, and backend diagnostics
+Dashboard / FastAPI 控制面覆盖 Agent、Skills、渠道、运行摘要、模型路由、RAG、Crawler、Cron、审计和 OpenAI-compatible API。主要入口包括：
 
-### Dashboard And Control Plane APIs
+- `/api/status`
+- `/api/v1/*`
+- `/v1/models`
+- `/v1/chat/completions`
 
-- Dashboard cards and APIs for agents, skills, model routing, operations summary / pending apply, RAG, and crawler sources and schedules
-- Representative API families: `/api/v1/agents`, `/api/v1/skills`, `/api/v1/rag`, `/api/v1/ops`, `/api/v1/model-routing`, `/api/v1/crawler`
+### 6. 调度、Crawler 与外围能力
 
-### Channels, Webhooks, And Crawler
+- Cron 服务支持定时任务及知识库/Crawler 任务。
+- Crawler 支持来源目录、直接 HTTP 抽取、浏览器抽取、运行和调度。
+- 支持 API keys、多租户、用户、凭证库、Agent 加密身份、移动节点任务和 TTS。
+- 支持会话、记忆、上下文压缩、token 使用记录和执行可观测性。
 
-- Channel support: WebChat, Webhook Trigger, Slack, Signal, Matrix, Telegram, Discord, WhatsApp, Feishu, and others
-- Webhook-style inbound paths and dashboard-operable channel controls
-- Crawler: source catalog, run/schedule, browser-backed extraction, dashboard/API surfaces
+## 快速开始
 
----
-
-## Developer Quick Start
-
-### 1. Install
+以下命令适用于 PowerShell 7：
 
 ```powershell
 git clone https://github.com/ZachCharles666/zen-claw.git
-cd zen-claw
-python -m venv .venv
+Set-Location zen-claw
+
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-pip install -e .[dev]
-```
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
 
-Optional dependency groups:
-
-- `pip install -e .[rag]` — Chroma / embeddings / document ingestion
-- `pip install -e .[tts]` or `pip install -e .[tts-all]` — speech providers
-- `pip install -e .[multitenant]` — multi-tenant auth extras
-
-### 2. Configure
-
-```powershell
+zen-claw onboard
 zen-claw config wizard
 zen-claw config doctor --strict
+zen-claw agent -m "你好，请介绍当前运行环境"
 ```
 
-The wizard writes the active config to `~/.zen-claw/config.json`. This path is global for the current user and does not change with your working directory.
+默认配置文件：
 
-### 3. Run A Local Agent Prompt
-
-```powershell
-zen-claw agent -m "Hello"
+```text
+~/.zen-claw/config.json
 ```
 
-### 4. Start Gateway And Dashboard
+默认工作区：
+
+```text
+~/.zen-claw/workspace
+```
+
+## 常用命令
 
 ```powershell
-zen-claw gateway --port 18790
+# 查看状态和当前配置诊断
+zen-claw status -v
+zen-claw config providers
+zen-claw config production-check
+
+# Agent profiles
+zen-claw agent list
+zen-claw agent chat default
+zen-claw agent test default
+
+# Skills
+zen-claw skills list
+zen-claw skills test content_gen
+
+# Knowledge / RAG
+zen-claw rag stats
+zen-claw knowledge list
+
+# 渠道、任务与节点
+zen-claw channels status
+zen-claw cron list
+zen-claw node list
+```
+
+查看完整命令树：
+
+```powershell
+zen-claw --help
+zen-claw agent --help
+zen-claw config --help
+zen-claw skills --help
+zen-claw rag --help
+```
+
+## 启动服务
+
+### Dashboard / 控制面
+
+```powershell
 zen-claw dashboard --host 127.0.0.1 --port 18791
 ```
 
-Dashboard URL: [http://127.0.0.1:18791](http://127.0.0.1:18791)
+打开：<http://127.0.0.1:18791>
 
-## Common CLI Entry Points
+### Gateway / 渠道运行时
 
 ```powershell
-zen-claw status -v
-zen-claw config providers
-zen-claw config troubleshoot
-zen-claw agent list
-zen-claw agent chat default
-zen-claw skills test content_gen
-zen-claw rag stats
-zen-claw crawler run --source https://example.com --notebook demo
+zen-claw gateway --port 18790
 ```
 
-## Repository Shape
+Dashboard 与 Gateway 是独立 CLI 命令。需要同时运行时，请在两个 PowerShell 会话中分别启动。
 
-- `zen_claw/agent/`: agent loop, routing, pool, tool selection, runtime decisions
-- `zen_claw/skills/`: built-in skills, manifests, runtime skill integration
-- `zen_claw/knowledge/`: ingestion, notebooks, retrieval, vector-store abstraction, RAG pipeline
-- `zen_claw/dashboard/`: dashboard server and operator-facing API surface
-- `zen_claw/channels/`: inbound/outbound channel integrations
-- `zen_claw/cron/`: scheduled execution and job orchestration
-- `zen_claw/tunnel/`, `bridge/`, `browser/sidecar/`, `go/`: supporting runtime sidecars and infra helpers
-- `tests/`: behavior and regression coverage across runtime, CLI, dashboard, RAG, channels, and crawler flows
+## Docker
 
-## Current Boundaries And Notes
+标准 Compose 配置会构建 Python 运行时、Go sidecar 和 WhatsApp bridge，并以 Dashboard 作为容器默认命令：
 
-- README only covers stable entry points and repository-level orientation. It does not try to replace subsystem-specific docs.
-- Some features depend on optional extras, external credentials, or channel/provider-specific runtime setup.
-- The Python mainline is the repository's Alpha-grade baseline. Lower-maturity areas are mostly optional Node sidecars such as `bridge/` and `browser/sidecar/`, plus documentation consistency work.
-- Node-side installs are expected to use committed lockfiles and controlled version updates. Unlocked `npm install` paths are not part of the release-grade baseline.
-- `zen_claw/dashboard/static/chat.html` still consumes pinned CDN assets; treat those as a bounded residual supply-chain dependency unless vendored locally.
-- The repository includes roadmap and audit documents; README describes the current implemented baseline only.
-- Verification commands and repo structure should always defer to the generated docs in `docs/`.
+```powershell
+Copy-Item .env.example .env
+docker compose up -d zen-claw
+docker compose logs -f zen-claw
+```
 
-## Developer Navigation
+可选 Chroma 服务：
 
-- Project overview: [`docs/project-overview.md`](docs/project-overview.md)
-- Repository map: [`docs/repo_map.md`](docs/repo_map.md)
-- Verification source of truth: [`docs/verify_profile.md`](docs/verify_profile.md)
-- Deployment guide: [`docs/DEPLOY.md`](docs/DEPLOY.md)
-- WhatsApp bridge runbook: [`bridge/README.md`](bridge/README.md)
-- Feature usage reference: [`docs/feature-summary_and_usage.md`](docs/feature-summary_and_usage.md)
-- Self-test and playbook: [`docs/self-test-and-playbook.md`](docs/self-test-and-playbook.md)
-- Product/roadmap context: [`docs/zen-claw功能补足开发计划.md`](docs/zen-claw功能补足开发计划.md)
+```powershell
+docker compose --profile rag up -d
+```
 
-## Development Verification
+当前 `docker-compose.yml` 的默认 `zen-claw` 命令只启动 Dashboard。若部署需要独立 Gateway 或其他 sidecar 生命周期，请在部署配置中显式编排。
 
-Use [`docs/verify_profile.md`](docs/verify_profile.md) as the source of truth. Current baseline:
+## 可选依赖
+
+| Extra | 用途 |
+| --- | --- |
+| `dev` | pytest、pytest-asyncio、Ruff |
+| `eval` | OpenAI SDK 与评测工具 |
+| `rag` | Chroma、embedding、PDF/DOCX 和文本抽取 |
+| `tts` / `tts-all` | 语音合成 |
+| `multitenant` | JWT 与密码哈希 |
+| `calendar` | Google、Outlook、CalDAV 日历 |
+| `notion` | Notion 接入 |
+| `daily` | 日历与 Notion 的组合依赖 |
+
+示例：
+
+```powershell
+python -m pip install -e ".[dev,rag,multitenant]"
+```
+
+## 模型与外部服务
+
+配置 schema 为以下 provider 提供明确配置槽位：
+
+- Anthropic
+- OpenAI
+- OpenRouter
+- DeepSeek
+- Groq
+- Zhipu
+- DashScope
+- vLLM / OpenAI-compatible endpoint
+- Gemini
+- Moonshot
+- AiHubMix
+
+模型调用由 LiteLLM provider 适配层执行。渠道、语音、日历、Notion、GDrive、浏览器和搜索能力需要各自的凭证或外部运行时。
+
+## 仓库结构
+
+```text
+zen_claw/
+  agent/          Agent loop、路由、编排、记忆与工具
+  api/            OpenAI-compatible API
+  auth/           API key、身份、租户与用户
+  channels/       共享渠道实现与注册表
+  config/         Pydantic 配置 schema 与迁移
+  dashboard/      FastAPI 控制面和 WebChat 页面
+  gateway/        Gateway 控制平面
+  knowledge/      RAG pipeline、notebook、store、retriever
+  observability/  审计与 trace
+  providers/      模型、转写与 TTS provider
+  runtime/        sidecar 生命周期管理
+  skills/         内置技能、manifest 和 registry
+bridge/           WhatsApp Node bridge
+browser/sidecar/  Playwright Node sidecar
+go/               安全执行与网络代理 sidecar
+tests/            行为、回归、策略、渠道与控制面测试
+```
+
+## 当前边界
+
+- 项目处于 Alpha 阶段，不应默认视为无需加固即可直接承载生产流量。
+- 基础安装不包含全部可选能力；RAG、多租户、日历、Notion 和语音等需要对应 extras。
+- 多渠道“已注册”不等于零配置可用；每个渠道仍需要凭证、外部服务或 bridge。
+- Dashboard 提供多种控制面 mutation API，但并非所有子系统都支持真正的进程内热加载。
+- Go/Node sidecar 与 Python 主运行时有独立构建、配置和运行边界。
+- 仓库中仍保留部分历史 `nano-claw` 包名或 module path；公开产品名与 Python CLI 均为 `zen-claw`。
+- 当前没有 mypy 验证配置；静态检查基线是 Ruff。
+
+## 开发与验证
+
+仓库使用动态生成的验证配置。非平凡改动前先刷新：
+
+```powershell
+pwsh scripts/refresh_agent_context.ps1
+```
+
+当前基础验证顺序：
 
 ```powershell
 .\.venv\Scripts\python.exe -m ruff check .
 .\.venv\Scripts\python.exe -m pytest -q
 ```
+
+CI 还包含分片核心测试、运行时敏感测试、记忆召回测试、渠道矩阵和 nightly integration。
+
+## 延伸阅读
+
+- [当前架构设计与特色理念](docs/architecture-and-design-principles.md)
+- [部署说明](docs/DEPLOY.md)
+- [功能与使用说明](docs/feature-summary_and_usage.md)
+- [自测手册](docs/self-test-and-playbook.md)
+- [WhatsApp bridge](bridge/README.md)
+- [安全说明](SECURITY.md)
 
 ## License
 
-BUSL-1.1 (Business Source License 1.1)
+本项目采用 Business Source License 1.1。
 
-Commercial use is restricted until 2030-04-01, after which this software is available under Apache 2.0.
-During the restriction period, use is permitted for evaluation, testing, and non-production purposes.
+许可证允许个人使用、学术研究、教育、非营利开源项目、组织内部开发/测试/评估/预发布，以及不构成许可证所定义“Commercial Production Use”的组织内部生产使用。向第三方提供托管服务，或将本项目嵌入面向第三方销售/授权的商业产品，需要商业许可。
 
----
-
-<span id="中文版"></span>
-# 中文版
-
-zen-claw 是一个面向开发者的本地优先 AI Agent 框架，目标是在同一套代码里提供可控工具执行、多 Agent 编排、多渠道接入，以及可追踪的运维控制面。
-
-## 这个项目现在是什么
-
-它不是一个单纯的 LLM 聊天壳。当前仓库已经把这些能力落在同一个系统里：
-
-- Agent 运行时：直达意图、工具调用、审批感知执行、结构化恢复路径
-- 多 Agent 配置与路由：隔离工作区、route preview、sticky route、profile 级模型/Prompt/工具控制
-- Knowledge / RAG：notebook 管理、保留策略、租户级后端策略、操作面 API
-- Skills 系统：清单、preflight、启停、导出恢复、多源注册表与 staging 沙箱、内置业务技能骨架
-- Dashboard / FastAPI 控制面：agents、skills、ops、model routing、RAG、crawler
-- 多渠道与 webhook/crawler 等实际交付需要的外围能力
-
-## 设计背景
-
-zen-claw 的几个核心设计决策来自近期量化与注意力机制研究的启发——主要是 BitNet b1.58 和多头路由的思路。目标不是复现学术模型，而是把这些结构直觉（三态分类、平行候选头、门控结构化输出）用于解决 Agent 记忆、意图路由和执行控制这三个实际问题。
-
-整体设计分为三层：
-
-### 第一层 — b1.58 检索层（已实现）
-
-**用三态分类替代 top-k 浮点排名来做记忆召回。**
-
-传统记忆召回按余弦相似度取前 N 条，无论候选是否真正相关都会消耗固定的上下文预算。借鉴 b1.58 三值权重 {-1, 0, +1} 的思路，zen-claw 用三态门控取代浮点截断：
-
-| 层级 | 分数范围 | 动作 |
-|------|----------|------|
-| 接受 (+1) | ≥ 0.6 | 直接注入上下文 |
-| 不确定 (0) | 0.2 – 0.6 | 二次评分后决定升降 |
-| 拒绝 (−1) | < 0.2 | 静默丢弃 |
-
-已实现为 `TernaryRecallStrategy`，位于 `zen_claw/agent/memory_ternary.py`，通过配置项 `memory_recall_mode = "ternary"` 接入 `ContextBuilder`。
-
-### 第二层 — MHA 规划层（规划中）
-
-**用多头并行评分替代顺序首次匹配来做意图候选排序。**
-
-当前 Gate 1 按顺序跑三个候选源（crystallized pipeline → declarative intent → native handler），取第一个匹配。规划中的扩展是对三个头并行打分、合并后再选出候选，类似多头注意力从不同子空间聚合表示的方式。
-
-插入点：`IntentRouter` 候选排序 + `orchestration.py` 中的 `RouteCandidate` 评分。  
-风险：中——需要离线路由评测数据来验证排序质量。
-
-### 第三层 — b1.58 顶层门控（规划中）
-
-**从审批门统一输出结构化拒绝结果。**
-
-当前 `ApprovalGate` 和 `tool_policy.py` 通过不同代码路径产生拒绝，reason 字段格式不统一。规划中的工作是在执行决策入口加一个三态门控：批准 / 不确定（上报）/ 拒绝，所有拒绝路径统一写入标准化的 `RoutingDecision.reason`，保证审计日志和 Dashboard 始终看到一致的结构。
-
-插入点：`ApprovalGate` 拒绝路径 → `RoutingDecision.reason`。  
-风险：低——主要是字段标准化，不改变现有行为。
+Change Date 为 `2030-04-01`，届时转换为 Apache License 2.0。请以 [LICENSE](LICENSE) 全文为准。
 
 ---
 
-## 当前已实现的能力分区
+## English Summary
 
-### Agent Runtime 与路由
+zen-claw is a local-first, auditable AI agent platform currently at Alpha maturity. The implemented codebase combines:
 
-- 直达意图处理：时间、天气、汇率、股票行情、快速备忘、固定站点查询
-- 支持工具调用、审批约束、恢复结果建模的 Agent 运行时
-- Gate 1/2/3 三级路由架构：
-  - Gate 1：规则匹配（crystallized、declarative、native handler 三通道）
-  - Gate 2：轻量 LLM 仲裁（confirm / select-skill / clarify / unclassified）
-  - Gate 3：完整 Agent Loop 自由规划
-- 三态记忆召回（`TernaryRecallStrategy`）——b1.58 启发的三层上下文注入
-- 多 Agent profile 注册与路由，含 profile 级 workspace/model/planning 覆盖、prompt 绑定、工具 allow/deny 策略、route preview、route bind、route clear
+- a multi-profile agent runtime with layered intent routing and explicit execution handoff;
+- policy-controlled tools, approval flows, audit logs, and HMAC-protected sidecars;
+- skills lifecycle management and a multi-source skills registry;
+- notebook- and tenant-aware RAG;
+- twelve registered messaging/webhook channels;
+- a FastAPI dashboard/control plane and OpenAI-compatible endpoints;
+- optional Go and Node sidecars for isolated execution, network proxying, browser automation, and WhatsApp.
 
-### Skills 与工具
-
-- 结构化技能清单与运行时绑定
-- `zen-claw skills test <name>` preflight / 测试入口
-- 技能启停、导出恢复、package policy、批量操作
-- 多源技能注册表（GitHub、本地目录、中央 HTTPS registry）+ staging 沙箱
-- 内置业务技能骨架：`content_gen`、`compliance_check`、`rag_retrieve`、`crawler`、`database_assistant`、`browser_automation`、`devops_monitor`、`knowledge_management`、`gdrive`
-
-### Knowledge 与 RAG
-
-- 统一的 `RAGPipeline` 抽象，覆盖 ingest、search、stats、retention、document lifecycle
-- notebook 级与 tenant 级后端策略
-- 支持 metadata 注入与精确过滤搜索
-- 提供 tenant-aware 的 CLI 与 API 入口
-- Dashboard/API 支持 notebook、repair、policy history、activity history、backend diagnostics
-
-### Dashboard 与控制面 API
-
-- 当前 Dashboard 与 API 已覆盖：agents、skills、model routing、operations summary / pending apply、RAG、crawler source / schedule
-- 代表性 API 家族：`/api/v1/agents`、`/api/v1/skills`、`/api/v1/rag`、`/api/v1/ops`、`/api/v1/model-routing`、`/api/v1/crawler`
-
-### 渠道、Webhook 与 Crawler
-
-- 仓库内已包含 WebChat、Webhook Trigger、Slack、Signal、Matrix、Telegram、Discord、WhatsApp、Feishu 等渠道支持
-- 现有代码中已存在 webhook 风格的入站路径与 Dashboard 可操作的控制面
-- crawler 能力：source catalog、run/schedule、browser-backed extraction、Dashboard/API 面板
-
----
-
-## 开发者快速开始
-
-### 1. 安装
+The project is suitable for private agent-platform prototypes and controlled internal deployments. It still requires environment-specific provider credentials, channel setup, optional dependencies, and production hardening.
 
 ```powershell
-git clone https://github.com/ZachCharles666/zen-claw.git
-cd zen-claw
-python -m venv .venv
+py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -U pip
-pip install -e .[dev]
-```
-
-按需安装可选依赖：
-
-- `pip install -e .[rag]`：Chroma / embedding / 文档解析相关依赖
-- `pip install -e .[tts]` 或 `pip install -e .[tts-all]`：语音相关能力
-- `pip install -e .[multitenant]`：多租户认证相关能力
-
-### 2. 初始化配置
-
-```powershell
+python -m pip install -e ".[dev]"
+zen-claw onboard
 zen-claw config wizard
-zen-claw config doctor --strict
-```
-
-向导会把当前生效配置写入 `~/.zen-claw/config.json`。这是当前用户的全局配置路径，不会随着你切换工作目录而改变。
-
-### 3. 本地运行一个 Agent Prompt
-
-```powershell
 zen-claw agent -m "Hello"
 ```
-
-### 4. 启动 Gateway 与 Dashboard
-
-```powershell
-zen-claw gateway --port 18790
-zen-claw dashboard --host 127.0.0.1 --port 18791
-```
-
-访问地址：[http://127.0.0.1:18791](http://127.0.0.1:18791)
-
-## 常用 CLI 入口
-
-```powershell
-zen-claw status -v
-zen-claw config providers
-zen-claw config troubleshoot
-zen-claw agent list
-zen-claw agent chat default
-zen-claw skills test content_gen
-zen-claw rag stats
-zen-claw crawler run --source https://example.com --notebook demo
-```
-
-## 仓库结构怎么读
-
-- `zen_claw/agent/`：agent loop、intent routing、pool、tool 选择、运行时决策
-- `zen_claw/skills/`：内置技能、manifest、skill 运行时集成
-- `zen_claw/knowledge/`：ingestion、notebook、retrieval、vector store 抽象、RAG pipeline
-- `zen_claw/dashboard/`：dashboard server 与 operator-facing API
-- `zen_claw/channels/`：各渠道接入
-- `zen_claw/cron/`：定时任务与调度
-- `zen_claw/tunnel/`、`bridge/`、`browser/sidecar/`、`go/`：配套 sidecar 和基础设施辅助组件
-- `tests/`：覆盖 runtime、CLI、dashboard、RAG、channels、crawler 的回归测试
-
-## 当前边界与注意事项
-
-- README 只覆盖稳定入口与仓库导航，不展开所有子系统细节。
-- 部分能力依赖可选 extras、外部凭证或渠道/模型特定配置。
-- 仓库里存在 roadmap 与 audit 文档；README 只描述"当前已实现基线"，不把历史规划自动视为完成。
-- 涉及验证命令和仓库结构时，应以 `docs/` 中生成的真源文档为准。
-
-## 开发者导航
-
-- 项目全景说明：[`docs/project-overview.md`](docs/project-overview.md)
-- 仓库地图：[`docs/repo_map.md`](docs/repo_map.md)
-- 验证真源：[`docs/verify_profile.md`](docs/verify_profile.md)
-- 部署说明：[`docs/DEPLOY.md`](docs/DEPLOY.md)
-- 自测策略与玩法：[`docs/self-test-and-playbook.md`](docs/self-test-and-playbook.md)
-- 功能与用法参考：[`docs/feature-summary_and_usage.md`](docs/feature-summary_and_usage.md)
-- 产品/路线图上下文：[`docs/zen-claw功能补足开发计划.md`](docs/zen-claw功能补足开发计划.md)
-
-## 开发验证
-
-以 [`docs/verify_profile.md`](docs/verify_profile.md) 为准，当前基线：
-
-```powershell
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m pytest -q
-```
-
-## 许可证
-
-BUSL-1.1（Business Source License 1.1）
-
-商业限制期至 2030-04-01，到期后自动转为 Apache 2.0。
-限制期内允许用于评估、测试及非生产目的。
