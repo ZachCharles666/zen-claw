@@ -43,11 +43,21 @@ CLI / Channels / Webhooks / OpenAI-compatible API
 - `AgentRouter` 支持显式 Agent、会话绑定、关键词、渠道默认 Agent 和默认回退。
 - `AgentPool` 为不同 Agent profile 解析独立工作区、模型、Prompt、技能和工具策略。
 - 支持视觉模型、思考模型、回退模型、成本模型、稳定性模型和按意图/任务类型覆盖模型。
+- Agent 内部采用三门路由逐级扩大决策自由度：
+  - **Gate 1：规则候选路由**，按 crystallized engine、declarative intents、native handlers 的顺序匹配，由 Safety Valve 决定直接执行或升级。
+  - **Gate 2：LLM 仲裁路由**，在候选确认、技能选择、请求澄清和无法分类之间作出受约束决策。
+  - **Gate 3：Agent 自由规划**，仅在前两门无法确定处理方式时进入，并在默认能力契约内执行 plan、execute、reflect 循环。
+- 路由轨迹以 `gate1_execute`、`gate2_delegate`、`gate2_clarify`、`gate3_plan` 等阶段记录，可用于调试、评估和 Dashboard 观测。
+- 项目还借鉴 BitNet b1.58 的三值离散化理念，将连续、不易治理的判断压缩为少数可解释状态，再只对不确定部分追加成本：
+  - 已实现的 `ternary` / `trit` 记忆召回将候选归类为 `Reject(-1)`、`Uncertain(0)`、`Accept(+1)`。
+  - 顶层工具策略采用明确放行、结构化拒绝和审批/恢复路径，避免让开放式规划越过执行边界。
+  - 三门路由早于 b1.58 演进规划，并非论文三值的直接映射；它后来成为“底层三值检索 → 中层规划路由 → 顶层硬门控”三明治架构的现成中层基础。
 
 代码入口：
 
 - `zen_claw/agent/loop.py`
 - `zen_claw/agent/orchestration.py`
+- `zen_claw/agent/memory_ternary.py`
 - `zen_claw/agent/router.py`
 - `zen_claw/agent/pool.py`
 

@@ -23,10 +23,13 @@ flowchart TD
     A["CLI / Channels / Webhooks / OpenAI-compatible API"] --> B["统一消息、身份与 Trace"]
     B --> C["AgentRouter"]
     C --> D["AgentPool / Profile Resolution"]
-    D --> E["Intent Router"]
-    E --> F["RoutingDecision"]
-    F --> G["ExecutionIntent"]
-    G --> H["AgentLoop / Direct Runtime / Skill Path"]
+    D --> E["Gate 1: Rule Candidates"]
+    E --> F["Safety Valve"]
+    F -- "execute" --> H["Direct Runtime / Skill Path"]
+    F -- "delegate" --> G["Gate 2: LLM Arbitration"]
+    G -- "confirm / select" --> H
+    G -- "unclassified" --> G3["Gate 3: Agent Planning"]
+    G3 --> H
 
     H --> I["Tool Registry / Skills / RAG / Sessions / Cron"]
     I --> J["Tool Policy / Capability Policy / Approval Gate"]
@@ -63,7 +66,38 @@ flowchart TD
 7. 工具执行前继续经过工具策略、能力策略和审批判断。
 8. 执行事件写入 trace、审计和控制面状态。
 
-### 3.2 从工具调用到高风险执行
+### 3.2 三门路由主链路
+
+选定 Agent 后，`AgentLoop` 不会立即把所有请求交给自由规划模型，而是通过三门路由逐级扩大决策自由度。
+
+```mermaid
+flowchart TD
+    A["User Request"] --> B["Gate 1: Rule Candidate Routing"]
+    B --> B1["Crystallized Engine"]
+    B1 --> B2["Declarative Intents"]
+    B2 --> B3["Native Handlers"]
+    B3 --> C{"Safety Valve"}
+    C -- "execute" --> D["Direct Execution"]
+    C -- "delegate" --> E["Gate 2: LLM Arbitration"]
+    E -- "confirm_candidate" --> D
+    E -- "select_skill" --> D
+    E -- "request_clarification" --> F["Clarify with User"]
+    E -- "unclassified" --> G["Gate 3: Agent Loop"]
+    G --> H["Plan"]
+    H --> I["Execute / Reflect"]
+```
+
+| 路由门 | 核心职责 | 主要输入 | 可能输出 | 升级条件 |
+| --- | --- | --- | --- | --- |
+| Gate 1 | 用确定性规则产生并评估候选 | 请求、会话控制信号、crystallized / declarative / native 路由 | 直接执行候选，或 `delegate` | Safety Valve 判断候选不足以可靠执行 |
+| Gate 2 | 用 LLM 在受约束选项中仲裁 | Gate 1 候选、技能信息、路由上下文 | `confirm_candidate`、`select_skill`、`request_clarification`、`unclassified` | 无法确认候选、选择技能或通过澄清解决 |
+| Gate 3 | 在默认能力契约内自由规划和迭代执行 | 未分类请求、会话上下文、默认工具契约 | plan、execute、reflect 结果 | 仅由 Gate 2 的 `unclassified` 进入 |
+
+Safety Valve 不是第四门，而是 Gate 1 与 Gate 2 之间的升级边界。它结合候选数量、置信度、残差比例、上下文代词和长度异常等运行时信号，决定确定性候选是否足以直接执行。
+
+三门路由与 `AgentRouter` 解决的是不同层次的问题：`AgentRouter` 决定“由哪个 Agent 处理”，三门路由决定“选定 Agent 以何种决策自由度处理”。`orchestration.py` 将执行阶段归一化为 `gate1_execute`、`gate2_delegate`、`gate2_clarify` 和 `gate3_plan`，供运行追踪、评估和 Dashboard 使用。
+
+### 3.3 从工具调用到高风险执行
 
 ```mermaid
 flowchart LR
@@ -98,6 +132,9 @@ flowchart LR
 
 普通 Agent 常把所有请求直接交给同一个大模型循环。zen-claw 当前运行时把请求分成多种执行形态：
 
+- Gate 1 优先使用 crystallized、declarative 和 native 路径形成确定性候选。
+- Safety Valve 在候选不足时才将请求升级到 Gate 2。
+- Gate 2 先进行受约束仲裁，只有 `unclassified` 才进入 Gate 3。
 - `direct`：确定性运行时直接处理。
 - `constrained_replan`：在已有 contract 下进行受约束重规划。
 - `skill_path`：进入明确技能路径。
@@ -118,7 +155,43 @@ flowchart LR
 - `zen_claw/agent/orchestration.py`
 - `zen_claw/agent/loop.py`
 
-### 4.2 路由决策与执行意图显式解耦
+### 4.2 从 BitNet b1.58 借鉴离散控制理念
+
+[BitNet b1.58 论文](https://arxiv.org/abs/2402.17764)的核心工作是让模型权重只使用 `{-1, 0, +1}` 三个值，以更低的计算、内存和能耗成本保持有竞争力的模型能力。zen-claw 当前没有实现 BitNet 模型或 1.58-bit 推理运行时，而是把“三值离散化”和“把复杂度留给不确定部分”作为系统设计启发。
+
+仓库中的直接落地包括：
+
+- `TernaryRecallStrategy` 将连续召回分数划分为 `Reject(-1)`、`Uncertain(0)`、`Accept(+1)`。
+- 明确接受和拒绝的记忆候选直接收束；只有 `Uncertain(0)` 候选进入二次评分，减少噪声和上下文 token 消耗。
+- `TriternaryRecallStrategy` 可以直接向调用方返回 `{-1.0, 0.0, 1.0}` 离散分数。
+- 顶层工具策略通过结构化放行/拒绝原因、审批路径和 deny short-circuit，将高风险执行收束为可审计决策，而不是让 LLM 自行解释安全边界。
+
+项目规划将这些思想组织为“三明治”演进方向：
+
+```text
+底层：b1.58-inspired 三值记忆检索
+中层：Intent Router / Gate 1-3 / 规划与候选仲裁
+顶层：Tool Policy / Approval / Gateway 硬门控
+```
+
+需要区分两个容易混淆的概念：
+
+- **三门路由不是 b1.58 三值的直接映射。** Git 历史显示，Gate 1 / Gate 2 / Gate 3 在 2026-03-29 已完成对齐；b1.58 可行性评估形成于 2026-04-06，并把三门路由视为已有基础。
+- **二者共享同一类控制哲学。** 优先走低成本、可解释的确定路径；将不确定项升级给更强但更贵的决策层；最终执行仍受硬策略约束。
+- **MHA 中层候选排序仍是规划项。** 当前 Gate 1 使用 crystallized、declarative、native 的顺序匹配，不能描述为已经实现多头注意力路由。
+
+因此，b1.58 对当前项目的准确影响不是“创造了三门路由”，而是强化并扩展了项目已有的分层控制方向，使其进一步覆盖记忆召回、路由规划和顶层安全门控。
+
+关键代码与证据：
+
+- `zen_claw/agent/memory_ternary.py`
+- `zen_claw/agent/context.py`
+- `zen_claw/agent/tools/policy.py`
+- `zen_claw/agent/approval_gate.py`
+- `docs/design/MHA_b158_feasibility_assessment_20260406.md`
+- `docs/backlog.md`
+
+### 4.3 路由决策与执行意图显式解耦
 
 当前代码没有把路由结果仅保存在临时字符串或分支条件中，而是定义了独立契约：
 
@@ -132,7 +205,7 @@ flowchart LR
 
 显式契约让控制面、审计、测试和未来执行器可以共享稳定语义，而不必解析 Agent loop 内部状态。
 
-### 4.3 Multi-Agent 以隔离和策略为中心
+### 4.4 Multi-Agent 以隔离和策略为中心
 
 多 Agent 设计不只是创建多个 Prompt。每个 profile 可以解析出自己的：
 
@@ -159,7 +232,7 @@ Agent 路由与 Agent 实例解析也被拆开：
 - `zen_claw/agent/pool.py`
 - `zen_claw/config/schema.py`
 
-### 4.4 请求携带可验证的零信任安全上下文
+### 4.5 请求携带可验证的零信任安全上下文
 
 zen-claw 的安全设计不是仅在入口检查一次权限。`GatewayControlPlane` 会为请求签发包含身份和策略的安全 envelope。
 
@@ -190,7 +263,7 @@ Envelope 使用稳定 JSON canonicalization 生成哈希与签名，并可由 Py
 - `go/net-proxy/`
 - `browser/sidecar/`
 
-### 4.5 Fail-Closed 是生产加固的默认方向
+### 4.6 Fail-Closed 是生产加固的默认方向
 
 当 `production_hardening` 开启时，配置 schema 会主动拒绝不满足安全要求的组合，例如：
 
@@ -213,7 +286,7 @@ Envelope 使用稳定 JSON canonicalization 生成哈希与签名，并可由 Py
 - `zen_claw/agent/tools/capability_policy.py`
 - `zen_claw/channels/outbound_adapter.py`
 
-### 4.6 审批是一次性、带上下文的执行授权
+### 4.7 审批是一次性、带上下文的执行授权
 
 `ApprovalGate` 不只记录“用户点了同意”。审批记录绑定：
 
@@ -234,7 +307,7 @@ Envelope 使用稳定 JSON canonicalization 生成哈希与签名，并可由 Py
 
 - `zen_claw/agent/approval_gate.py`
 
-### 4.7 审计不仅记录事件，还验证完整性
+### 4.8 审计不仅记录事件，还验证完整性
 
 审计记录采用 JSONL，可输出到本地文件、HTTP sink 或 syslog。默认本地审计包含：
 
@@ -258,7 +331,7 @@ Envelope 使用稳定 JSON canonicalization 生成哈希与签名，并可由 Py
 - `zen_claw/observability/audit.py`
 - `zen_claw/dashboard/server.py`
 
-### 4.8 Skills 是受治理的软件包
+### 4.9 Skills 是受治理的软件包
 
 在 zen-claw 中，Skill 不只是插入 system prompt 的 Markdown。Skills 系统包含：
 
@@ -279,7 +352,7 @@ Envelope 使用稳定 JSON canonicalization 生成哈希与签名，并可由 Py
 - `zen_claw/skills/registry.py`
 - `zen_claw/skills/sources.py`
 
-### 4.9 一个领域抽象服务多个产品表面
+### 4.10 一个领域抽象服务多个产品表面
 
 项目倾向于先建立领域层抽象，再让多个入口复用，而不是分别为 CLI、API 和 Dashboard 实现业务逻辑。
 
@@ -292,7 +365,7 @@ Envelope 使用稳定 JSON canonicalization 生成哈希与签名，并可由 Py
 
 这种设计降低了“命令行行为、API 行为、Dashboard 行为彼此漂移”的风险。
 
-### 4.10 渠道以能力契约描述差异
+### 4.11 渠道以能力契约描述差异
 
 不同渠道的传输、认证、媒体和运行时能力差异很大。项目没有假设所有渠道完全同构，而是使用共享 `ChannelSpec` 描述：
 
@@ -318,7 +391,7 @@ Envelope 使用稳定 JSON canonicalization 生成哈希与签名，并可由 Py
 - `zen_claw/channels/registry.py`
 - `zen_claw/channels/manager.py`
 
-### 4.11 Local-First 不等于单进程
+### 4.12 Local-First 不等于单进程
 
 项目的数据、配置、知识库、审批和审计默认可以保存在本地，但高风险执行并不要求全部留在 Python 主进程。
 
@@ -330,7 +403,7 @@ Envelope 使用稳定 JSON canonicalization 生成哈希与签名，并可由 Py
 
 这是“本地控制权”与“进程隔离”并存的设计，而不是把 local-first 理解为所有能力都在一个进程内直接执行。
 
-### 4.12 恢复和降级路径是一等执行结果
+### 4.13 恢复和降级路径是一等执行结果
 
 运行时将失败、澄清、审批等待、受约束重规划和委托视为不同结果，而不是统一压缩为异常或空回复。
 
@@ -374,6 +447,7 @@ Dashboard 不是独立于运行时的展示项目，而是围绕当前领域对�
 | 设计选择 | 获得的能力 | 代价 |
 | --- | --- | --- |
 | 显式路由与执行契约 | 可测试、可解释、可观测 | 类型和状态转换更多 |
+| b1.58-inspired 离散决策与不确定态升级 | 降低召回噪声与无效高级决策成本 | 阈值、边界条件和二次判定需要持续评测 |
 | Profile 级隔离 | 多 Agent 行为与权限边界清晰 | 配置解析更复杂 |
 | Fail-closed sidecar | 外部写操作和高风险执行边界更强 | 本地部署需要更多组件 |
 | 签名 envelope 与策略快照 | 跨进程请求可验证 | 跨语言 canonicalization 必须严格一致 |
