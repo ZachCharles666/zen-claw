@@ -6,12 +6,9 @@ import json
 import zipfile
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from zen_claw.skills.sources import GitHubSkillSource, LocalDirSkillSource, SkillSourceAdapter
-
 
 # ── protocol compliance ───────────────────────────────────────────────────────
 

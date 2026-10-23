@@ -186,6 +186,174 @@ class TestChatCompletions:
         )
         assert resp.status_code == 200
 
+    def test_xbench_reply_is_normalized_to_short_final_answer(self, client, monkeypatch):
+        async def _fake(_message: str, _session_id: str) -> str:
+            return "根据搜索结果，2012年为71，2020年为72。\n最终答案：8年间增加了1.1岁。"
+
+        monkeypatch.setattr("zen_claw.api.openai_compat._invoke", _fake)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "zen-claw",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "你是一个通用人工智能助手。对于本题, 你的答案必须是尽可能简洁的数值。\n"
+                            "最终答案:[你的答案]\n\n[问题]: 示例问题"
+                        ),
+                    }
+                ],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["choices"][0]["message"]["content"] == "最终答案: 1.1岁"
+
+    def test_xbench_reply_preserves_long_title_final_answer(self, client, monkeypatch):
+        title = (
+            "ProlificDreamer: High-Fidelity and Diverse Text-to-3D Generation "
+            "with Variational Score Distillation"
+        )
+
+        async def _fake(_message: str, _session_id: str) -> str:
+            return f"最终答案: {title}"
+
+        monkeypatch.setattr("zen_claw.api.openai_compat._invoke", _fake)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "zen-claw",
+                "user": "xbench",
+                "messages": [{"role": "user", "content": "benchmark prompt"}],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["choices"][0]["message"]["content"] == f"最终答案: {title}"
+
+    def test_xbench_reply_preserves_chinese_book_title_marks(self, client, monkeypatch):
+        async def _fake(_message: str, _session_id: str) -> str:
+            return "最终答案：《示例书名》"
+
+        monkeypatch.setattr("zen_claw.api.openai_compat._invoke", _fake)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "zen-claw",
+                "user": "xbench",
+                "messages": [{"role": "user", "content": "benchmark prompt"}],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["choices"][0]["message"]["content"] == "最终答案: 《示例书名》"
+
+    def test_xbench_prompt_gets_eval_instruction_and_session_marker(self, client, monkeypatch):
+        captured = {}
+
+        async def _fake(message: str, session_id: str) -> str:
+            captured["message"] = message
+            captured["session_id"] = session_id
+            return "最终答案：42"
+
+        monkeypatch.setattr("zen_claw.api.openai_compat._invoke", _fake)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "zen-claw",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "你是一个通用人工智能助手。对于本题, 你的答案必须是短语。\n"
+                            "最终答案:[你的答案]\n\n[问题]: 示例问题"
+                        ),
+                    }
+                ],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert "xbench评测硬性要求" in captured["message"]
+        assert captured["session_id"].startswith("xbench:")
+
+    def test_xbench_user_marker_uses_isolated_session_per_request(self, client, monkeypatch):
+        captured_sessions = []
+
+        async def _fake(_message: str, session_id: str) -> str:
+            captured_sessions.append(session_id)
+            return "最终答案：42"
+
+        monkeypatch.setattr("zen_claw.api.openai_compat._invoke", _fake)
+        payload = {
+            "model": "zen-claw",
+            "user": "xbench",
+            "messages": [{"role": "user", "content": "benchmark prompt"}],
+        }
+
+        first = client.post("/v1/chat/completions", json=payload)
+        second = client.post("/v1/chat/completions", json=payload)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert len(captured_sessions) == 2
+        assert captured_sessions[0].startswith("xbench:xbench:chatcmpl-")
+        assert captured_sessions[1].startswith("xbench:xbench:chatcmpl-")
+        assert captured_sessions[0] != captured_sessions[1]
+
+    def test_xbench_prompt_detection_does_not_require_generic_assistant_text(
+        self, client, monkeypatch
+    ):
+        captured = {}
+
+        async def _fake(message: str, session_id: str) -> str:
+            captured["message"] = message
+            captured["session_id"] = session_id
+            return "I've completed processing but have no response to give."
+
+        monkeypatch.setattr("zen_claw.api.openai_compat._invoke", _fake)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "zen-claw",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "最终答案:[你的答案]\n\n[问题]: 示例问题",
+                    }
+                ],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert "xbench评测硬性要求" in captured["message"]
+        assert captured["session_id"].startswith("xbench:")
+        assert resp.json()["choices"][0]["message"]["content"] == "最终答案: 无"
+
+    def test_xbench_user_marker_forces_eval_mode(self, client, monkeypatch):
+        captured = {}
+
+        async def _fake(message: str, session_id: str) -> str:
+            captured["message"] = message
+            captured["session_id"] = session_id
+            return "I've completed processing but have no response to give."
+
+        monkeypatch.setattr("zen_claw.api.openai_compat._invoke", _fake)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "zen-claw",
+                "user": "xbench",
+                "messages": [{"role": "user", "content": "plain benchmark prompt"}],
+            },
+        )
+
+        assert resp.status_code == 200
+        assert "xbench评测硬性要求" in captured["message"]
+        assert captured["session_id"].startswith("xbench:")
+        assert resp.json()["choices"][0]["message"]["content"] == "最终答案: 无"
+
 
 # ── /v1/chat/completions (streaming) ────────────────────────────────────────
 

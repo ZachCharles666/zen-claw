@@ -160,7 +160,7 @@ class LiteLLMProvider(LLMProvider):
             model = f"openrouter/{model}"
         elif self.is_aihubmix:
             model = f"openai/{model.split('/')[-1]}"
-        elif self.is_vllm:
+        elif self.is_vllm and not model.startswith("hosted_vllm/"):
             model = f"hosted_vllm/{model}"
 
         # kimi-k2.5 only supports temperature=1.0
@@ -258,11 +258,17 @@ class LiteLLMProvider(LLMProvider):
                 "total_tokens": response.usage.total_tokens,
             }
 
+        provider_metadata = {}
+        reasoning_content = getattr(message, "reasoning_content", None)
+        if reasoning_content:
+            provider_metadata["reasoning_content"] = reasoning_content
+
         return LLMResponse(
             content=message.content,
             tool_calls=tool_calls,
             finish_reason=choice.finish_reason or "stop",
             usage=usage,
+            provider_metadata=provider_metadata,
         )
 
     def get_default_model(self) -> str:

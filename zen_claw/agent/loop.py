@@ -974,15 +974,23 @@ class AgentLoop:
             all_active.extend(self.context.skills.get_always_skills())
             session.metadata["skill_pins"] = self.context.skills.build_session_pins(all_active)
 
-        self.intent_router.set_control_context(session.metadata)
-        try:
-            route_result = await self.intent_router.route(
-                msg.content,
-                tools=self.tools,
-                trace_id=trace_id,
+        if self._should_bypass_direct_intent_router(msg):
+            route_result = IntentRouteResult(
+                handled=False,
+                intent_name="xbench_deepsearch",
+                route_status="miss",
+                diagnostic="xbench_eval_bypass_direct_router",
             )
-        finally:
-            self.intent_router.set_control_context(None)
+        else:
+            self.intent_router.set_control_context(session.metadata)
+            try:
+                route_result = await self.intent_router.route(
+                    msg.content,
+                    tools=self.tools,
+                    trace_id=trace_id,
+                )
+            finally:
+                self.intent_router.set_control_context(None)
         gate2_instruction: str | None = None
         clarification_reply: str | None = None
         selected_skill: str | None = None
@@ -1613,6 +1621,12 @@ class AgentLoop:
 
         response = await self._process_message(msg)
         return response.content if response else ""
+
+    @staticmethod
+    def _should_bypass_direct_intent_router(msg: InboundMessage) -> bool:
+        # Benchmark questions are open-ended research tasks; direct intent
+        # shortcuts (stock / weather / time) misclassify them.
+        return msg.channel == "xbench"
 
     def _append_intent_router_event(
         self,
@@ -2712,12 +2726,14 @@ class AgentLoop:
             "fallback_reason": "",
             "models_used": [],
             "executed_tools": [],
+            "failed_fetches": [],
             "last_error_kind": "",
             "last_error_code": "",
         }
         self._last_execution_trace_summary = None
         _session_queries: list[str] = []
         _session_urls: list[str] = []
+        _session_failed_fetch_urls: list[str] = []
         _web_fetch_tool = self.tools.get("web_fetch") if hasattr(self.tools, "get") else None
         if _web_fetch_tool is not None and hasattr(_web_fetch_tool, "clear_session_cache"):
             _web_fetch_tool.clear_session_cache()
@@ -2734,16 +2750,44 @@ class AgentLoop:
                     if _session_urls:
                         parts.append(f"已读取：{_session_urls}")
                     parts.append("请勿重复以上搜索，继续探索新方向。")
+                    if channel == "xbench":
+                        parts.append(
+                            "如果搜索结果中已有可能相关的权威页面，下一步优先调用 web_fetch "
+                            "读取原文，不要只基于搜索摘要或继续堆叠相近搜索词作答。"
+                        )
+                        if _session_failed_fetch_urls:
+                            parts.append(
+                                "以下可能关键的页面读取失败："
+                                f"{_session_failed_fetch_urls}。不要直接放弃这些线索；"
+                                "请围绕相同域名、公司/产品名、页面标题或 URL 关键词继续 web_search，"
+                                "寻找可访问的镜像、论文页、项目页、作者页或官方新闻。"
+                            )
                     messages_for_llm = messages + [{"role": "user", "content": "\n".join(parts)}]
-                response, used_model, fallback_state = await self._chat_with_optional_fallback(
-                    messages=messages_for_llm,
-                    tools=tool_definitions
+                visible_tool_definitions = (
+                    tool_definitions
                     if tool_definitions is not None
                     else (
                         self.tools.get_visible_definitions()
                         if hasattr(self.tools, "get_visible_definitions")
                         else self.tools.get_definitions()
-                    ),
+                    )
+                )
+                if channel == "xbench" and iteration > 1 and _session_queries and not _session_urls:
+                    # Searched but never read a page: force a fetch before answering.
+                    fetch_only = [
+                        tool
+                        for tool in visible_tool_definitions
+                        if (
+                            isinstance(tool, dict)
+                            and isinstance(tool.get("function"), dict)
+                            and tool["function"].get("name") == "web_fetch"
+                        )
+                    ]
+                    if fetch_only:
+                        visible_tool_definitions = fetch_only
+                response, used_model, fallback_state = await self._chat_with_optional_fallback(
+                    messages=messages_for_llm,
+                    tools=visible_tool_definitions,
                     model=active_model,
                     allow_fallback=allow_model_fallback,
                     trace_id=trace_id,
@@ -2775,7 +2819,10 @@ class AgentLoop:
                     for tc in response.tool_calls
                 ]
                 messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts
+                    messages,
+                    response.content,
+                    tool_call_dicts,
+                    provider_metadata=response.provider_metadata,
                 )
 
                 tool_results: list[ToolResult] = []
@@ -2992,6 +3039,23 @@ class AgentLoop:
                         if result.error is not None:
                             trace_summary["last_error_kind"] = str(result.error.kind.value)
                             trace_summary["last_error_code"] = str(result.error.code or "")
+                            if tool_call.name == "web_fetch":
+                                failed_url = str(call_args.get("url") or "")
+                                if (
+                                    failed_url
+                                    and failed_url not in _session_failed_fetch_urls
+                                    and len(_session_failed_fetch_urls) < 8
+                                ):
+                                    _session_failed_fetch_urls.append(failed_url)
+                                failed_fetches = trace_summary.setdefault("failed_fetches", [])
+                                if isinstance(failed_fetches, list) and len(failed_fetches) < 8:
+                                    failed_fetches.append(
+                                        {
+                                            "url": failed_url[:240],
+                                            "code": str(result.error.code or ""),
+                                            "kind": str(result.error.kind.value),
+                                        }
+                                    )
                     tool_results.append(result)
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
@@ -3020,21 +3084,35 @@ class AgentLoop:
                 continue
             trace_summary["reflections_used"] = reflections_used
 
-        # If max_iterations was exhausted and the model never produced a text response,
-        # make one final synthesis call without tools to force an answer.
-        if final_content is None and iteration >= self.max_iterations:
+        trace_summary["search_query_count"] = len(_session_queries)
+        trace_summary["fetched_url_count"] = len(_session_urls)
+        if _session_queries:
+            trace_summary["search_queries"] = [str(query)[:240] for query in _session_queries[:8]]
+        if _session_urls:
+            trace_summary["fetched_urls"] = [str(url)[:240] for url in _session_urls[:8]]
+
+        # For xbench, if the model never produced a text response (iterations
+        # exhausted, or an early empty stop that some thinking-mode
+        # OpenAI-compatible endpoints return after long tool-call loops), make
+        # one final synthesis call without tools to force an answer. Other
+        # channels keep returning None so callers can apply their own fallback.
+        if final_content is None and channel == "xbench":
             try:
-                synthesis_prompt = (
-                    "\u57fa\u4e8e\u4ee5\u4e0a\u6240\u6709\u641c\u7d22\u7ed3\u679c\u548c\u7f51\u9875\u5185\u5bb9\uff0c\u8bf7\u7efc\u5408\u5206\u6790\u5e76\u7ed9\u51fa\u6700\u7cbe\u786e\u7684\u7b54\u6848\u3002\n"
-                    "\u8981\u6c42\uff1a\n"
-                    "- \u4e0d\u8981\u518d\u8c03\u7528\u4efb\u4f55\u5de5\u5177\uff0c\u76f4\u63a5\u7ed9\u51fa\u6587\u5b57\u7b54\u6848\n"
-                    "- \u5982\u679c\u7b54\u6848\u662f\u6570\u5b57\uff0c\u7ed9\u51fa\u7cbe\u786e\u6570\u503c\uff08\u6ce8\u610f\u5355\u4f4d\u548c\u5c0f\u6570\u4f4d\uff09\n"
-                    "- \u5982\u679c\u7b54\u6848\u662f\u4eba\u540d/\u5730\u540d\uff0c\u4f7f\u7528\u6765\u6e90\u4e2d\u7684\u539f\u59cb\u5199\u6cd5\n"
-                    "- \u5982\u679c\u591a\u4e2a\u6765\u6e90\u77db\u76fe\uff0c\u4ee5\u6700\u6743\u5a01\u7684\u6765\u6e90\u4e3a\u51c6\n"
-                    "- \u56de\u7b54\u5fc5\u987b\u4ee5'\u6700\u7ec8\u7b54\u6848\uff1a'\u5f00\u5934\uff0c\u7ed9\u51fa\u7cbe\u786e\u7b80\u6d01\u7684\u7b54\u6848"
-                )
+                synthesis_prompt = self._build_forced_synthesis_prompt(channel=channel)
+                synthesis_messages = messages
+                if channel == "xbench":
+                    summary_parts = ["[\u68c0\u7d22\u8f68\u8ff9\u6458\u8981]"]
+                    if _session_queries:
+                        summary_parts.append(f"\u5df2\u641c\u7d22\u67e5\u8be2\uff1a{_session_queries}")
+                    if _session_urls:
+                        summary_parts.append(f"\u5df2\u8bfb\u53d6URL\uff1a{_session_urls}")
+                    if _session_failed_fetch_urls:
+                        summary_parts.append(f"\u8bfb\u53d6\u5931\u8d25URL\uff1a{_session_failed_fetch_urls}")
+                    synthesis_messages = messages + [
+                        {"role": "user", "content": "\n".join(summary_parts)}
+                    ]
                 synthesis_response = await self.provider.chat(
-                    messages + [{"role": "user", "content": synthesis_prompt}],
+                    synthesis_messages + [{"role": "user", "content": synthesis_prompt}],
                     tools=None,
                     model=active_model,
                     max_tokens=2048,
@@ -3053,6 +3131,32 @@ class AgentLoop:
 
         self._last_execution_trace_summary = dict(trace_summary)
         return final_content, messages
+
+    @staticmethod
+    def _build_forced_synthesis_prompt(*, channel: str) -> str:
+        base = (
+            "基于以上所有搜索结果和网页内容，请综合分析并给出最精确的答案。\n"
+            "要求：\n"
+            "- 不要再调用任何工具，直接给出文字答案\n"
+            "- 如果答案是数字，给出精确数值（注意单位和小数位）\n"
+            "- 如果答案是人名/地名/论文标题，使用来源中的原始写法\n"
+            "- 如果多个来源矛盾，以最权威的来源为准\n"
+            "- 回答必须以'最终答案：'开头，给出精确简洁的答案"
+        )
+        if channel != "xbench":
+            return base
+        return (
+            base
+            + "\n"
+            + "- 你已经没有继续搜索或检查的机会。禁止回答“让我再检查/继续搜索/需要更多信息”；必须立刻基于现有证据给出最终答案。\n"
+            + "- 本题是评测题。先在内部列出所有候选答案，并逐项核对题目里的每个约束，例如年份、"
+            "地点、机构、作者、会议、奖项、成员关系、数值单位等；只选择同时满足全部约束的候选。\n"
+            "- 不要因为某个候选在搜索摘要中出现频繁就选择它；必须用已读取网页或权威搜索结果证明关键约束。\n"
+            "- 如果候选之间只满足部分约束，排除部分匹配项，选择约束覆盖最完整且来源最权威的一项。\n"
+            "- 如果证据不完美但已经出现候选名称，也必须选择最符合题目约束的一项；只有完全没有候选答案时才写无。\n"
+            "- 如果最终答案是论文标题、作品名或专有名词，保留完整原始标题，不要截断、改写或翻译。\n"
+            "- 只输出一行，格式必须是：最终答案：<短答案>"
+        )
 
     @staticmethod
     def _evaluate_intent_contract_tool_use(

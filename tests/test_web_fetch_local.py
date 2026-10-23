@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 
 import httpx
 
@@ -117,3 +119,33 @@ async def test_web_fetch_local_http_503_returns_retryable(monkeypatch) -> None:
     assert result.error is not None
     assert result.error.kind == ToolErrorKind.RETRYABLE
     assert result.error.code == "web_fetch_http_503"
+
+
+async def test_web_fetch_local_html_falls_back_when_readability_dependency_missing(
+    monkeypatch,
+) -> None:
+    fake = _FakeClient(
+        _FakeResponse(
+            content_type="text/html",
+            text="<html><head><title>T</title></head><body><h1>Hello</h1><p>World</p></body></html>",
+            url="https://example.com/page",
+        )
+    )
+    monkeypatch.setattr(
+        "zen_claw.agent.tools.web.httpx.AsyncClient",
+        lambda **kwargs: fake,
+    )
+
+    def _raise_import_error(*_args, **_kwargs):
+        raise ImportError("No module named 'lxml_html_clean'")
+
+    monkeypatch.setitem(sys.modules, "readability", types.SimpleNamespace(Document=_raise_import_error))
+
+    tool = WebFetchTool()
+    result = await tool.execute("https://example.com/page")
+
+    assert result.ok is True
+    payload = json.loads(result.content)
+    assert payload["extractor"] == "html_fallback"
+    assert "Hello" in payload["text"]
+    assert "World" in payload["text"]

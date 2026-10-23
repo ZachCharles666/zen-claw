@@ -17,8 +17,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print(f"zen-claw xbench API server → http://{args.host}:{args.port}/v1")
-    print(f"  POST /v1/chat/completions")
-    print(f"  GET  /v1/models")
-    print(f"  GET  /api/v1/health")
+    print("  POST /v1/chat/completions")
+    print("  GET  /v1/models")
+    print("  GET  /api/v1/health")
     print()
     uvicorn.run(api_app, host=args.host, port=args.port, log_level="warning")

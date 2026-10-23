@@ -488,6 +488,7 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
         messages: list[dict[str, Any]],
         content: str | None,
         tool_calls: list[dict[str, Any]] | None = None,
+        provider_metadata: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """
         Add an assistant message to the message list.
@@ -496,6 +497,8 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
             messages: Current message list.
             content: Message content.
             tool_calls: Optional tool calls.
+            provider_metadata: Provider-specific fields that must be preserved
+                across tool-call turns.
 
         Returns:
             Updated message list.
@@ -504,6 +507,11 @@ When remembering something, write to {workspace_path}/memory/MEMORY.md"""
 
         if tool_calls:
             msg["tool_calls"] = tool_calls
+
+        if provider_metadata:
+            reasoning_content = provider_metadata.get("reasoning_content")
+            if reasoning_content:
+                msg["reasoning_content"] = reasoning_content
 
         messages.append(msg)
         return messages

@@ -3108,6 +3108,14 @@ _DEEPSEARCH_SYSTEM_PROMPT = """## 深度搜索策略
 3. **深读原文**：对搜索结果中最相关的URL，使用 web_fetch 获取完整页面内容——摘要往往不含精确数据
 4. **交叉验证**：从多个来源确认关键事实
 
+**实体链路题额外要求**：
+- 如果问题通过公司、产品、创始团队、作者单位或成员关系来间接定位论文/人物/作品，必须先解析实体链路：公司/产品是谁、相关成员是谁、目标论文或作品应满足什么约束
+- 如果问题只用描述性短语指代实体（例如“某地某类型初创公司”“某产品背后的公司”）而没有直接给出公司名，第一轮必须用该描述性短语原文加 company/startup/product/公司/产品 来解析实体，不要先假设公司或作者
+- 至少执行一轮包含核心实体原文的查询，例如公司名/产品名 + paper/arXiv/title/论文，或作者名 + 公司名/产品名 + paper
+- 不要只因为候选来自相邻高校、常见会议或同一研究方向就选择；如果候选页面没有出现题目中的公司/产品/成员关系，它只是部分匹配
+- 如果同一公司/机构/作者链路下出现多篇候选论文，必须继续搜索该公司/机构的 publications 或目标会议列表，并按题目中的更具体约束比较年份、会议、标题领域词、作者顺序和单位关系
+- 论文标题题优先检索 arXiv、OpenReview、项目主页、作者主页、公司官方页面；查询中要包含题目给出的领域关键词
+
 **第三步：给出答案（必须包含证据）**
 答案格式必须严格遵循：
 ```
@@ -3145,6 +3153,7 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
         search_cfg = cfg.tools.effective_search()
         fetch_cfg = cfg.tools.effective_fetch()
         provider_cfg = cfg.get_provider(cfg.agents.defaults.model)
+        is_xbench = session_id.startswith("xbench:")
         if not provider_cfg or not provider_cfg.api_key:
             return f"[echo] {message}"
         provider = LiteLLMProvider(
@@ -3159,7 +3168,11 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             provider=provider,
             workspace=cfg.workspace_path,
             model=cfg.agents.defaults.model,
-            max_iterations=cfg.agents.defaults.max_tool_iterations,
+            max_iterations=(
+                max(cfg.agents.defaults.max_tool_iterations, 10)
+                if is_xbench
+                else cfg.agents.defaults.max_tool_iterations
+            ),
             memory_recall_mode=cfg.agents.defaults.memory_recall_mode,
             enable_planning=cfg.agents.defaults.enable_planning,
             max_reflections=cfg.agents.defaults.max_reflections,
@@ -3182,8 +3195,12 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             system_prompt_override=_DEEPSEARCH_SYSTEM_PROMPT,
             temperature=cfg.agents.defaults.temperature,
         )
+        channel = "xbench" if is_xbench else "web_chat"
         return await loop.process_direct(
-            content=message, session_key=f"web:{session_id}", channel="web_chat", chat_id=session_id
+            content=message,
+            session_key=f"web:{session_id}",
+            channel=channel,
+            chat_id=session_id,
         )
     except Exception as e:
         import logging

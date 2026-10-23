@@ -554,16 +554,20 @@ class WebFetchTool(Tool):
                 text, extractor = json.dumps(r.json(), indent=2), "json"
             # HTML
             elif "text/html" in ctype or r.text[:256].lower().startswith(("<!doctype", "<html")):
-                from readability import Document
+                try:
+                    from readability import Document
 
-                doc = Document(r.text)
-                content = (
-                    self._to_markdown(doc.summary())
-                    if extract_mode == "markdown"
-                    else _strip_tags(doc.summary())
-                )
-                text = f"# {doc.title()}\n\n{content}" if doc.title() else content
-                extractor = "readability"
+                    doc = Document(r.text)
+                    content = (
+                        self._to_markdown(doc.summary())
+                        if extract_mode == "markdown"
+                        else _strip_tags(doc.summary())
+                    )
+                    text = f"# {doc.title()}\n\n{content}" if doc.title() else content
+                    extractor = "readability"
+                except Exception:
+                    text = _strip_tags(r.text)
+                    extractor = "html_fallback"
             else:
                 text, extractor = r.text, "raw"
 
@@ -799,7 +803,8 @@ class WebFetchTool(Tool):
                 text = f"# {doc.title()}\n\n{content}" if doc.title() else content
                 extractor = "proxy_readability"
             except Exception:
-                pass
+                text = _strip_tags(text)
+                extractor = "proxy_html_fallback"
 
         if len(text) > max_chars:
             text = text[:max_chars]
