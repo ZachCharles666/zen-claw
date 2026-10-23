@@ -29,7 +29,7 @@
 - [x] README 核对：CLI 命令、12 个渠道、链接文件、版本号、CI 配置均与代码一致，无需修正
 - [x] README 新增“维护状态”节（中英文），写明挂起、测试基线、缺少真实环境证据、xbench 分数作废、技术债与恢复入口
 - [x] 修复 `docs/architecture-and-design-principles.md` 指向已删除 `docs/backlog.md` 的链接
-- [x] 移除指向未入库文档的引用（`docs/` 被 `.gitignore` 排除，仅 3 个文件入库）：README 中的 DEPLOY / 功能说明 / 自测手册链接，架构文档中的 MHA 可行性评估引用
+- [x] 移除指向未入库文档的引用（`docs/` 被 `.gitignore` 排除，仅 3 个文件入库）：README 中的 DEPLOY / 功能说明 / 自测手册链接（MHA 可行性评估在 `main` 上已入库，引用保留）
 - [x] 提交、打 tag `v0.1.3.post5-suspended` 并推送
 
 > 项目已挂起：下方 `Current Priorities` 中未勾选条目保留为恢复开发时的参考，当前不执行。
