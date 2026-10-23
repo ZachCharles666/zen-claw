@@ -10,6 +10,7 @@
 
 ### 2026-10
 
+- `Project Suspension — License And README Closure`
 - `xbench — WIP Split And Overfitting Removal`
 
 ### 2026-05
@@ -116,6 +117,21 @@
 - `Dashboard — Operations Summary Surface`
 
 ## 2026-10-23
+
+### Project Suspension — License And README Closure
+
+- What changed:
+  - kept Business Source License 1.1 as the project license; fixed `NOTICE`, which wrongly said repository modifications were MIT, and reproduced the upstream nanobot MIT copyright and permission notice in full as MIT requires
+  - corrected the two MIT statements in `docs/zen-claw-business-analysis.md` (local-only file, gitignored); added the nanobot attribution to the README License section
+  - verified README claims against code (CLI commands via the `zen-claw` entrypoint, 12 registered channels, linked files, version, CI matrix); no corrections were needed
+  - added a bilingual "维护状态 / Status" section to the README: suspended since 2026-10-23, test baseline, missing real-world evidence, withdrawn xbench scores, known tech debt, and where to resume
+  - removed the dangling `docs/backlog.md` reference from `docs/architecture-and-design-principles.md`
+  - `docs/` is gitignored with only 3 tracked files, so README links to `docs/DEPLOY.md`, `docs/feature-summary_and_usage.md`, `docs/self-test-and-playbook.md` and the architecture doc's MHA feasibility reference were dead on GitHub; removed them rather than force-adding ignored docs
+- Key files touched:
+  - `NOTICE`, `README.md`, `docs/zen-claw-business-analysis.md`, `docs/architecture-and-design-principles.md`, `tasks/todo.md`
+- Verification evidence:
+  - documentation-only change; `ruff check .` → `All checks passed!`; code test baseline unchanged from the xbench split entry (`1816 passed, 39 skipped`)
+- Follow-up impact: the repository is tagged `v0.1.3.post5-suspended`; resume from `tasks/todo.md`.
 
 ### xbench — WIP Split And Overfitting Removal
 

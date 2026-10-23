@@ -23,6 +23,17 @@
 - [x] 5. 验证：`ruff check .`；全量 pytest；grep 确认运行时代码中无写死答案；`git diff` 审阅
 - [x] 6. 提交到 `feat/phase-c-unified-gating`（不推送）
 
+## 挂起收尾（2026-10-23）
+
+- [x] 许可证统一为 BSL 1.1：`NOTICE` 改正“修改部分按 MIT”的错误说法，并补全 nanobot 上游 MIT 版权与许可全文；`docs/zen-claw-business-analysis.md` 两处 MIT 表述改正；README License 节补充 nanobot 出处
+- [x] README 核对：CLI 命令、12 个渠道、链接文件、版本号、CI 配置均与代码一致，无需修正
+- [x] README 新增“维护状态”节（中英文），写明挂起、测试基线、缺少真实环境证据、xbench 分数作废、技术债与恢复入口
+- [x] 修复 `docs/architecture-and-design-principles.md` 指向已删除 `docs/backlog.md` 的链接
+- [x] 移除指向未入库文档的引用（`docs/` 被 `.gitignore` 排除，仅 3 个文件入库）：README 中的 DEPLOY / 功能说明 / 自测手册链接，架构文档中的 MHA 可行性评估引用
+- [x] 提交、打 tag `v0.1.3.post5-suspended` 并推送
+
+> 项目已挂起：下方 `Current Priorities` 中未勾选条目保留为恢复开发时的参考，当前不执行。
+
 ## Current Priorities
 - [x] Zero-Trust Agent Gateway cross-language canonicalization unification:
   - publish a single canonicalization spec plus golden fixtures for Python / Go / Node

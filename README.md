@@ -9,6 +9,21 @@ zen-claw 不是一个只负责把消息转发给大模型的聊天壳。当前�
 - 当前版本：`0.1.3.post5`
 - 运行环境：Python `>=3.11`，主 CI 使用 Python `3.12` / Windows
 - 许可证：Business Source License 1.1
+- 维护状态：**已挂起（2026-10-23 起）**，见下方[维护状态](#维护状态)
+
+## 维护状态
+
+本项目自 2026-10-23 起挂起，暂不进行功能开发。代码保持可运行、可测试的状态，便于后续恢复或拆分复用。
+
+挂起时的实际状况：
+
+- **测试基线**：`ruff check .` 通过；全量 pytest `1816 passed, 39 skipped`（`tests/test_browser_sidecar_integration.py` 依赖本机可启动 Playwright 浏览器，未计入）。
+- **缺少真实环境证据**：尚无真实用户或生产部署；WhatsApp bridge 真机 smoke 未完成。
+- **没有可信的评测分数**：此前记录的 xbench DeepSearch 分数（10/10、33/100）是在含有针对题目硬编码答案的代码上得到的，已作废；相关代码已移除，干净基线尚未重测。请勿引用旧分数。
+- **已知技术债**：`zen_claw/agent/loop.py`（约 3.4k 行）与 `zen_claw/dashboard/server.py`（约 1.3 万行）体量过大，继续开发前建议先拆分。
+- **未开工的规划项**：Agent 编排层（Phase 3.1）、RAG 生产化、渠道/Dashboard 业务就绪、MHA 中层候选排序（b1.58 Phase B）。
+
+恢复开发前建议先阅读 [`tasks/todo.md`](tasks/todo.md)、[`tasks/done.md`](tasks/done.md) 和[当前架构设计与特色理念](docs/architecture-and-design-principles.md)。若只需复用最有差异化的部分，零信任网关、工具策略与审批链路（`zen_claw/agent/tools/policy.py`、`zen_claw/agent/approval_gate.py`、`zen_claw/gateway/`、`go/`）适合单独拆出。
 
 ## 项目判断
 
@@ -339,9 +354,7 @@ CI 还包含分片核心测试、运行时敏感测试、记忆召回测试、�
 ## 延伸阅读
 
 - [当前架构设计与特色理念](docs/architecture-and-design-principles.md)
-- [部署说明](docs/DEPLOY.md)
-- [功能与使用说明](docs/feature-summary_and_usage.md)
-- [自测手册](docs/self-test-and-playbook.md)
+- [Gateway 规范化签名规格](docs/security/gateway_canonicalization.md)
 - [WhatsApp bridge](bridge/README.md)
 - [安全说明](SECURITY.md)
 
@@ -353,9 +366,13 @@ CI 还包含分片核心测试、运行时敏感测试、记忆召回测试、�
 
 Change Date 为 `2030-04-01`，届时转换为 Apache License 2.0。请以 [LICENSE](LICENSE) 全文为准。
 
+本项目派生自 MIT 许可的 [nanobot](https://github.com/HKUDS/nanobot)；源自 nanobot 的部分仍适用 MIT，其版权与许可声明见 [NOTICE](NOTICE)。
+
 ---
 
 ## English Summary
+
+> **Status: suspended since 2026-10-23.** No active feature development. The codebase is kept runnable and tested (`1816 passed, 39 skipped`). There is no real-world deployment evidence yet, and earlier xbench scores were withdrawn because they were produced with benchmark-specific hardcoding. See [维护状态](#维护状态) for details.
 
 zen-claw is a local-first, auditable AI agent platform currently at Alpha maturity. The implemented codebase combines:
 
