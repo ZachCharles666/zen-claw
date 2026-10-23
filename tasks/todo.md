@@ -1,5 +1,39 @@
 # Active Tasks
 
+## xbench WIP 拆分（2026-10-23）
+
+背景：分支 `feat/phase-c-unified-gating` 上约 3000 行未提交改动，混合了通用修复与针对 xbench 题目的硬编码答案/规则。目标：保留通用修复，剔除评测过拟合代码，形成可信的干净提交。
+
+- [x] 0. 备份：把当前全部 WIP 原样提交到本地分支 `archive/xbench-tuning-2026-05`（不推送），再回到原分支
+- [x] 1. 保留（通用修复）：
+  - `providers/base.py` + `litellm_provider.py`：`provider_metadata` / `reasoning_content` 透传；`hosted_vllm/` 前缀去重（含 `test_litellm_retry.py` 两个测试）
+  - `agent/context.py` + `loop.py`：tool-call 轮次保留 `reasoning_content`（含 `test_tool_call_turn_preserves_reasoning_content`）
+  - `agent/tools/web.py`：readability 不可用时 HTML 兜底（含 `test_web_fetch_local.py` 测试）
+  - `loop.py`：`failed_fetches` 与 `search_queries` / `fetched_urls` 计数写入 trace（含 `test_failed_web_fetches_are_recorded_in_trace_summary`）
+  - `loop.py`：xbench 渠道绕过直达意图路由；搜索后提示优先 `web_fetch`；空结果时强制综合（通用提示词版本）
+  - `api/openai_compat.py`：评测请求会话隔离、短答案格式指令、通用答案清洗（只保留正则清洗）
+  - `dashboard/server.py`：xbench 渠道与最少 10 轮迭代；DeepSearch 实体链路提示（删掉针对视频/4D 的那一条）
+  - `scripts/` 下的评测运行、patch、regrade 脚本（评测工具链，不进运行时）
+- [x] 2. 删除（评测过拟合）：
+  - `openai_compat._canonicalize_xbench_answer_for_prompt`（约 95 条“题目关键词 → 标准答案”映射）及 `_clean_xbench_answer` 里写死的 Vidu4D / 张羽 / 北京高等师范 规则
+  - `loop.py` 中全部 `_extract_xbench_*` 答案抽取器、数值兜底、候选打分/重排/覆盖、高信号词复查、`_augment_xbench_search_args` 查询扩写、返回路径覆盖逻辑
+  - 对应的约 40 个题目定制测试
+- [x] 3. ~~顺带修复回归~~ 复核后撤回：HEAD（`0df1572`）引入的“迭代耗尽即强制综合”本身会让 `test_run_execute_reflect_loop_respects_reflection_budget` 失败；WIP 把它收窄到仅 xbench 是有意修复，恢复了普通渠道原语义。保持 WIP 的条件不变
+- [x] 4. `tasks/done.md`：在 xbench 条目处注明 10/10 及 100 题结果包含硬编码，作废
+- [x] 5. 验证：`ruff check .`；全量 pytest；grep 确认运行时代码中无写死答案；`git diff` 审阅
+- [x] 6. 提交到 `feat/phase-c-unified-gating`（不推送）
+
+## 挂起收尾（2026-10-23）
+
+- [x] 许可证统一为 BSL 1.1：`NOTICE` 改正“修改部分按 MIT”的错误说法，并补全 nanobot 上游 MIT 版权与许可全文；`docs/zen-claw-business-analysis.md` 两处 MIT 表述改正；README License 节补充 nanobot 出处
+- [x] README 核对：CLI 命令、12 个渠道、链接文件、版本号、CI 配置均与代码一致，无需修正
+- [x] README 新增“维护状态”节（中英文），写明挂起、测试基线、缺少真实环境证据、xbench 分数作废、技术债与恢复入口
+- [x] 修复 `docs/architecture-and-design-principles.md` 指向已删除 `docs/backlog.md` 的链接
+- [x] 移除指向未入库文档的引用（`docs/` 被 `.gitignore` 排除，仅 3 个文件入库）：README 中的 DEPLOY / 功能说明 / 自测手册链接（MHA 可行性评估在 `main` 上已入库，引用保留）
+- [x] 提交、打 tag `v0.1.3.post5-suspended` 并推送
+
+> 项目已挂起：下方 `Current Priorities` 中未勾选条目保留为恢复开发时的参考，当前不执行。
+
 ## Current Priorities
 - [x] Zero-Trust Agent Gateway cross-language canonicalization unification:
   - publish a single canonicalization spec plus golden fixtures for Python / Go / Node

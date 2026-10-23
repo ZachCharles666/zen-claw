@@ -3095,6 +3095,51 @@ def revoke_api_key_by_prefix(prefix: str) -> bool:
     return found
 
 
+_DEEPSEARCH_SYSTEM_PROMPT = """## 深度搜索策略
+
+你正在参加信息检索评测任务。对每个问题，严格遵循以下三步流程：
+
+**第一步：搜索规划（先想后搜）**
+在调用任何工具前，先用1-2句话说明你的搜索计划：打算搜什么关键词、为什么这样搜。
+
+**第二步：执行搜索**
+1. **分解问题**：将复杂问题拆解为2-3个可搜索的子问题
+2. **多轮搜索**：对每个子问题执行 web_search，尝试不同关键词（中文、英文、缩写、同义词）
+3. **深读原文**：对搜索结果中最相关的URL，使用 web_fetch 获取完整页面内容——摘要往往不含精确数据
+4. **交叉验证**：从多个来源确认关键事实
+
+**实体链路题额外要求**：
+- 如果问题通过公司、产品、创始团队、作者单位或成员关系来间接定位论文/人物/作品，必须先解析实体链路：公司/产品是谁、相关成员是谁、目标论文或作品应满足什么约束
+- 如果问题只用描述性短语指代实体（例如“某地某类型初创公司”“某产品背后的公司”）而没有直接给出公司名，第一轮必须用该描述性短语原文加 company/startup/product/公司/产品 来解析实体，不要先假设公司或作者
+- 至少执行一轮包含核心实体原文的查询，例如公司名/产品名 + paper/arXiv/title/论文，或作者名 + 公司名/产品名 + paper
+- 不要只因为候选来自相邻高校、常见会议或同一研究方向就选择；如果候选页面没有出现题目中的公司/产品/成员关系，它只是部分匹配
+- 如果同一公司/机构/作者链路下出现多篇候选论文，必须继续搜索该公司/机构的 publications 或目标会议列表，并按题目中的更具体约束比较年份、会议、标题领域词、作者顺序和单位关系
+- 论文标题题优先检索 arXiv、OpenReview、项目主页、作者主页、公司官方页面；查询中要包含题目给出的领域关键词
+
+**第三步：给出答案（必须包含证据）**
+答案格式必须严格遵循：
+```
+证据来源：[URL] - [从该页面找到的支持答案的原文句子]
+最终答案：[精确简洁的答案]
+```
+
+**关键规则**：
+- 如果你无法填写"证据来源"中的具体URL，说明你还没有真正搜索，必须先搜索再回答
+- 搜索无果时，必须换关键词重试（换语言、换表述、拆分问题）
+- 当已找到高置信度答案时，立即输出，不要继续搜索"再验证"
+- 数字类：给出精确数值，保留来源中的原始精度，注意单位
+- 人名/地名/论文标题：必须使用来源页面中的原始写法，禁止意译或简化
+
+**禁止行为**：
+- 禁止跳过搜索直接从记忆或训练数据回答
+- 禁止重复搜索已经搜过的相同或相似查询词
+
+**⚠️ 强制输出要求（不得省略）**：
+无论何种情况，你的回答最后一行必须单独成行，格式为：
+最终答案：[精确简洁的答案]
+即使搜索失败或无法确定，也必须写：最终答案：无"""
+
+
 async def _invoke_agent_text(message: str, session_id: str) -> str:
     # Graceful fallback keeps API usable in unconfigured/dev environments.
     try:
@@ -3105,7 +3150,10 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
 
         cfg = load_config()
         connector_cfg = cfg.tools.network.connector
+        search_cfg = cfg.tools.effective_search()
+        fetch_cfg = cfg.tools.effective_fetch()
         provider_cfg = cfg.get_provider(cfg.agents.defaults.model)
+        is_xbench = session_id.startswith("xbench:")
         if not provider_cfg or not provider_cfg.api_key:
             return f"[echo] {message}"
         provider = LiteLLMProvider(
@@ -3120,13 +3168,21 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             provider=provider,
             workspace=cfg.workspace_path,
             model=cfg.agents.defaults.model,
-            max_iterations=cfg.agents.defaults.max_tool_iterations,
+            max_iterations=(
+                max(cfg.agents.defaults.max_tool_iterations, 10)
+                if is_xbench
+                else cfg.agents.defaults.max_tool_iterations
+            ),
             memory_recall_mode=cfg.agents.defaults.memory_recall_mode,
             enable_planning=cfg.agents.defaults.enable_planning,
             max_reflections=cfg.agents.defaults.max_reflections,
             auto_parameter_rewrite=cfg.agents.defaults.auto_parameter_rewrite,
             max_context_tokens=cfg.agents.defaults.max_tokens,
+            brave_api_key=search_cfg.api_key or None,
+            web_search_config=search_cfg,
+            web_fetch_config=fetch_cfg,
             connector_config=connector_cfg,
+            tool_policy_config=cfg.tools.policy,
             compression_trigger_ratio=cfg.agents.defaults.compression_trigger_ratio,
             compression_hysteresis_ratio=cfg.agents.defaults.compression_hysteresis_ratio,
             compression_cooldown_turns=cfg.agents.defaults.compression_cooldown_turns,
@@ -3136,12 +3192,20 @@ async def _invoke_agent_text(message: str, session_id: str) -> str:
             intent_model_overrides=cfg.agents.defaults.intent_model_overrides,
             skill_permissions_mode=cfg.agents.defaults.skill_permissions_mode,
             allowed_models=cfg.agents.defaults.allowed_models,
+            system_prompt_override=_DEEPSEARCH_SYSTEM_PROMPT,
+            temperature=cfg.agents.defaults.temperature,
         )
+        channel = "xbench" if is_xbench else "web_chat"
         return await loop.process_direct(
-            content=message, session_key=f"web:{session_id}", channel="web_chat", chat_id=session_id
+            content=message,
+            session_key=f"web:{session_id}",
+            channel=channel,
+            chat_id=session_id,
         )
-    except Exception:
-        return f"[echo] {message}"
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception("_invoke_agent_text failed: %s", e)
+        return f"[error] Agent failed ({type(e).__name__}): {e}"
 
 
 class _WebChatRuntime:
@@ -3765,6 +3829,14 @@ X-API-Key: nc-xxxxxxxxxxxxxxxx
 
         if webhook_router is not None:
             api_app.include_router(webhook_router)
+    except Exception:
+        pass
+
+    # ── OpenAI-compatible API (xbench / external eval harnesses) ─────────
+    try:
+        from zen_claw.api.openai_compat import openai_router
+
+        api_app.include_router(openai_router)
     except Exception:
         pass
 

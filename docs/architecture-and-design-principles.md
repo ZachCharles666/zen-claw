@@ -189,7 +189,6 @@ flowchart LR
 - `zen_claw/agent/tools/policy.py`
 - `zen_claw/agent/approval_gate.py`
 - `docs/design/MHA_b158_feasibility_assessment_20260406.md`
-- `docs/backlog.md`
 
 ### 4.3 路由决策与执行意图显式解耦
 

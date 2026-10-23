@@ -10,11 +10,14 @@ from zen_claw.providers.litellm_provider import LiteLLMProvider
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _fake_response(content: str = "hello") -> MagicMock:
+def _fake_response(
+    content: str = "hello", reasoning_content: str | None = None
+) -> MagicMock:
     """Build a minimal litellm-style response object."""
     msg = MagicMock()
     msg.content = content
     msg.tool_calls = None
+    msg.reasoning_content = reasoning_content
     choice = MagicMock()
     choice.message = msg
     choice.finish_reason = "stop"
@@ -127,3 +130,31 @@ async def test_chat_two_rate_limits_then_success(monkeypatch):
 
     assert result.finish_reason == "stop"
     assert mock.call_count == 3
+
+
+async def test_hosted_vllm_model_prefix_not_duplicated(monkeypatch):
+    """Custom OpenAI-compatible endpoints may pass LiteLLM's hosted_vllm prefix explicitly."""
+    mock = AsyncMock(return_value=_fake_response("ok"))
+    monkeypatch.setattr("zen_claw.providers.litellm_provider.acompletion", mock)
+
+    provider = LiteLLMProvider(
+        api_key="test-key",
+        api_base="https://custom.example/v1",
+        default_model="hosted_vllm/MiMo-V2.5-Pro",
+        max_retries=1,
+        _retry_wait=wait_none(),
+    )
+    result = await provider.chat([{"role": "user", "content": "hi"}])
+
+    assert result.finish_reason == "stop"
+    assert mock.await_args.kwargs["model"] == "hosted_vllm/MiMo-V2.5-Pro"
+
+
+async def test_provider_preserves_reasoning_content_metadata(monkeypatch):
+    """Thinking-mode OpenAI-compatible endpoints require reasoning_content in later turns."""
+    mock = AsyncMock(return_value=_fake_response("ok", reasoning_content="hidden reasoning"))
+    monkeypatch.setattr("zen_claw.providers.litellm_provider.acompletion", mock)
+
+    result = await _provider(max_retries=1).chat([{"role": "user", "content": "hi"}])
+
+    assert result.provider_metadata == {"reasoning_content": "hidden reasoning"}
